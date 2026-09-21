@@ -780,8 +780,7 @@ ir::IrValueId Lowering::lower_match_expr(ast::MatchExpr *e) {
                 // enum reales viven en VM stack (no-op), pero Optional/Result
                 // viven en HOST alloca -> aqui el LOAD emite `movh`/`loadzh`
                 // correctamente.
-                fn_->values[addr_i].is_host_ptr =
-                    fn_->values[scrut_addr].is_host_ptr;
+                fn_->values[addr_i].memory = fn_->values[scrut_addr].memory;
                 // Payload STRUCT por valor: no se carga en un registro -- el
                 // valor de un agregado ES su direccion.  Se liga `scrut+off`
                 // directamente, igual que hace `unwrap`.  Con el LOAD escalar
@@ -820,8 +819,7 @@ ir::IrValueId Lowering::lower_match_expr(ast::MatchExpr *e) {
                     arm_var->field_types[bi].kind == PrimitiveKind::STRUCT &&
                     type_is_overlay(arm_var->field_types[bi])) {
                     const ir::IrValueId vh = fn_->new_value(ir::IrType::PTR);
-                    fn_->values[vh].is_host_ptr =
-                        fn_->values[scrut_addr].is_host_ptr;
+                    fn_->values[vh].memory = fn_->values[scrut_addr].memory;
                     ir::IrInstr ld{};
                     ld.op = ir::IrOp::LOAD;
                     ld.type = ir::IrType::PTR;

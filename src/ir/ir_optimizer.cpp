@@ -58,6 +58,7 @@
 #include "analysis/facts/inline_facts.h" // se puede inlinar, y cuanto mide
 #include "analysis/effects/ir_effects.h" // modelo unico de efectos (consumidor DCE, A/B)
 #include "analysis/effects/effect_analysis.h" // cierre interproc: callees puros (DSE Fase 4)
+#include "analysis/memory/address_space.h" // de que memoria es, tras pasar por memoria
 #include "analysis/memory/memory_access.h" // vocabulario UNICO de acceso a memoria
 #include "analysis/memory/points_to.h"     // que valor contiene un hueco
 #include "vx/asm/asm_analyze.h"            // que memoria toca un bloque asm
@@ -930,7 +931,7 @@ static bool promote_callned_allocas_impl(IrFunction &fn) {
         /* Seed: marcar los dsts promovidos. */
         for (auto vid : promoted_dsts) {
             if (vid < fn.values.size()) {
-                fn.values[vid].is_host_ptr = true;
+                fn.values[vid].memory = ir::MemorySpace::HostByConstruction;
             }
         }
         /* Fix-point forward propagation. */
@@ -942,11 +943,11 @@ static bool promote_callned_allocas_impl(IrFunction &fn) {
                     if (ins.dst == IR_NO_VALUE || ins.dst >= fn.values.size())
                         continue;
                     auto &dst_v = fn.values[ins.dst];
-                    if (dst_v.is_host_ptr) continue;
+                    if (dst_v.is_host_ptr()) continue;
                     bool any_host = false;
                     auto check = [&](IrValueId v) {
                         if (v == IR_NO_VALUE || v >= fn.values.size()) return;
-                        if (fn.values[v].is_host_ptr) any_host = true;
+                        if (fn.values[v].is_host_ptr()) any_host = true;
                     };
                     switch (ins.op) {
                     case IrOp::ADD:
@@ -967,7 +968,7 @@ static bool promote_callned_allocas_impl(IrFunction &fn) {
                     default: break;
                     }
                     if (any_host) {
-                        dst_v.is_host_ptr = true;
+                        dst_v.memory = ir::MemorySpace::HostByInference;
                         prop_changed = true;
                     }
                 }
@@ -1251,7 +1252,8 @@ static bool promote_local_allocas_impl(IrFunction &fn, bool force_all) {
                     /* Propagar is_host_ptr al dst para que el dataflow
                      * de host_in_jit del JIT lo recoja. */
                     if (v < fn.values.size()) {
-                        fn.values[v].is_host_ptr = true;
+                        fn.values[v].memory =
+                            ir::MemorySpace::HostByConstruction;
                     }
                 }
             }
@@ -1269,11 +1271,11 @@ static bool promote_local_allocas_impl(IrFunction &fn, bool force_all) {
                 if (ins.dst == IR_NO_VALUE || ins.dst >= fn.values.size())
                     continue;
                 auto &dv = fn.values[ins.dst];
-                if (dv.is_host_ptr) continue;
+                if (dv.is_host_ptr()) continue;
                 bool any_host = false;
                 auto chk = [&](IrValueId v) {
                     if (v != IR_NO_VALUE && v < fn.values.size() &&
-                        fn.values[v].is_host_ptr)
+                        fn.values[v].is_host_ptr())
                         any_host = true;
                 };
                 switch (ins.op) {
@@ -1299,7 +1301,7 @@ static bool promote_local_allocas_impl(IrFunction &fn, bool force_all) {
                 default: break;
                 }
                 if (any_host) {
-                    dv.is_host_ptr = true;
+                    dv.memory = ir::MemorySpace::HostByInference;
                     prop = true;
                 }
             }
@@ -1355,11 +1357,11 @@ static bool propagate_host_ptr_impl(IrFunction &fn) {
                 if (ins.dst == IR_NO_VALUE || ins.dst >= fn.values.size())
                     continue;
                 auto &dv = fn.values[ins.dst];
-                if (dv.is_host_ptr) continue; // ya marcado
+                if (dv.is_host_ptr()) continue; // ya marcado
                 bool any_host = false;
                 auto chk = [&](IrValueId v) {
                     if (v != IR_NO_VALUE && v < fn.values.size() &&
-                        fn.values[v].is_host_ptr)
+                        fn.values[v].is_host_ptr())
                         any_host = true;
                 };
                 switch (ins.op) {
@@ -1387,7 +1389,7 @@ static bool propagate_host_ptr_impl(IrFunction &fn) {
                 default: break;
                 }
                 if (any_host) {
-                    dv.is_host_ptr = true;
+                    dv.memory = ir::MemorySpace::HostByInference;
                     changed = true;
                     any = true;
                 }
@@ -1870,7 +1872,7 @@ static bool promote_local_raw_alloc_impl(IrFunction &fn) {
 
         // Marcar el dst como is_host_ptr para que LOAD/STORE emitan movh.
         if (c.dst < fn.values.size()) {
-            fn.values[c.dst].is_host_ptr = true;
+            fn.values[c.dst].memory = ir::MemorySpace::HostByConstruction;
         }
 
         // Carrier: los free de un box recuperado via load(slot) tienen como
@@ -2171,7 +2173,8 @@ static bool promote_closure_env_impl(IrFunction &fn) {
             A.type = IrType::I8;
             A.host_alloca = true;
             A.operands.clear();
-            if (A.dst < fn.values.size()) fn.values[A.dst].is_host_ptr = true;
+            if (A.dst < fn.values.size())
+                fn.values[A.dst].memory = ir::MemorySpace::HostByConstruction;
             changed = true;
         }
     }
@@ -2486,7 +2489,7 @@ static bool own_closure_envs_impl(IrModule &mod) {
                         v.id = ea;
                         v.type = IrType::PTR;
                         v.name = "%cef_ea" + std::to_string(ea);
-                        v.is_host_ptr = true;
+                        v.memory = ir::MemorySpace::HostByConstruction;
                         C.values.push_back(v);
                     }
                     IrValueId ep = static_cast<IrValueId>(C.values.size());
@@ -2495,7 +2498,7 @@ static bool own_closure_envs_impl(IrModule &mod) {
                         v.id = ep;
                         v.type = IrType::PTR;
                         v.name = "%cef_ep" + std::to_string(ep);
-                        v.is_host_ptr = true;
+                        v.memory = ir::MemorySpace::HostByConstruction;
                         C.values.push_back(v);
                     }
                     IrInstr k8{};
@@ -3150,7 +3153,8 @@ inline void sr_forward_mem_marks(IrFunction &fn, IrValueId load_dst,
                                  IrValueId fwd) {
     if (load_dst == IR_NO_VALUE || load_dst >= fn.values.size()) return;
     if (fwd == IR_NO_VALUE || fwd >= fn.values.size()) return;
-    if (fn.values[load_dst].is_host_ptr) fn.values[fwd].is_host_ptr = true;
+    if (fn.values[load_dst].is_host_ptr())
+        fn.values[fwd].memory = ir::MemorySpace::HostByInference;
     if (fn.values[load_dst].is_gc_object) fn.values[fwd].is_gc_object = true;
 }
 
@@ -3191,7 +3195,7 @@ bool sr_rewrite_load(IrInstr &ld, const SrFieldInit &fi, IrValueList args,
                 /* Aqui SI se borra, y es lo correcto: lo que queda es un
                  * literal, no una direccion.  Los sitios que ADELANTAN un
                  * valor no pueden hacer esto -- ver @c sr_forward_mem_marks. */
-                fn.values[ld.dst].is_host_ptr = false;
+                fn.values[ld.dst].memory = ir::MemorySpace::NotHost;
             }
         }
         return true;
@@ -3263,7 +3267,7 @@ bool sr_rewrite_load_zero(IrInstr &ld, IrFunction &fn, bool apply) {
             fn.values[ld.dst].const_val = 0;
             /* Un campo sin inicializar vale CERO, que no es una direccion:
              * borrar la marca es lo correcto.  Ver @c sr_forward_mem_marks. */
-            fn.values[ld.dst].is_host_ptr = false;
+            fn.values[ld.dst].memory = ir::MemorySpace::NotHost;
         }
     }
     return true;
@@ -9674,8 +9678,8 @@ static bool dse_impl(IrFunction &fn, const analysis::PointsTo *pt,
                         it->second.first < fn.values.size()) {
                         const auto &dst_v = fn.values[ins.dst];
                         auto &val_v = fn.values[it->second.first];
-                        if (dst_v.is_host_ptr && !val_v.is_host_ptr) {
-                            val_v.is_host_ptr = true;
+                        if (dst_v.is_host_ptr() && !val_v.is_host_ptr()) {
+                            val_v.memory = ir::MemorySpace::HostByInference;
                         }
                         if (dst_v.is_gc_object && !val_v.is_gc_object) {
                             val_v.is_gc_object = true;
@@ -10434,7 +10438,7 @@ static bool cse_impl(IrFunction &fn) {
              * vale para saber si es un objeto del recolector. */
             if (ins.dst < static_cast<IrValueId>(fn.values.size())) {
                 key.sep();
-                key.ch(fn.values[ins.dst].is_host_ptr ? 'h' : '-');
+                key.ch(fn.values[ins.dst].is_host_ptr() ? 'h' : '-');
                 key.ch(fn.values[ins.dst].is_gc_object ? 'g' : '-');
             }
             for (IrValueId op : ins.operands) {
@@ -11065,7 +11069,7 @@ static bool inline_impl(IrModule &mod, size_t threshold) {
                         const auto &cv = callee.values[cvid];
                         nv.is_const = cv.is_const;
                         nv.const_val = cv.const_val;
-                        nv.is_host_ptr = cv.is_host_ptr;
+                        nv.memory = cv.memory;
                         nv.pointee_is_host_ptr = cv.pointee_is_host_ptr;
                         nv.is_gc_object = cv.is_gc_object;
                         nv.narrow_only = cv.narrow_only;
@@ -11729,23 +11733,83 @@ static bool module_has_unattributed_aop(const IrModule &mod) {
 // convencion de llamada de CALL y CALLIND es identica (args en R1.., ret R0),
 // asi que el rewrite preserva la semantica.
 /* Cuerpo interno; la puerta publica lo envuelve.  @see PassResult */
-static bool devirt_cfn_impl(IrFunction &fn) {
+static bool devirt_cfn_impl(IrFunction &fn, const NakedFnAddrIndex &index,
+                            analysis::asa::FactBase &base) {
     if (fn.is_native || fn.blocks.empty()) return false;
     // vid -> label de funcion (desde LABEL_ADDR, propagado por MOV).
     std::unordered_map<IrValueId, std::string> label_of;
+    /* Y de que direccion lee cada LOAD, para el camino por memoria: un
+     * puntero a funcion guardado una sola vez y leido de vuelta tiene destino
+     * conocido, pero la propagacion por SSA no lo alcanza. */
+    std::unordered_map<IrValueId, IrValueId> load_addr_of;
+    /* Y las constantes, que hacen falta para el OTRO camino: la direccion
+     * nativa de una funcion plana se toma con `vrt:naked_fnaddr(proc, hash)`,
+     * y ese hash es una constante de compilacion. */
+    std::unordered_map<IrValueId, uint64_t> const_of;
     // Primero recolectar LABEL_ADDR; luego propagar por MOV en orden lineal.
     for (auto &bb : fn.blocks) {
         for (auto &ins : bb.instrs) {
             if (ins.dst == IR_NO_VALUE) continue;
-            if (ins.op == IrOp::LABEL_ADDR && !ins.func_name.empty()) {
+            if (ins.op == IrOp::CONST) {
+                const_of[ins.dst] = static_cast<uint64_t>(ins.imm);
+            } else if (ins.op == IrOp::LABEL_ADDR && !ins.func_name.empty()) {
                 label_of[ins.dst] = ins.func_name;
+            } else if (ins.op == IrOp::CALLN && !index.empty() &&
+                       ins.func_name == "vrt:naked_fnaddr" &&
+                       ins.operands.size() >= 2) {
+                /* La direccion NATIVA de una funcion conocida.  El hash se
+                 * deshace con el indice del modulo; si el nombre no esta (una
+                 * @Naked, que se deja fuera a proposito) no se toca nada. */
+                const auto ic = const_of.find(ins.operands[1]);
+                if (ic == const_of.end()) continue;
+                if (const std::string *nm = index.find(ic->second))
+                    label_of[ins.dst] = *nm;
             } else if (ins.op == IrOp::MOV && !ins.operands.empty()) {
                 auto it = label_of.find(ins.operands[0]);
                 if (it != label_of.end()) label_of[ins.dst] = it->second;
+            } else if (ins.op == IrOp::LOAD && !ins.operands.empty()) {
+                load_addr_of[ins.dst] = ins.operands[0];
             }
         }
     }
     if (label_of.empty()) return false;
+
+    /* EL CAMINO POR MEMORIA.  Un `cfn` guardado una sola vez y leido de vuelta
+     * -- un `unique<cfn>`, un campo, una tabla con indice constante -- tiene
+     * destino conocido, pero el valor que llega al `load` no es el mismo SSA
+     * que el del `store`, asi que la propagacion de arriba no lo alcanza.  A
+     * quien hay que preguntarle es a points-to: dos direcciones son el mismo
+     * hueco cuando resuelven al mismo sitio.
+     *
+     * Se pregunta SOLO por los destinos que quedaron sin resolver y que salen
+     * de un `load`; si no hay ninguno no se pide la tabla. */
+    ir::IrOperands pending_addrs;
+    std::vector<IrInstr *> pending_calls;
+    if (!util::flag_on(util::FlagId::NoDevirtThroughMemory)) {
+        for (auto &bb : fn.blocks) {
+            for (auto &ins : bb.instrs) {
+                if (ins.op != IrOp::CALLIND || ins.func_ptr == IR_NO_VALUE)
+                    continue;
+                if (label_of.count(ins.func_ptr) != 0) continue;
+                const auto la = load_addr_of.find(ins.func_ptr);
+                if (la == load_addr_of.end()) continue;
+                pending_addrs.push_back(la->second);
+                pending_calls.push_back(&ins);
+            }
+        }
+    }
+    if (!pending_addrs.empty()) {
+        const analysis::PointsTo &pt = base.memory(fn);
+        const std::vector<IrValueId> stored = analysis::single_values_at(
+            fn, pt, pending_addrs, static_cast<int32_t>(sizeof(uint64_t)));
+        for (size_t i = 0; i < pending_calls.size(); ++i) {
+            if (stored[i] == IR_NO_VALUE) continue;
+            auto it = label_of.find(stored[i]);
+            if (it == label_of.end()) continue;
+            label_of[pending_calls[i]->func_ptr] = it->second;
+        }
+    }
+
     bool changed = false;
     for (auto &bb : fn.blocks) {
         for (auto &ins : bb.instrs) {
@@ -11763,8 +11827,241 @@ static bool devirt_cfn_impl(IrFunction &fn) {
     return changed;
 }
 
-PassResult ir_pass_devirt_cfn(IrFunction &fn) {
-    return PassResult::of(fn, devirt_cfn_impl(fn));
+PassResult ir_pass_devirt_cfn(IrFunction &fn, const NakedFnAddrIndex &index,
+                              analysis::asa::FactBase &base) {
+    return PassResult::of(fn, devirt_cfn_impl(fn, index, base));
+}
+
+// =========================================================================
+//  Pase ir_pass_callind_native
+// =========================================================================
+//
+// UNA LLAMADA INDIRECTA A UNA DIRECCION DEL ANFITRION NO ES UN CALLIND.
+//
+// `CALLIND` es la llamada indirecta DE LA MAQUINA: interpreta el valor como
+// una direccion de codigo SUYO.  Darle una direccion del proceso anfitrion
+// -- un export resuelto con `GetProcAddress`/`dlsym` -- no da un error:
+// DEVUELVE CERO.  Y cuando lo llamado era una syscall, cero es ademas
+// `STATUS_SUCCESS`, asi que lo que nunca llego a ejecutarse se da por bueno.
+// La forma correcta es la via nativa, el mismo `CALLNI` que usa `ffi_call`.
+//
+// POR QUE HACE FALTA UN PASE, si el bajado ya elige.  El bajado elige con lo
+// que sabe EN ESE MOMENTO, y de que memoria es un valor que ha pasado por
+// memoria no se sabe hasta que alguien adelanta el almacen a la carga.  Para
+// entonces el bajado ya decidio.  Medido: en `t.addr = GetProcAddress(...)`
+// seguido de llamar a `t.addr`, el operando del CALLIND llega aqui YA marcado
+// `@host` -- el valor es correcto y la instruccion es la equivocada.
+//
+// Es el mismo trabajo que @ref ir_pass_devirt_cfn -- hacer directa una
+// llamada indirecta donde de verdad se puede -- pero con otro hecho y otra
+// conclusion: aquel sabe QUE FUNCION es, este de QUE MEMORIA es.  Por eso va
+// aparte y no como un caso mas de aquel.
+/**
+ * @brief Hay alguna llamada indirecta cuyo destino NO venga ya resuelto?
+ *
+ * Decide si merece la pena resolver la funcion entera.  Sin esta pregunta el
+ * pase pagaria def-use y points-to en cada funcion del programa para no
+ * cambiar nada en la inmensa mayoria.
+ */
+static bool needs_address_spaces(const IrFunction &fn) {
+    for (const auto &bb : fn.blocks) {
+        for (const auto &ins : bb.instrs) {
+            if (ins.op != IrOp::CALLIND) continue;
+            if (ins.func_ptr == IR_NO_VALUE || ins.func_ptr >= fn.values.size())
+                continue;
+            if (!ins.call_abi_regs.empty()) continue;
+            if (!fn.values[ins.func_ptr].is_host_ptr()) return true;
+        }
+    }
+    return false;
+}
+
+/* Cuerpo interno; la puerta publica lo envuelve.  @see PassResult */
+static bool callind_native_impl(IrFunction &fn, analysis::asa::FactBase &base) {
+    if (fn.is_native || fn.blocks.empty()) return false;
+    if (util::flag_on(util::FlagId::NoCallindNative)) return false;
+
+    /* De que memoria es el destino cuando el propio valor no lo dice.  Se
+     * PREGUNTA, no se calcula: el hecho tiene un productor y esta cacheado, y
+     * resolver aqui los def-use y los punteros a mano seria redescubrir lo que
+     * la base ya sabe.  Y se pregunta SOLO si hay algo que resolver. */
+    const analysis::AddressSpaces *spaces = nullptr;
+    if (needs_address_spaces(fn)) spaces = &base.address_spaces(fn);
+
+    bool changed = false;
+    for (auto &bb : fn.blocks) {
+        for (auto &ins : bb.instrs) {
+            if (ins.op != IrOp::CALLIND) continue;
+            if (ins.func_ptr == IR_NO_VALUE || ins.func_ptr >= fn.values.size())
+                continue;
+            /* Solo cuando se puede AFIRMAR que es del anfitrion.  No poder
+             * demostrarlo no es demostrar lo contrario: se deja como esta.
+             * El valor lo dice por si mismo, o lo dice el analisis siguiendo
+             * por donde paso -- un `Unknown` de aquel contesta false, que es
+             * lo conservador. */
+            if (!fn.values[ins.func_ptr].is_host_ptr() &&
+                !(spaces != nullptr && spaces->is_host(ins.func_ptr)))
+                continue;
+            /* Y nunca si el puntero traia ABI a medida: el reparto por
+             * registro fijo es del `cfn`, y la via nativa reparte por la suya
+             * (R1..R12).  Reescribir ahi cambiaria en silencio donde cae cada
+             * argumento, que es justo la clase de fallo del que va este pase.
+             */
+            if (!ins.call_abi_regs.empty()) continue;
+            /* La forma es la MISMA que emite el bajado cuando lo sabe desde el
+             * principio: CALLN con el prefijo que el emisor baja a CALLNI y el
+             * puntero como operando 0. */
+            ins.op = IrOp::CALLN;
+            ins.func_name = "__callni__:";
+            ins.operands.insert_at(0, ins.func_ptr);
+            ins.func_ptr = IR_NO_VALUE;
+            changed = true;
+        }
+    }
+    return changed;
+}
+
+PassResult ir_pass_callind_native(IrFunction &fn,
+                                  analysis::asa::FactBase &base) {
+    return PassResult::of(fn, callind_native_impl(fn, base));
+}
+
+// =========================================================================
+//  De que memoria es el destino de una llamada indirecta
+// =========================================================================
+//
+// TRES respuestas, no dos.  El intermedio lleva `is_host_ptr`, que es un
+// booleano, y un booleano no sabe decir "no se": lo que no esta marcado puede
+// ser de la maquina O puede ser que nadie lo haya averiguado.  Confundirlas es
+// lo que hace que una direccion del proceso acabe en una llamada indirecta DE
+// LA MAQUINA, que no da error -- devuelve CERO --.
+//
+// Aqui se separan siguiendo de DONDE viene el valor, que es lo unico que lo
+// dice: una direccion de codigo de la maquina nace de un `LABEL_ADDR`; una del
+// anfitrion viene marcada.  Lo que no llega a ninguna de las dos se contesta
+// "no se", con su motivo, en vez de suponer.
+
+const char *call_target_unknown_name(CallTargetUnknown r) {
+    switch (r) {
+    case CallTargetUnknown::None: return "none";
+    case CallTargetUnknown::Parameter: return "parameter";
+    case CallTargetUnknown::FromMemory: return "from-memory";
+    case CallTargetUnknown::Computed: return "computed";
+    case CallTargetUnknown::Disagree: return "disagree";
+    case CallTargetUnknown::TooDeep: return "too-deep";
+    }
+    return "none";
+}
+
+/**
+ * @brief En que CLASE cae el motivo exacto que dio el dominio.
+ *
+ * El dominio contesta el caso concreto; aqui se agrupa en las cuatro clases
+ * que el diagnostico sabe explicar, porque se arreglan de forma distinta: lo
+ * que llega por un parametro no lo puede saber nunca quien lo recibe -- solo
+ * quien lo pasa --, mientras que lo que viene de memoria si se deduce mirando
+ * quien escribe ahi.  Un mensaje que no los separe manda al sitio equivocado.
+ *
+ * Se compara por DIRECCION de literal, que es como el resto del vocabulario
+ * del ASA: los codigos se definen una sola vez.
+ */
+static CallTargetUnknown call_target_why(const char *code) {
+    if (code == analysis::kAddrWhyParam) return CallTargetUnknown::Parameter;
+    if (code == analysis::kAddrWhyCall) return CallTargetUnknown::Parameter;
+    if (code == analysis::kAddrWhyNoStore ||
+        code == analysis::kAddrWhyAddrUnresolved ||
+        code == analysis::kAddrWhyStoredValueUnknown ||
+        code == analysis::kAddrWhyDirtyStore ||
+        code == analysis::kAddrWhyNoOracle)
+        return CallTargetUnknown::FromMemory;
+    if (code == analysis::kAddrWhyStoresDiffer ||
+        code == analysis::kAddrWhyPhiMixed ||
+        code == analysis::kAddrWhyMixedOperands)
+        return CallTargetUnknown::Disagree;
+    if (code == analysis::kAddrWhyBudget) return CallTargetUnknown::TooDeep;
+    return CallTargetUnknown::Computed;
+}
+
+std::vector<CallTargetSite>
+ir_callind_target_memory(const IrFunction &fn, analysis::asa::FactBase &base) {
+    std::vector<CallTargetSite> out;
+    if (fn.is_native || fn.blocks.empty()) return out;
+
+    /* Primero SI hay alguna: resolver la funcion entera para no encontrar
+     * ninguna llamada indirecta seria pagar por nada, y la mayoria no tiene. */
+    bool any = false;
+    for (const IrBlock &b : fn.blocks) {
+        for (const IrInstr &ins : b.instrs) {
+            if (ins.op == IrOp::CALLIND) {
+                any = true;
+                break;
+            }
+        }
+        if (any) break;
+    }
+    if (!any) return out;
+
+    /* De que memoria es cada destino: SE PREGUNTA.  Esto subia por la cadena
+     * de definiciones por su cuenta -- y ante un `load` se rendia diciendo
+     * "esto si se puede deducir, pero no desde aqui" --, que es exactamente el
+     * hecho que ahora tiene productor.  Redescubrirlo aqui seria romper el
+     * primer invariante del ASA. */
+    const analysis::AddressSpaces &spaces = base.address_spaces(fn);
+
+    for (const IrBlock &b : fn.blocks) {
+        for (const IrInstr &ins : b.instrs) {
+            if (ins.op != IrOp::CALLIND) continue;
+            CallTargetSite s;
+            s.line = ins.source_line;
+            s.target = ins.func_ptr;
+            const analysis::AddressSpaceEntry &e = spaces.at(ins.func_ptr);
+            switch (e.space) {
+            case analysis::AddressSpace::Host:
+                s.memory = CallTargetMemory::Host;
+                s.why = CallTargetUnknown::None;
+                break;
+            case analysis::AddressSpace::Machine:
+                s.memory = CallTargetMemory::Machine;
+                s.why = CallTargetUnknown::None;
+                break;
+            case analysis::AddressSpace::Unknown:
+                s.memory = CallTargetMemory::Unknown;
+                s.why = call_target_why(e.reason_code);
+                break;
+            }
+            out.push_back(s);
+        }
+    }
+    return out;
+}
+
+const std::string *NakedFnAddrIndex::find(uint64_t hash) const noexcept {
+    const auto it = std::lower_bound(
+        by_hash.begin(), by_hash.end(), hash,
+        [](const NakedFnAddrEntry &e, uint64_t h) { return e.name_hash < h; });
+    if (it == by_hash.end() || it->name_hash != hash) return nullptr;
+    return it->name;
+}
+
+NakedFnAddrIndex ir_naked_fnaddr_index(const IrModule &mod) {
+    NakedFnAddrIndex index;
+    index.by_hash.reserve(mod.functions.size());
+    for (const auto &f : mod.functions) {
+        if (f.is_naked || f.name.empty()) continue;
+        NakedFnAddrEntry e;
+        e.name_hash = util::kFnvOffset;
+        for (unsigned char c : f.name) {
+            e.name_hash ^= static_cast<uint64_t>(c);
+            e.name_hash *= util::kFnvPrime;
+        }
+        e.name = util::intern_name(f.name);
+        index.by_hash.push_back(e);
+    }
+    std::sort(index.by_hash.begin(), index.by_hash.end(),
+              [](const NakedFnAddrEntry &a, const NakedFnAddrEntry &b) {
+                  return a.name_hash < b.name_hash;
+              });
+    return index;
 }
 
 /* Cuerpo interno; la puerta publica lo envuelve.  @see ModulePassResult */
@@ -12357,7 +12654,7 @@ static void inline_one_multiblock(IrFunction &caller, size_t bi, size_t ii,
         IrValue &dv = caller.values[nv];
         dv.is_const = cv.is_const;
         dv.const_val = cv.const_val;
-        dv.is_host_ptr = cv.is_host_ptr;
+        dv.memory = cv.memory;
         dv.pointee_is_host_ptr = cv.pointee_is_host_ptr;
         dv.is_gc_object = cv.is_gc_object;
         dv.narrow_only = cv.narrow_only;
@@ -12397,6 +12694,27 @@ static void inline_one_multiblock(IrFunction &caller, size_t bi, size_t ii,
 
     // --- copiar los bloques del callee (remap valores + block-refs) ---
     std::vector<IrPhiArg> ret_args;
+    /* Las reservas de PILA del callee se IZAN al bloque de entrada del
+     * llamante en vez de quedarse donde cayo la llamada.
+     *
+     * Una `ALLOCA` de pila baja a un `subsp`, que es una instruccion de
+     * EJECUCION: dejada dentro de un bucle, la pila crecia en cada vuelta.  Esa
+     * era la razon por la que el inline multi-bloque rechazaba en bloque
+     * cualquier callee con reservas -- o sea, se esquivaba el problema en vez
+     * de resolverlo, y de paso se perdia el inline de todo lo que reserve algo,
+     * que es casi cualquier funcion con un struct local --.
+     *
+     * Izarlas lo RESUELVE: el bloque de entrada corre UNA vez por invocacion
+     * del llamante, asi que el `subsp` ocurre una vez aunque la llamada este
+     * en un bucle.  Cada sitio inlinado trae sus propias ranuras -- los valores
+     * ya vienen remapeados --, asi que dos inlines del mismo callee no
+     * comparten hueco.
+     *
+     * Las del ANFITRION no se mueven: esas bajan a `alloc`/`RAW_FREE`, que van
+     * en pareja, y separar la reserva de su liberacion daria una doble
+     * liberacion en la segunda vuelta.  Como estan balanceadas, no crecen
+     * nada y no hay nada que arreglar. */
+    std::vector<IrInstr> hoisted_allocas;
     for (size_t k = 0; k < callee.blocks.size(); ++k) {
         const IrBlock &cb = callee.blocks[k];
         const IrBlockId nbid = copy_ids[k];
@@ -12451,8 +12769,23 @@ static void inline_one_multiblock(IrFunction &caller, size_t bi, size_t ii,
                 }
                 in.imm = nuevo;
             }
+            /* La reserva de PILA se aparta para el bloque de entrada; la del
+             * anfitrion se queda con su liberacion. */
+            if (in.op == IrOp::ALLOCA && !in.host_alloca) {
+                hoisted_allocas.push_back(std::move(in));
+                continue;
+            }
             caller.blocks[nbid].instrs.push_back(std::move(in));
         }
+    }
+    if (!hoisted_allocas.empty() && !caller.blocks.empty()) {
+        /* Al PRINCIPIO del bloque de entrada: una ranura tiene que existir
+         * antes de que nada la use, y el llamante puede tener ya codigo suyo
+         * ahi que use las suyas. */
+        IrBlock &entry = caller.blocks[0];
+        entry.instrs.insert(entry.instrs.begin(),
+                            std::make_move_iterator(hoisted_allocas.begin()),
+                            std::make_move_iterator(hoisted_allocas.end()));
     }
 
     // --- B salta a la entry del callee copiado ---
@@ -12505,8 +12838,12 @@ static bool inline_multiblock_impl(IrModule &mod, size_t threshold) {
     // Activo por defecto.  Desactivable con VESTA_NO_MB_INLINE=1 (A/B).
     // El guard de is_inlineable_mb rechaza callees con NEWOBJ/__new_X/CALLVIRT
     // (creacion de objetos + dtor en loop rompia el save_live_regs del GC) +
-    // ALLOCA/free/excepciones/reflexion, dejando solo metodos/funciones PUROS
-    // (compute + field-access) que es donde el inline multi-bloque aporta.
+    // free/excepciones/reflexion.
+    //
+    // RESERVAR memoria ya no esta en esa lista: reservar no obstaculiza
+    // inlinar.  Estaba porque una reserva de pila dentro de un bucle hacia
+    // crecer la pila, y eso se resuelve IZANDOLA al bloque de entrada -- lo
+    // hace `inline_one_multiblock` --, no rechazando a todo el que reserve.
     static const bool mb_off = util::flag_on(util::FlagId::NoMbInline);
     if (mb_off) return false;
     std::unordered_map<std::string, size_t> name_to_idx;
@@ -14211,7 +14548,7 @@ static bool inline_closures_impl(IrModule &mod) {
                 const auto &cv = h.values[cvid];
                 nv.is_const = cv.is_const;
                 nv.const_val = cv.const_val;
-                nv.is_host_ptr = cv.is_host_ptr;
+                nv.memory = cv.memory;
                 nv.pointee_is_host_ptr = cv.pointee_is_host_ptr;
                 nv.is_gc_object = cv.is_gc_object;
                 nv.narrow_only = cv.narrow_only;
@@ -15542,8 +15879,35 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline,
              * arreglan de manera opuesta. */
             {
                 PassTimer c__("  x-mod:devirt_cfn (per fn)");
+                /* El indice de nombres por hash se construye UNA vez: el pase
+                 * corre por funcion, y rehacerlo dentro seria recorrer el
+                 * modulo entero tantas veces como funciones tenga. */
+                const NakedFnAddrIndex index = ir_naked_fnaddr_index(mod);
+                /* Y UNA base para todo el modulo, por lo mismo: su
+                 * memoizacion vale mientras viva, asi que una por funcion no
+                 * cachearia nada. */
+                analysis::asa::FactBase base(analysis::asa::kStageDuringOpt);
                 for (auto &fn : mod.functions) {
-                    if (applied(ir_pass_devirt_cfn(fn))) any = true;
+                    if (applied(ir_pass_devirt_cfn(fn, index, base)))
+                        any = true;
+                }
+            }
+            {
+                /* Y detras, la otra forma de hacer directa una indirecta: la
+                 * que no sabe QUE funcion es pero si DE QUE MEMORIA.  Va
+                 * despues para que la de arriba se quede antes con las que
+                 * puede convertir en un CALL directo, que es mejor -- esa si
+                 * se puede inlinar. */
+                PassTimer c__("  x-mod:callind_native (per fn)");
+                /* UNA base para todo el modulo: su memoizacion vale mientras
+                 * viva, asi que crearla por funcion no cachearia nada.  EN
+                 * MEDIO de optimizar -- el codigo ya no es el que entro y
+                 * todavia no es el que sale --, y versionada por funcion, asi
+                 * que lo que el optimizador acaba de cambiar no se sirve de
+                 * una respuesta anterior. */
+                analysis::asa::FactBase base(analysis::asa::kStageDuringOpt);
+                for (auto &fn : mod.functions) {
+                    if (applied(ir_pass_callind_native(fn, base))) any = true;
                 }
             }
             {

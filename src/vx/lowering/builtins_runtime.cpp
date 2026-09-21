@@ -192,7 +192,7 @@ bool Lowering::try_lower_runtime_builtins(ast::CallExpr *e, Builtin b,
         // Marcar el resultado como puntero a memoria host: cualquier
         // LOAD/STORE posterior cuyo puntero descienda de este value
         // emitira movh en el ir_emitter.
-        fn_->values[dst].is_host_ptr = true;
+        fn_->values[dst].memory = ir::MemorySpace::HostByConstruction;
         ir::IrInstr ins{};
         /* Si alguien lo provee, la llamada NO llega hasta aqui: se reescribio a
          * su instancia en `pre_mono`.  Y tiene que ser una instancia, no el

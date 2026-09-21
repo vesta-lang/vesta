@@ -994,8 +994,31 @@ struct CallExpr : Expr {
      * Paralelo a @c args, con cadena vacia donde el argumento fue posicional.
      * VACIO del todo cuando NINGUNO lleva nombre, que es el caso normal: asi
      * una llamada corriente no paga ni una reserva por esto.
+     *
+     * Con @c args VACIO y esto NO, no es una llamada: es el FILTRO por ranura
+     * de `&f(.min, .max)`, que dice a cual de las homonimas se apunta cuando
+     * el tipo no alcanza porque las dos lo tienen igual.  Va aqui y no en un
+     * campo nuevo porque es exactamente lo mismo que guarda -- con que nombre
+     * se escribio cada ranura --, y porque un @c PooledName se compara por
+     * PUNTERO contra los @c param_names de cada candidata, que es la
+     * operacion que el filtro hace.  Esa combinacion no la produce ninguna
+     * otra grafia, asi que distinguirla no cuesta ni un campo ni una rama en
+     * el camino de una llamada corriente.
      */
     ParamNames arg_names;
+    /**
+     * @brief Si alguno de los argumentos es el HUECO del receptor (`_`).
+     *
+     * Lo apunta el parser, que lo tiene en la mano al meter el argumento.  Lo
+     * pregunta la resolucion de cada llamada por el punto -- si hay hueco, el
+     * miembro no se la queda: el receptor va a otra ranura y la llamada es la
+     * forma LIBRE --, y preguntarlo recorriendo los argumentos seria pagar ese
+     * recorrido en cada llamada a un metodo del programa.
+     *
+     * Dice que HAY hueco, no cual: eso lo sigue contestando
+     * @c TypeChecker::ufcs_receiver_hole, que ademas denuncia el segundo.
+     */
+    bool has_receiver_hole = false;
     /// Argumentos de tipo @c <T,U,...> para builtins comptime
     /// (@c sizeof<T>, @c offsetof<T>, etc.).  Vacio para llamadas
     /// normales.  Solo poblado por el parser cuando el callee es un
@@ -1924,7 +1947,8 @@ struct FunctionDecl : Node {
     /// Vacio = sin bounds.  Verificados al monomorphizar; cero runtime.
     std::vector<TypeBound> type_bounds;
     /**
-     * @brief Si esta funcion es una INSTANCIA, como se escribe y quien la pidio.
+     * @brief Si esta funcion es una INSTANCIA, como se escribe y quien la
+     * pidio.
      *
      * Un error en el cuerpo de una instancia cae en una linea que quien llamo
      * no escribio y probablemente no ha leido: es el muro de errores de C++,
@@ -2096,6 +2120,20 @@ struct FunctionDecl : Node {
     /// stubs de entry y cambio de modo en dev OS.  Semantica de
     /// `__attribute__((naked))` de GCC.  Solo lo consume el codegen.
     bool is_naked = false;
+    /**
+     * @brief `@Inline`: metela en quien la llame aunque no quepa por tamano.
+     *
+     * El umbral del inliner es una politica para el caso general -- copiar
+     * codigo cuesta --, y esto dice que en esta funcion el programador ya hizo
+     * esa cuenta.  NO salta las reglas de CORRECCION: una recursiva, una con
+     * asm crudo o una @Naked se siguen rechazando, porque ahi no es que no
+     * compense, es que no se puede.
+     *
+     * Estaba en el parser desde el principio y solo la miraban los METODOS;
+     * en una funcion libre se reconocia y se tiraba, que es la peor forma de
+     * no hacer algo: el programador lo escribe, no da error, y no pasa nada.
+     */
+    bool is_inline = false;
     /// @NoIdiom: el compilador NO reconoce idiomas dentro de esta funcion.
     ///
     /// Hay pases que ven un bucle y lo reescriben a la operacion equivalente

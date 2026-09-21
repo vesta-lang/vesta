@@ -479,11 +479,11 @@ std::vector<ir::IrValueId> ssa_phi_coalesce_remap(const ir::IrFunction &fn,
              * -> clobbea caller-saved.  Se detecta por is_host_ptr del ptr. */
             if (op == ir::IrOp::LOAD && !in.operands.empty()) {
                 const ir::IrValueId p = in.operands[0];
-                if (p < NV && !fn.values[p].is_host_ptr) is_call = true;
+                if (p < NV && !fn.values[p].is_host_ptr()) is_call = true;
             }
             if (op == ir::IrOp::STORE && in.operands.size() >= 1) {
                 const ir::IrValueId p = in.operands[0];
-                if (p < NV && !fn.values[p].is_host_ptr) is_call = true;
+                if (p < NV && !fn.values[p].is_host_ptr()) is_call = true;
             }
             if (is_call)
                 call_pos.push_back(2u * (base + static_cast<uint32_t>(j)));

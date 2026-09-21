@@ -1723,7 +1723,7 @@ static WideAddr compute_wide_addr(EmitCtx &ctx, const IrInstr &ins,
         w.base = ra.index; // el numero ya lo lleva el operando
     }
     w.host = ins.operands[addr_op] != IR_NO_VALUE &&
-             ctx.fn.values[ins.operands[addr_op]].is_host_ptr;
+             ctx.fn.values[ins.operands[addr_op]].is_host_ptr();
     return w;
 }
 
@@ -2284,7 +2284,7 @@ static emmit::Mnemonic vec_mv(const EmitCtx &ctx, const ir::IrInstr &ins,
                               size_t idx) {
     if (idx >= ins.operands.size()) return emmit::Mnemonic::MOVH;
     const ir::IrValueId v = ins.operands[idx];
-    return (v < ctx.fn.values.size() && ctx.fn.values[v].is_host_ptr)
+    return (v < ctx.fn.values.size() && ctx.fn.values[v].is_host_ptr())
                ? emmit::Mnemonic::MOVH
                : emmit::Mnemonic::MOV;
 }
@@ -3846,7 +3846,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
                                        : (tsz == 2) ? 1u
                                        : (tsz == 4) ? 2u
                                                     : 3u;
-                const bool host = ctx.fn.values[ins.operands[0]].is_host_ptr;
+                const bool host = ctx.fn.values[ins.operands[0]].is_host_ptr();
                 const bool is_signed =
                     (ins.type == IrType::I8 || ins.type == IrType::I16 ||
                      ins.type == IrType::I32);
@@ -3906,7 +3906,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         // Para tsz == 8 (load 64-bit completo) seguimos con mov normal.
         const size_t tsz = type_slot_bytes(ins.type);
         const bool host_ptr = ins.operands[0] != IR_NO_VALUE &&
-                              ctx.fn.values[ins.operands[0]].is_host_ptr;
+                              ctx.fn.values[ins.operands[0]].is_host_ptr();
         if (tsz < 8) {
             const emmit::Mnemonic opc_z =
                 host_ptr ? emmit::Mnemonic::LOADZH : emmit::Mnemonic::LOADZ;
@@ -3982,7 +3982,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
                                        : (tsz == 2) ? 1u
                                        : (tsz == 4) ? 2u
                                                     : 3u;
-                const bool host = ctx.fn.values[ins.operands[1]].is_host_ptr;
+                const bool host = ctx.fn.values[ins.operands[1]].is_host_ptr();
                 const bool has_index = (fa.index != IR_NO_VALUE);
                 const uint32_t cw =
                     (static_cast<uint32_t>(base_reg) & 0x1F) |
@@ -4036,7 +4036,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             }
         }
         const bool host_ptr = ins.operands[1] != IR_NO_VALUE &&
-                              ctx.fn.values[ins.operands[1]].is_host_ptr;
+                              ctx.fn.values[ins.operands[1]].is_host_ptr();
         const emmit::Mnemonic opcode =
             host_ptr ? emmit::Mnemonic::MOVH : emmit::Mnemonic::MOV;
         ctx.out.emit(opcode, Mem(rp), rv_sized);
@@ -4141,7 +4141,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
          * por cada 8 bytes -- `i32[8192] arr;` costaba 16397 instrucciones. */
         if (ins.operands.size() < 3) break;
         const bool host = ins.operands[0] < ctx.fn.values.size() &&
-                          ctx.fn.values[ins.operands[0]].is_host_ptr;
+                          ctx.fn.values[ins.operands[0]].is_host_ptr();
         /* Se usan los registros DONDE YA VIVEN los operandos: la instruccion
          * toma tres registros cualesquiera, asi que forzarlos a unos fijos solo
          * anyadiria tres `mov` y trafico de registros que no hace falta.  El
@@ -5016,7 +5016,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
 
         const bool buf_is_host =
             ins.operands[0] < static_cast<int>(ctx.fn.values.size()) &&
-            ctx.fn.values[ins.operands[0]].is_host_ptr;
+            ctx.fn.values[ins.operands[0]].is_host_ptr();
         const char *opcode = buf_is_host ? "strmake_h" : "strmake";
 
         emit_save_all_gc_aware(ctx, call_pos, regs_to_save);
@@ -6329,7 +6329,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         for (size_t i = 0; i < binds.size(); ++i) {
             desc |= (uint64_t)(binds[i].phys & 0xF) << (i * 4);
             if (binds[i].slot < ctx.fn.values.size() &&
-                ctx.fn.values[binds[i].slot].is_host_ptr)
+                ctx.fn.values[binds[i].slot].is_host_ptr())
                 desc |= 1ull << (32 + i);
             /* Y en los bits 40..63, el ancho: tres por operando.  Sin esto, un
              * operando del banco ancho se movia como si midiera ocho bytes y

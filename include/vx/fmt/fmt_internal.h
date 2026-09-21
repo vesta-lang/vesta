@@ -146,6 +146,24 @@ bool is_modifier(TokenKind k);
 bool precedes_type(TokenKind k);
 
 /**
+ * @brief Indica si el token SOLO puede ser un operador binario.
+ *
+ * Un `-` o un `&` pueden ser prefijo (`-1`, `&x`) o binario (`a - b`); estos
+ * no: piden un operando a cada lado, siempre.
+ *
+ * Lo preguntan DOS pases y por motivos distintos -- el que separa, para poner
+ * un espacio a cada lado; el que pone papeles, para saber que tras un `)` no
+ * empieza un valor y por tanto esos parentesis no eran un cast --, y por eso
+ * vive aqui y no dentro de uno de ellos.  Con una copia en cada sitio, el dia
+ * que se anada un operador se anadiria a una y la otra se quedaria corta sin
+ * que nada lo dijera.
+ *
+ * @param k Categoria del token.
+ * @return Cierto si siempre es binario.
+ */
+bool always_binary(TokenKind k);
+
+/**
  * @brief Salta los calificadores que van DELANTE del tipo en una declaracion.
  * @param pieces Las piezas de la linea.
  * @param i      Donde empieza la declaracion.

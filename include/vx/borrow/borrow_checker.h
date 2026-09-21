@@ -215,6 +215,36 @@ class BorrowChecker {
     bool on_lend(const borrow::Place &place, const std::string &borrower_name,
                  SourceLoc loc_borrow, bool is_mut);
 
+    /**
+     * @brief El prestamo que NO tiene nombre: `f(lend(u))`.
+     *
+     * Las mismas reglas y el mismo estado que @c on_lend; lo unico distinto es
+     * con que se le identifica.  Un prestamo que nadie bautizo no tiene nombre
+     * que dar, y darle uno inventado para meterlo en el mapa de nombres seria
+     * exactamente el error que este comprobador ya tiene por otro lado: tratar
+     * un nombre como si fuera una identidad.  Su identidad es DONDE esta
+     * escrito, que es un numero, asi que va por su propio mapa y sin fabricar
+     * ninguna cadena.
+     *
+     * Antes no habia esto y se registraba bajo la cadena vacia.  Sin clave no
+     * se le puede poner ultimo uso, y sin ultimo uso @c advance_stmt no lo
+     * suelta nunca: vivia hasta el final de la funcion, asi que un `lend_mut`
+     * posterior chocaba contra un prestamo que ya no existia.
+     *
+     * @param place        La memoria que se presta.
+     * @param key          Su identidad: el desplazamiento en el fuente de la
+     *                     expresion que lo toma.  Quien lo crea y quien
+     *                     despues lo adopte lo DERIVAN del mismo nodo, asi que
+     *                     no hay que guardarlo en ningun sitio.
+     * @param loc_borrow   Donde se toma.
+     * @param is_mut       Si es exclusivo (@c borrow_mut<T>).
+     * @param last_use_idx La sentencia en la que muere.  Para un temporal es
+     *                     aquella en la que esta escrito, por definicion.
+     * @return @c true si el prestamo es valido; @c false si se reporto error.
+     */
+    bool on_lend_anon(const borrow::Place &place, uint32_t key,
+                      SourceLoc loc_borrow, bool is_mut, uint32_t last_use_idx);
+
     /// @brief La variable ENTERA, que es el lugar sin camino.
     ///
     /// Existe porque hay sitios donde lo prestado es de verdad la variable
@@ -224,9 +254,34 @@ class BorrowChecker {
                  const std::string &borrower_name, SourceLoc loc_borrow,
                  bool is_mut);
 
+    /// @copydoc on_lend_anon
+    /// @brief La variable ENTERA, sin camino, para el prestamo sin nombre.
+    bool on_lend_anon(const std::string &owner_name, uint32_t key,
+                      SourceLoc loc_borrow, bool is_mut, uint32_t last_use_idx);
+
     /// Procesa la destruccion (scope exit) de un borrow.  Decrementa
     /// el contador shared o resetea Mutable -> None.
     void on_borrow_drop(const std::string &borrower_name, SourceLoc loc_drop);
+
+    /**
+     * @brief El prestamo anonimo que acaba de recibir un nombre.
+     *
+     * `borrow<T> b = lend(u);` toma UN prestamo, no dos: el de la expresion y
+     * el de la variable son el mismo, y lo unico que pasa entre medias es que
+     * adquiere nombre.  Registrarlo otra vez dejaria dos entradas para un solo
+     * prestamo -- y la anonima, que muere al acabar la sentencia, soltaria el
+     * lugar que la nombrada todavia necesita.
+     *
+     * Por eso se ADOPTA en vez de registrarse de nuevo: pasa del mapa de los
+     * anonimos al de los nombrados, hereda el ultimo uso que el pre-pase
+     * calculo para la variable, y el lugar queda citado por quien de verdad
+     * lo tiene.
+     *
+     * @param key      Su identidad de anonimo (ver @c on_lend_anon).
+     * @param new_name El nombre que acaba de recibir.
+     * @return `false` si no habia tal prestamo anonimo (nada que adoptar).
+     */
+    bool adopt_anon_borrow(uint32_t key, const std::string &new_name);
 
     /// Procesa un uso directo del owner (lectura o mutacion).
     /// @p is_mutation = false (lectura) -> solo prohibido si Mutable.
@@ -337,6 +392,20 @@ class BorrowChecker {
     static BorrowRecord *find_same_place_(OwnerState &st,
                                           const borrow::Place &place) noexcept;
 
+    /// @brief Valida R1/R2 y apunta el prestamo en el LUGAR.
+    ///
+    /// La mitad que comparten el prestamo con nombre y el que no: las reglas
+    /// son las mismas y el estado del lugar es el mismo; lo unico distinto es
+    /// donde se apunta despues quien se lo queda.
+    ///
+    /// @param place El lugar prestado.
+    /// @param cite  Con que se le cita; vacio para el que no tiene nombre.
+    /// @param loc_borrow Donde se toma.
+    /// @param is_mut Si es exclusivo.
+    /// @return `false` si choco y ya se reporto.
+    bool take_place_(const borrow::Place &place, const std::string &cite,
+                     SourceLoc loc_borrow, bool is_mut);
+
     /// @brief El primer prestamo vivo de @p st que puede pisarse con @p place.
     ///
     /// Devuelve tambien POR QUE, cuando el solape no se pudo descartar en vez
@@ -362,6 +431,44 @@ class BorrowChecker {
         std::string reborrow_source;
     };
     std::unordered_map<std::string, BorrowMeta> borrows_;
+    /// Un prestamo que nadie bautizo (`f(lend(u))`), con su sitio por delante.
+    struct AnonBorrow {
+        /// Su identidad: el desplazamiento en el fuente de la expresion que lo
+        /// toma.  Es lo unico que lo distingue de otro igual en la misma
+        /// sentencia, y lo derivan por separado quien lo crea y quien lo
+        /// adopta, asi que no hay que guardarlo en el arbol.
+        uint32_t src_offset;
+        BorrowMeta meta;
+    };
+
+    /// Los que no tienen nombre, aparte de los que si.
+    ///
+    /// Aparte y no con una clave inventada dentro de @c borrows_: un prestamo
+    /// sin nombre NO tiene nombre, y fabricarle uno para que quepa seria
+    /// tratar otra vez un nombre como si fuera una identidad, que es el fallo
+    /// de fondo que este comprobador arrastra.
+    ///
+    /// Y un vector, no una tabla hash: aqui viven los TEMPORALES, que mueren
+    /// al acabar la sentencia donde se escribieron, asi que a la vez hay dos o
+    /// tres.  Con esas medidas recorrer es mas rapido que dispersar, y ademas
+    /// no cuesta una reserva por entrada.
+    ///
+    /// Que la busqueda sea por @c src_offset da de propina lo que hacia falta:
+    /// visitar dos veces el mismo nodo -- que pasa, el comprobador re-mira el
+    /// lado derecho de una asignacion -- encuentra el prestamo que ya estaba
+    /// en vez de tomar uno nuevo.
+    std::vector<AnonBorrow> anon_borrows_;
+
+    /// El prestamo anonimo de @p src_offset, o nulo.
+    BorrowMeta *find_anon_(uint32_t src_offset) noexcept;
+
+    /// @brief Suelta el LUGAR que tenia @p m.
+    ///
+    /// La otra mitad que comparten el prestamo con nombre y el que no: quitar
+    /// la entrada es distinto en cada uno -- estan en sitios distintos --,
+    /// pero devolver el lugar a su estado es lo mismo, incluido restaurar lo
+    /// que un represtamo hubiera suspendido.
+    void release_place_(const BorrowMeta &m);
     /// F1 - pre-pase de NLL: last_use_idx por NOMBRE de variable.
     /// Poblado por @c set_last_use antes de empezar el chequeo.
     /// Consultado por @c register_borrow al crear cada borrow.

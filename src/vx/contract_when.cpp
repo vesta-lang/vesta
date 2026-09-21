@@ -179,7 +179,8 @@ const std::vector<std::string> &target_vars() {
 
 const std::vector<std::string> &type_preds() {
     static const std::vector<std::string> k = {
-        "type.is_float", "type.is_integer", "type.is_pointer", "type.is_signed", "type.size"};
+        "type.is_float", "type.is_integer", "type.is_pointer", "type.is_signed",
+        "type.size"};
     return k;
 }
 

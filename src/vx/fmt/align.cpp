@@ -428,6 +428,12 @@ Line classify(const std::vector<Piece> &pieces, size_t from, size_t to,
      * que no significa nada. */
     size_t assign = 0;
     bool found = false;
+    /* Y, en el MISMO recorrido, si la linea lleva un cuerpo de expresion o
+     * una lista de parametros.  Lo mira la rama de la declaracion SIN valor
+     * inicial, unas lineas mas abajo; separarlo en otro barrido seria recorrer
+     * dos veces cada linea del fichero para un dato que aqui ya pasa. */
+    bool has_body_arrow = false;
+    bool has_call_paren = false;
     int prof = 0;
     for (size_t k = i; k <= to; ++k) {
         /* Lo que hay DENTRO de una cadena interpolada no es codigo: es el
@@ -440,10 +446,13 @@ Line classify(const std::vector<Piece> &pieces, size_t from, size_t to,
          * formateador se negara a escribir el fichero. */
         if (pieces[k].in_string) continue;
         const TokenKind kk = kind_of(pieces[k]);
-        if (kk == TokenKind::LPAREN || kk == TokenKind::LBRACKET)
+        if (kk == TokenKind::LPAREN || kk == TokenKind::LBRACKET) {
+            if (kk == TokenKind::LPAREN && prof == 0) has_call_paren = true;
             ++prof;
-        else if (kk == TokenKind::RPAREN || kk == TokenKind::RBRACKET)
+        } else if (kk == TokenKind::RPAREN || kk == TokenKind::RBRACKET)
             --prof;
+        else if (kk == TokenKind::FAT_ARROW && prof == 0)
+            has_body_arrow = true;
         else if (kk == TokenKind::ASSIGN && prof == 0) {
             assign = k;
             found = true;
@@ -470,6 +479,16 @@ Line classify(const std::vector<Piece> &pieces, size_t from, size_t to,
         const TokenKind primero = kind_of(pieces[i]);
         if (primero != TokenKind::IDENTIFIER && !is_type_keyword(primero))
             return line;
+        /* Y entre el tipo y el nombre no puede haber NADA que no sea del
+         * declarador.  `i64 uno(i64 x) => x + x;` tiene la misma forma vista
+         * por los extremos -- palabra de tipo al principio, nombre y `;` al
+         * final -- y se colaba como declaracion sin valor: entonces la ultima
+         * `x` hacia de nombre y se alineaba con la de la linea de al lado,
+         * metiendo relleno DENTRO de la expresion (`x +        x`).
+         *
+         * Lo que la delata es el cuerpo de expresion o la lista de parametros,
+         * y las dos se apuntaron en el recorrido que ya busco el `=`. */
+        if (has_body_arrow || has_call_paren) return line;
         line.shape = Shape::Decl;
         /* Las MISMAS columnas que la que si lleva `=`, menos la del `=`:
          * calificadores, tipo y nombre.
@@ -533,8 +552,7 @@ Line classify(const std::vector<Piece> &pieces, size_t from, size_t to,
      * Sigue alineandose, pero como lo que es: una asignacion, por su `=`. */
     const TokenKind primero_decl = kind_of(pieces[i]);
     bool classified = false;
-    if (primero_decl == TokenKind::STAR ||
-        primero_decl == TokenKind::LPAREN ||
+    if (primero_decl == TokenKind::STAR || primero_decl == TokenKind::LPAREN ||
         primero_decl == TokenKind::KW_THIS ||
         primero_decl == TokenKind::KW_SUPER) {
         /* Un lvalue que no empieza por un nombre: `*p = v`, `*(u32*)(p) = v`,
@@ -691,31 +709,31 @@ std::vector<uint32_t> compute_alignment(const std::vector<Piece> &pieces,
             continue;
         }
         size_t end = start;
-        while (end + 1 < lines.size() &&
-               /* `R88`: dos formas DISTINTAS que comparten el anclaje `=` van
-                * al mismo grupo -- y se alinean solo por el, que es lo que la
-                * regla dice.  Sin esto, `*p = v;` al lado de un bloque de
-                * declaraciones quedaba con su `=` en otra columna: la misma
-                * linea que hace un momento se alineaba MAL (la estrella en la
-                * columna del tipo) pasaba a no alinearse en absoluto. */
-               (lines[end + 1].shape == lines[start].shape ||
-                (lines[end + 1].ends_in_assign && lines[start].ends_in_assign)) &&
-               lines[end + 1].level == lines[start].level &&
-               /* Mismo numero de columnas... salvo entre declaraciones, donde
-                * la que no tiene valor inicial trae una menos y se alinea
-                * igual por las que comparten (`T val;` con `u8 tag = 0;`). */
-               (lines[end + 1].anchors.size() == lines[start].anchors.size() ||
-                lines[start].shape == Shape::Decl ||
-                /* O comparten el `=` y solo eso: entonces el numero de
-                 * columnas no tiene por que coincidir, porque de todas ellas
-                 * se va a usar UNA. */
-                (lines[end + 1].ends_in_assign &&
-                 lines[start].ends_in_assign)) &&
-               /* Consecutivas de verdad: si el emisor dejo una linea en blanco
-                * o un comentario entre medias, el bloque se rompe (`R83`).
-                * Eso es lo que le da el control a quien escribe. */
-               layout.line[spans[end + 1].first] ==
-                   layout.line[spans[end].first] + 1)
+        while (
+            end + 1 < lines.size() &&
+            /* `R88`: dos formas DISTINTAS que comparten el anclaje `=` van
+             * al mismo grupo -- y se alinean solo por el, que es lo que la
+             * regla dice.  Sin esto, `*p = v;` al lado de un bloque de
+             * declaraciones quedaba con su `=` en otra columna: la misma
+             * linea que hace un momento se alineaba MAL (la estrella en la
+             * columna del tipo) pasaba a no alinearse en absoluto. */
+            (lines[end + 1].shape == lines[start].shape ||
+             (lines[end + 1].ends_in_assign && lines[start].ends_in_assign)) &&
+            lines[end + 1].level == lines[start].level &&
+            /* Mismo numero de columnas... salvo entre declaraciones, donde
+             * la que no tiene valor inicial trae una menos y se alinea
+             * igual por las que comparten (`T val;` con `u8 tag = 0;`). */
+            (lines[end + 1].anchors.size() == lines[start].anchors.size() ||
+             lines[start].shape == Shape::Decl ||
+             /* O comparten el `=` y solo eso: entonces el numero de
+              * columnas no tiene por que coincidir, porque de todas ellas
+              * se va a usar UNA. */
+             (lines[end + 1].ends_in_assign && lines[start].ends_in_assign)) &&
+            /* Consecutivas de verdad: si el emisor dejo una linea en blanco
+             * o un comentario entre medias, el bloque se rompe (`R83`).
+             * Eso es lo que le da el control a quien escribe. */
+            layout.line[spans[end + 1].first] ==
+                layout.line[spans[end].first] + 1)
             ++end;
 
         if (end > start) { // un bloque de una sola linea no se alinea con nadie

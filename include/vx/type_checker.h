@@ -59,7 +59,7 @@
 #include "vx/diag/diag_catalog.h"
 #include "vx/diagnostic.h"
 #include "vx/overload.h" // varias declaraciones con un nombre, y cual se elige
-#include "vx/ufcs.h"        // `x.f(a)` y `f(x, a)` son la misma llamada
+#include "vx/ufcs.h"     // `x.f(a)` y `f(x, a)` son la misma llamada
 #include "vx/ufcs_scoped.h" // y que se puede llamar sobre un tipo DESDE AQUI
 
 namespace vx {
@@ -328,11 +328,41 @@ using OverloadTable = std::unordered_map<std::string, OverloadSet>;
  * @c type es el tipo semantico ya resuelto (incluye campos struct
  * anidados via Type{STRUCT, name}).
  */
+/**
+ * @enum FieldAddressSpace
+ * @brief De que memoria es la direccion que GUARDA un campo.
+ *
+ * Existe porque una direccion tambien viaja como ENTERO -- `uintptr` es como
+ * el lenguaje nombra una direccion -- y entonces el TIPO no puede decirlo: un
+ * puntero declara su naturaleza con @c Type::is_virtual, un entero no declara
+ * nada.  Sin esto, guardar la direccion de un export en un campo y leerla de
+ * vuelta para llamarla dejaba el valor sin marca, y la llamada bajaba a la
+ * indirecta DE LA MAQUINA: no da error, DEVUELVE CERO.
+ *
+ * Y el hecho es del CAMPO, no del tipo: `uintptr` se usa en muchos sitios y
+ * solo algunos guardan una direccion del anfitrion.  Ponerlo en el tipo lo
+ * contagiaria a todos.
+ *
+ * Que el compilador lo SEPA, y no que el programador lo declare: tener que
+ * decirle de que memoria es algo no es propio de un lenguaje serio, y no poder
+ * saberlo es un fallo, no un limite.
+ */
+enum class FieldAddressSpace : uint8_t {
+    Unknown = 0, ///< no se pudo demostrar nada; no se marca nada.
+    Host,        ///< toda escritura que se vio guarda una direccion del
+                 ///< proceso anfitrion.
+    Mixed,       ///< se vio al menos una que NO lo es: veto, y es PEGAJOSO.
+};
+
 struct StructFieldInfo {
     std::string name;
     Type type;
     uint32_t offset;
     uint32_t size;
+    /// De que memoria es lo que guarda, cuando el tipo no puede decirlo.
+    /// Solo tiene sentido en un campo entero del ancho de una direccion; para
+    /// un puntero lo dice ya @c Type::is_virtual.
+    FieldAddressSpace address_space = FieldAddressSpace::Unknown;
     /// fase C - Bit field metadata.  bit_width=0 indica campo
     /// normal (byte-aligned, ocupa @c size bytes desde @c offset).
     /// bit_width>0 indica bit field: el storage word esta en
@@ -1809,6 +1839,141 @@ class TypeChecker {
     const FunctionSig *function_sig_by_name(const std::string &name) const;
 
     /**
+     * @struct FieldSpaceEvidence
+     * @brief Lo visto hasta ahora sobre UN campo que guarda una direccion.
+     *
+     * Con nombres propios y no un mapa de cadena a cadena: quien lea esto
+     * tiene que poder saber que es cada parte sin ir a buscar quien lo
+     * rellena.  Los nombres van INTERNADOS, asi que la entrada no copia
+     * cadenas y compararlas es comparar punteros.
+     */
+    struct FieldSpaceEvidence {
+        const std::string *owner = nullptr; ///< struct o clase que lo declara.
+        const std::string *field = nullptr; ///< nombre del campo.
+        FieldAddressSpace verdict = FieldAddressSpace::Unknown;
+    };
+
+    /**
+     * @brief Cual de las homonimas es `&f`, cuando hay varias.
+     *
+     * En una llamada lo deciden los argumentos; en una REFERENCIA no hay
+     * ninguno, asi que lo unico que queda es el tipo que el contexto espera.
+     * Coincidencia exacta y sin conversiones, y FILTRA en vez de preferir: si
+     * ninguna casa -- o casan dos --, devuelve nulo y quien pregunta sigue su
+     * camino, en vez de elegir a dedo.
+     *
+     * Con una sola candidata no hay nada que decidir y no se mira el destino.
+     *
+     * @param id     El nombre desnudo de la funcion; si se elige una, se le
+     *               apunta su etiqueta en @c func_ref_mangled.
+     * @param target El tipo que el contexto espera.
+     * @param slots  Las ranuras escritas en `&f(.min, .max)`, o nulo si no se
+     *               escribieron.  Es la segunda capa: cuando dos homonimas
+     *               tienen los MISMOS tipos, lo unico que las separa es como
+     *               se llaman sus ranuras, y eso el tipo esperado no lo dice.
+     *               FILTRA igual que la primera -- no prefiere --, asi que el
+     *               orden entre las dos no cambia a quien se apunta.
+     * @return La firma elegida, o nulo si el destino no la decide.
+     */
+    const FunctionSig *func_ref_overload(ast::IdentExpr *id, const Type &target,
+                                         const ParamNames *slots = nullptr);
+
+    /**
+     * @brief `&geo.suma` -> `&geo__suma`: el nombre aplanado en su sitio.
+     *
+     * La direccion de una funcion libre cuyo nombre esta CUALIFICADO por su
+     * namespace no se resuelve aparte: se reescribe el operando y se deja
+     * seguir, asi que de ahi en adelante la referencia cualificada y la
+     * desnuda son la misma -- mismo desempate por tipo esperado, mismo filtro
+     * por ranura, mismo mensaje cuando nada decide --.  Vale igual con el
+     * filtro puesto (`&geo.rango(.min, .max)`), donde el nombre va dentro.
+     *
+     * No toca nada si el operando no es un nombre cualificado por un
+     * namespace: un metodo ligado (`&obj.m`) y un metodo por el tipo
+     * (`&Punto.suma`) siguen por donde iban.
+     *
+     * @param operand El operando del `&`, que se sustituye en el sitio.
+     */
+    void rewrite_ns_qualified_func_ref(std::unique_ptr<ast::Expr> &operand);
+
+    /**
+     * @brief `&Punto.area` -> `&area`: la libre ALCANZABLE por ese receptor.
+     *
+     * Se admite porque la introspeccion ve metodos y libres alcanzables
+     * UNIFORMEMENTE: si se pueden enumerar juntos pero solo de unos se puede
+     * tomar la direccion, todo metaprograma que quiera un puntero vuelve a
+     * ramificar por de donde salio el nombre, que es la costura que esa regla
+     * existe para impedir.  Es el mismo argumento por el que `q.area()` no es
+     * una redundancia de `area(q)`.
+     *
+     * No le quita nada al metodo: con metodo Y libre para ese receptor no
+     * elige -- es la misma ambiguedad que denuncia una llamada por el punto --
+     * y con solo metodo no toca nada y deja seguir.
+     *
+     * @param operand El operando del `&`, que se sustituye en el sitio.
+     * @return `true` si ya se dijo que no se puede y hay que parar.
+     */
+    bool rewrite_type_qualified_func_ref(std::unique_ptr<ast::Expr> &operand);
+
+    /**
+     * @brief Los tipos de los parametros de una firma, separados por comas.
+     *
+     * Lo piden DOS diagnosticos -- el contrato de `@Provides` y las candidatas
+     * de una referencia sin decidir --, asi que vive aqui y no dentro de uno
+     * de ellos: con una copia en cada sitio, las dos formas de citar una firma
+     * se separarian a la primera.
+     *
+     * @param sig        La firma.
+     * @param with_names Anyade el nombre de cada ranura tras su tipo.  Lo
+     *                   piden las candidatas de `&f(.min, .max)`, donde lo
+     *                   que las separa ES el nombre: citarlas solo por tipo
+     *                   las dejaria a las dos escritas igual.
+     * @return `i64, string` -- sin parentesis, que los pone quien la escribe.
+     */
+    std::string written_param_list(const FunctionSig &sig,
+                                   bool with_names = false) const;
+
+    /**
+     * @brief Como se cita una candidata de `&f`: `cfn(i64 min, i64 max) ->
+     * i64`.
+     *
+     * Lo piden los dos diagnosticos de la referencia sin decidir -- el que no
+     * tiene tipo esperado y el que no encuentra las ranuras escritas --, y
+     * escribir una candidata es la operacion que comparten.
+     *
+     * @param sig        La firma.
+     * @param with_names Con el nombre de cada ranura.
+     */
+    std::string written_func_ref_sig(const FunctionSig &sig,
+                                     bool with_names = false) const;
+
+    /**
+     * @brief Dice que `&f` no decide entre varias homonimas, y CUALES son.
+     *
+     * En una llamada eligen los argumentos; en una referencia no hay ninguno,
+     * asi que decide el tipo que el contexto espera.  Donde no hay contexto --
+     * un `auto`, por ejemplo -- no hay respuesta, y el mensaje de siempre
+     * hablaria del `void` con el que la referencia sin resolver se tipa: un
+     * detalle de dentro que el usuario no escribio.
+     *
+     * @param val El inicializador: el nombre desnudo o con `&` delante.
+     * @return `true` si era ese caso y ya se dijo.
+     */
+    bool report_func_ref_undecided(const ast::Expr *val);
+
+    /**
+     * @brief La referencia a funcion cuya eleccion ya se explico.
+     *
+     * Quien resuelve `&f` y quien informa del fallo son dos sitios distintos
+     * -- el primero porque tiene las candidatas delante, el segundo porque es
+     * donde se ve que el valor no encaja --, asi que sin esto el mismo `&f`
+     * se explicaba DOS veces con dos mensajes que dicen lo mismo de otra
+     * forma.  Un puntero al nodo basta: son consecutivos, no hay que
+     * acordarse de mas de uno.
+     */
+    const ast::IdentExpr *func_ref_explained_ = nullptr;
+
+    /**
      * @brief Accesor publico al mapa nombre -> indice de firma.
      *
      * El lowering lo recorre en su pase 1 para registrar el tipo de retorno
@@ -1885,6 +2050,29 @@ class TypeChecker {
      * @brief Pase 2: chequea el cuerpo de cada funcion declarada.
      */
     void check_functions();
+
+    /**
+     * @brief Anota lo que UNA asignacion dice sobre la memoria del campo
+     *        destino, cuando es un campo entero que guarda una direccion.
+     *
+     * No decide nada: acumula.  El veredicto lo cierra
+     * @ref infer_field_address_spaces_ cuando ya se han visto todas.
+     */
+    void note_field_address_space_(ast::AssignExpr *e);
+
+    /**
+     * @brief Cierra los veredictos y los deja en los layouts.
+     *
+     * Corre UNA vez, tras comprobar todos los cuerpos: la respuesta sale de
+     * TODAS las escrituras del modulo, y una lectura puede comprobarse antes
+     * que la escritura que la explica.
+     */
+    void infer_field_address_spaces_();
+
+    /// Lo visto por campo.  Vector y no mapa: son pocas entradas, se recorren
+    /// enteras al cerrar, y comparar dos nombres internados es comparar dos
+    /// punteros.
+    std::vector<FieldSpaceEvidence> field_space_evidence_;
 
     /**
      * @brief Chequea los cuerpos de las funciones libres del modulo.
@@ -2742,6 +2930,28 @@ class TypeChecker {
      * @return true si se reporto; false si no habia nada que sugerir.
      */
     bool report_ufcs_cast_hint(const Type &recv, const std::string &name,
+                               const SourceLoc &loc);
+
+    /**
+     * @brief La candidata existe y pide un PRESTAMO, y el receptor es su
+     *        duenyo.
+     *
+     * El hermano del anterior para la otra forma del primer parametro.  De un
+     * `unique<T>` a un `borrow<T>` no se llega con un cast -- un duenyo y un
+     * prestamo no son dos vistas del mismo valor --: se llega prestandolo.
+     *
+     * Y el punto NO lo hace solo a proposito.  Prestar es la operacion que
+     * tiene reglas -- exclusividad, que no escape --, y fabricarla al ver un
+     * punto haria que la grafia con punto y la libre dejaran de comprobar lo
+     * mismo, por el lado que se salta las comprobaciones.  Asi que se pide
+     * escrito y el mensaje dice como.
+     *
+     * @param recv El tipo del receptor.
+     * @param name El nombre escrito tras el punto.
+     * @param loc  Donde se escribio la llamada.
+     * @return true si se reporto; false si no habia nada que sugerir.
+     */
+    bool report_ufcs_lend_hint(const Type &recv, const std::string &name,
                                const SourceLoc &loc);
 
     /**
@@ -3610,7 +3820,7 @@ class TypeChecker {
     static constexpr uint32_t kNoBuiltinSig = 0xFFFFFFFFu;
     std::array<uint32_t, static_cast<size_t>(Builtin::Count)> builtin_sig_;
 
-public:
+  public:
     /**
      * @struct BuiltinProviderEntry
      * @brief Un builtin que este modulo IMPLEMENTA, y con que funcion.
@@ -3632,15 +3842,14 @@ public:
         uint32_t sig = 0;
     };
 
-private:
+  private:
     /// La ficha que @ref provider_for devuelve cuando el proveedor llego
     /// IMPORTADO: alli no hay lista donde apuntarlo, asi que se arma al
     /// contestar.  `mutable` porque la consulta es const y no cambia nada
     /// observable: lo que devuelve depende solo de las firmas.
     mutable BuiltinProviderEntry imported_provider_;
 
-public:
-
+  public:
     /**
      * @brief Quien implementa @p b en este modulo, si alguien lo hace.
      *
@@ -3741,11 +3950,12 @@ public:
     }
 
     /// @brief Todo lo que el modulo declara con `@Provides`.
-    const std::vector<BuiltinProviderEntry> &builtin_providers() const noexcept {
+    const std::vector<BuiltinProviderEntry> &
+    builtin_providers() const noexcept {
         return builtin_providers_;
     }
 
-private:
+  private:
     /**
      * Lo que el modulo declara con `@Provides(<builtin>)`.
      *
@@ -3768,10 +3978,10 @@ private:
      * Lo que ya se instancio de cada proveedor.
      *
      * Instanciar CREA una declaracion, asi que preguntar dos veces por lo mismo
-     * no sale gratis: salen dos copias que aplanan al mismo nombre, y eso es una
-     * redefinicion a nivel global senyalando a un fichero que el usuario no ha
-     * escrito.  Y preguntar dos veces es lo normal -- la llamada escrita y la
-     * instancia forzada preguntan por su cuenta, y el pase que las contiene
+     * no sale gratis: salen dos copias que aplanan al mismo nombre, y eso es
+     * una redefinicion a nivel global senyalando a un fichero que el usuario no
+     * ha escrito.  Y preguntar dos veces es lo normal -- la llamada escrita y
+     * la instancia forzada preguntan por su cuenta, y el pase que las contiene
      * puede correr mas de una vez --, asi que quien contesta es quien recuerda.
      *
      * Vector y no tabla, por lo mismo que @ref builtin_providers_: son un
@@ -3779,12 +3989,13 @@ private:
      * Los nombres van INTERNADOS, que es lo que evita guardar la misma cadena
      * una vez por pregunta.
      */
-    util::NamedVector<ProviderInstance, ProviderInstanceTag> provider_instances_;
+    util::NamedVector<ProviderInstance, ProviderInstanceTag>
+        provider_instances_;
 
     /// @brief Crea la instancia del proveedor de reserva que trabaja en BYTES.
     void force_raw_alloc_instances();
 
-public:
+  public:
     /**
      * @brief El simbolo al que hay que llamar para cubrir @p b con @p elem.
      *
@@ -3806,8 +4017,7 @@ public:
      */
     std::string instantiate_provider(Builtin b, const Type &elem);
 
-private:
-
+  private:
     /// Ver @ref raw_alloc_symbol.  Vacio = nadie provee `malloc`.
     std::string raw_alloc_symbol_;
     /// Ver @ref raw_free_symbol.  Vacio = nadie provee `free`.

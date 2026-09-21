@@ -788,7 +788,7 @@ struct Resolver {
              * direccion no estuviera tipada como puntero pasaria de "puede
              * tocar cualquier cosa" a "no toca nada".  Eso no da un fallo: da
              * otro programa. */
-            if (!es_direccion(v) && !fn.values[v].is_host_ptr)
+            if (!es_direccion(v) && !fn.values[v].is_host_ptr())
                 return unknown(asa::UnknownReason::NothingToSay,
                                "memory.not_an_address");
             /* Y si SI podia serlo, entonces es un hueco de verdad.  Se dice
@@ -917,6 +917,102 @@ std::vector<ir::IrValueId> single_values_of_slots(const ir::IrFunction &fn,
                 // Una segunda escritura: el contenido ya depende del camino.
                 out[k] =
                     (++escrituras[k] == 1) ? in.operands[0] : ir::IR_NO_VALUE;
+            }
+        }
+    }
+    return out;
+}
+
+namespace {
+
+/// Un hueco identificado: raiz y desplazamiento PROBADO.  Struct con nombre y
+/// no un entero empaquetado: mezclar tres campos de anchos distintos en una
+/// clave es como se cuelan dos sitios que salen iguales sin serlo.
+struct SlotKey {
+    uint8_t kind = 0;
+    uint32_t id = 0;
+    int64_t off = 0;
+    bool valid = false;
+};
+
+bool slot_key_less(const SlotKey &a, const SlotKey &b) {
+    if (a.kind != b.kind) return a.kind < b.kind;
+    if (a.id != b.id) return a.id < b.id;
+    return a.off < b.off;
+}
+
+bool slot_key_same(const SlotKey &a, const SlotKey &b) {
+    return a.kind == b.kind && a.id == b.id && a.off == b.off;
+}
+
+/// Una pregunta: por que hueco, y en que posicion del resultado va.
+struct SlotAsked {
+    SlotKey where;
+    size_t at = 0;
+};
+
+bool slot_asked_less(const SlotAsked &a, const SlotAsked &b) {
+    return slot_key_less(a.where, b.where);
+}
+
+/// El hueco al que apunta @p ptr, o invalido si no se identifica uno solo.
+/// @c loc_of degrada a la region entera poniendo el ancho a cero cuando el
+/// desplazamiento no esta probado, y eso NO identifica una ranura.
+SlotKey slot_of(const PointsTo &pt, ir::IrValueId ptr, int32_t width) {
+    SlotKey k;
+    const effects::AbstractLoc l = loc_of(pt, ptr, width);
+    if (l.kind == effects::AbstractLoc::Kind::Unknown ||
+        l.kind == effects::AbstractLoc::Kind::None ||
+        l.id == effects::LOC_GENERIC || l.width == 0)
+        return k;
+    k.kind = static_cast<uint8_t>(l.kind);
+    k.id = l.id;
+    k.off = l.off;
+    k.valid = true;
+    return k;
+}
+
+} // namespace
+
+std::vector<ir::IrValueId> single_values_at(const ir::IrFunction &fn,
+                                            const PointsTo &pt,
+                                            ir::IrValueList ptrs,
+                                            int32_t width) {
+    std::vector<ir::IrValueId> out(ptrs.size(), ir::IR_NO_VALUE);
+    if (ptrs.empty()) return out;
+
+    /* Los huecos por los que se pregunta, ordenados: son unos pocos y se
+     * consultan dentro del bucle de instrucciones, que es el caro.  Un mismo
+     * hueco puede pedirse varias veces, asi que se guardan TODAS sus
+     * posiciones -- igual que en @ref single_values_of_slots --. */
+    std::vector<SlotAsked> asked;
+    asked.reserve(ptrs.size());
+    for (size_t i = 0; i < ptrs.size(); ++i) {
+        const SlotKey k = slot_of(pt, ptrs[i], width);
+        if (k.valid) {
+            SlotAsked q;
+            q.where = k;
+            q.at = i;
+            asked.push_back(q);
+        }
+    }
+    if (asked.empty()) return out;
+    std::sort(asked.begin(), asked.end(), slot_asked_less);
+
+    std::vector<uint32_t> writes(ptrs.size(), 0);
+    for (const ir::IrBlock &bb : fn.blocks) {
+        for (const ir::IrInstr &in : bb.instrs) {
+            if (in.op != ir::IrOp::STORE || in.operands.size() < 2) continue;
+            const SlotKey k = slot_of(pt, in.operands[1], width);
+            if (!k.valid) continue;
+            SlotAsked probe;
+            probe.where = k;
+            auto it = std::lower_bound(asked.begin(), asked.end(), probe,
+                                       slot_asked_less);
+            for (; it != asked.end() && slot_key_same(it->where, k); ++it) {
+                const size_t j = it->at;
+                // Una segunda escritura: el contenido ya depende del camino.
+                out[j] = (++writes[j] == 1) ? in.operands[0] : ir::IR_NO_VALUE;
             }
         }
     }

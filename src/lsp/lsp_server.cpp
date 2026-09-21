@@ -26,7 +26,7 @@
 #include "vx/module/namespace_flatten.h" // demangle_symbol: el nombre escrito
 
 #include "lsp/builtin_docs.h"
-#include "vx/builtin_names.h" // los builtins y sus raices de familia
+#include "vx/builtin_names.h"    // los builtins y sus raices de familia
 #include "toolchain/toolchain.h" // vesta::tc::compile (compilar embebido)
 #include "util/fs_utils.h"       // fs::get_executable_path (localizar stdlib)
 
@@ -1186,8 +1186,8 @@ void collect_ufcs_reachable(const vx::SemanticIndex &idx,
         if (public_only && !s.is_public) continue;
         /* Lo que se escribe tras el punto es el nombre SIMPLE. */
         const size_t dot = s.name.rfind('.');
-        const char *leaf = s.name.c_str() + (dot == std::string::npos ? 0
-                                                                      : dot + 1);
+        const char *leaf =
+            s.name.c_str() + (dot == std::string::npos ? 0 : dot + 1);
         if (!prefix.empty() &&
             std::strncmp(leaf, prefix.c_str(), prefix.size()) != 0)
             continue;

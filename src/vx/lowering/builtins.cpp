@@ -106,7 +106,8 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
      * `malloc<T>(n)` son n ELEMENTOS, y lo que el proveedor recibe son BYTES:
      * la cuenta la hace ese bajado.  Desviar la llamada desde aqui se la
      * saltaria y el proveedor reservaria de menos, callando. */
-    const bool lowered_by_its_own = (b == Builtin::Malloc || b == Builtin::Free);
+    const bool lowered_by_its_own =
+        (b == Builtin::Malloc || b == Builtin::Free);
     const TypeChecker::BuiltinProviderEntry *provider =
         lowered_by_its_own ? nullptr : tc_.provider_for(b);
     if (provider != nullptr) {
@@ -143,8 +144,8 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         ir::IrInstr ins{};
         ins.op = ir::IrOp::CALL;
         ins.type = ret;
-        ins.dst = (ret == ir::IrType::VOID) ? ir::IR_NO_VALUE
-                                            : fn_->new_value(ret);
+        ins.dst =
+            (ret == ir::IrType::VOID) ? ir::IR_NO_VALUE : fn_->new_value(ret);
         ins.func_name = provider->symbol;
         ins.operands = std::move(args);
         ins.is_call_site = true;
@@ -278,7 +279,8 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         const ir::IrValueId dst = fn_->new_value(rt);
         // section_start/end devuelven un host_ptr real (la VA de la seccion);
         // marcarlo asi para que un LOAD/STORE posterior use el path host.
-        if (kind != 2) fn_->values[dst].is_host_ptr = true;
+        if (kind != 2)
+            fn_->values[dst].memory = ir::MemorySpace::HostByConstruction;
         ir::IrInstr is{};
         is.op = ir::IrOp::SECTION_REF;
         is.type = rt;
@@ -472,7 +474,8 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         ir::IrValueId v_addr = fn_->new_value(ir::IrType::PTR);
         // Solo en native el literal es memoria del host; en la VM el mensaje
         // vive en su espacio de direcciones y PANIC lo lee de ahi.
-        if (native_poo_) fn_->values[v_addr].is_host_ptr = true;
+        if (native_poo_)
+            fn_->values[v_addr].memory = ir::MemorySpace::HostByConstruction;
         {
             ir::IrInstr sa{};
             sa.op = ir::IrOp::STR_LIT_ADDR;
@@ -555,7 +558,8 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         std::vector<uint8_t> bytes(msg_text.begin(), msg_text.end());
         const uint64_t idx = out_mod_->intern_static_data(std::move(bytes));
         ir::IrValueId v_msg = fn_->new_value(ir::IrType::PTR);
-        if (native_poo_) fn_->values[v_msg].is_host_ptr = true;
+        if (native_poo_)
+            fn_->values[v_msg].memory = ir::MemorySpace::HostByConstruction;
         {
             ir::IrInstr is{};
             is.op = ir::IrOp::STR_LIT_ADDR;

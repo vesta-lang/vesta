@@ -708,7 +708,7 @@ static bool packed_binop_mop(ir::IrType t, uint64_t subop, MOp &out) {
  * @return true si es memoria del proceso.
  */
 bool is_host_bulk_ptr(const ir::IrFunction &fn, ir::IrValueId v) {
-    return v < fn.values.size() && fn.values[v].is_host_ptr;
+    return v < fn.values.size() && fn.values[v].is_host_ptr();
 }
 
 /**
@@ -1213,7 +1213,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
         /* Codifica StackmapGcKind+1: HOSTPTR si es host_ptr a objeto GC,
          * HANDLE en otro caso.  (STRING se trata como HOSTPTR: el scan
          * usa el mismo host_ptr al payload.) */
-        const StackmapGcKind k = fn.values[i].is_host_ptr
+        const StackmapGcKind k = fn.values[i].is_host_ptr()
                                      ? StackmapGcKind::HOSTPTR
                                      : StackmapGcKind::HANDLE;
         out.vreg_is_gc[i] = static_cast<uint8_t>(static_cast<uint8_t>(k) + 1u);
@@ -1630,7 +1630,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                         in.operands.size() != 2)
                         continue;
                     /* solo HOST ptr (VM -> LOAD_VM, no se fusiona). */
-                    if (in.dst >= NVAL || !fn.values[in.dst].is_host_ptr)
+                    if (in.dst >= NVAL || !fn.values[in.dst].is_host_ptr())
                         continue;
                     const ir::IrValueId o0 = in.operands[0],
                                         o1 = in.operands[1];
@@ -3233,8 +3233,8 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 }
                 const ir::IrValueId mv_dst = in.operands[0];
                 const ir::IrValueId mv_src = in.operands[1];
-                const bool mv_host = !vm || (fn.values[mv_dst].is_host_ptr &&
-                                             fn.values[mv_src].is_host_ptr);
+                const bool mv_host = !vm || (fn.values[mv_dst].is_host_ptr() &&
+                                             fn.values[mv_src].is_host_ptr());
                 const ir::IrValueId mv_tmp = new_tmp();
                 const ir::IrValueId mv_z = new_tmp();
                 if (mv_host) {
@@ -3963,7 +3963,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                  * (el str_lit_addr/.rodata, malloc, alloca son host_ptr
                  * reales).  Solo el VM_ABI traduce vaddr -> host via
                  * LOAD_VM; en bare emitimos LOAD host directo. */
-                if (vm && !fn.values[in.operands[0]].is_host_ptr) {
+                if (vm && !fn.values[in.operands[0]].is_host_ptr()) {
                     /* float desde memoria VM (vaddr): LOAD_VM no materializa a
                      * XMM aun -> bail.  El caso HOST si se soporta (make_load
                      * + rewrite enruta el dst FP a MOVSD/MOVSS). */
@@ -4047,7 +4047,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 const int w = ir::type_slot_bytes(in.type);
                 /* AOT (HOST_LEAF): toda direccion es host -> STORE directo
                  * (ver nota en LOAD).  Solo VM_ABI usa STORE_VM. */
-                if (vm && !fn.values[in.operands[1]].is_host_ptr) {
+                if (vm && !fn.values[in.operands[1]].is_host_ptr()) {
                     /* float a memoria VM (vaddr): STORE_VM no soporta XMM aun
                      * -> bail.  El caso HOST si (make_store + rewrite MOVSD).
                      */
@@ -4768,7 +4768,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                  * leer las dos memorias. */
                 for (const ir::IrValueId opv : in.operands) {
                     if (opv >= fn.values.size() ||
-                        !fn.values[opv].is_host_ptr) {
+                        !fn.values[opv].is_host_ptr()) {
                         vreg_dbg(fn.name.c_str(), "vec(puntero-no-host)");
                         return false;
                     }
@@ -5814,8 +5814,9 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 // interp).  Sin esto, el path vreg caia a slots que emitia
                 // `strmake` (VM mem) sobre un buffer host -> bytes NUL en los
                 // fragmentos interpolados de `return "${expr}..."`.
-                const bool sm_buf_host = in.operands[0] < fn.values.size() &&
-                                         fn.values[in.operands[0]].is_host_ptr;
+                const bool sm_buf_host =
+                    in.operands[0] < fn.values.size() &&
+                    fn.values[in.operands[0]].is_host_ptr();
                 const uint64_t sm_entry =
                     sm_buf_host ? ent.str_make_h : ent.str_make;
                 if (sm_buf_host && ent.str_make_h == 0) {

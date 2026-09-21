@@ -150,7 +150,7 @@ IrValueId clone_value(IrFunction &fn, IrValueId orig, IrType type) {
     IrValueId nd = fn.new_value(type);
     if (orig != IR_NO_VALUE && orig < fn.values.size() &&
         nd < fn.values.size()) {
-        fn.values[nd].is_host_ptr = fn.values[orig].is_host_ptr;
+        fn.values[nd].memory = fn.values[orig].memory;
         fn.values[nd].is_const = fn.values[orig].is_const;
         fn.values[nd].const_val = fn.values[orig].const_val;
     }

@@ -34,7 +34,7 @@
 
 #include "lsp/builtin_docs.h"
 
-#include "vx/builtin_params.h"  // las ranuras: un solo sitio, compartido
+#include "vx/builtin_params.h"    // las ranuras: un solo sitio, compartido
 #include "vx/diag/diag_catalog.h" // y un solo criterio de idioma
 
 #include <algorithm>

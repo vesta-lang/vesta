@@ -93,9 +93,9 @@ ir::IrFunction hacer_relleno(int64_t paso, int64_t n_constante) {
      * el VALOR, no en la instruccion: de que memoria es un puntero es una
      * propiedad suya, no de quien lo usa. */
     fn.values[6].type = IrType::PTR;
-    fn.values[6].is_host_ptr = true;
+    fn.values[6].set_host_by_construction(true);
     fn.values[7].type = IrType::PTR;
-    fn.values[7].is_host_ptr = true;
+    fn.values[7].set_host_by_construction(true);
     fn.params.push_back(vid(6));
     if (n_constante == 0) {
         fn.params.push_back(vid(2));
@@ -305,7 +305,7 @@ int main() {
             for (size_t i = 0; i < 2 + 2 * offsets.size(); ++i)
                 fn.values.push_back({});
             fn.values[0].type = IrType::PTR;
-            fn.values[0].is_host_ptr = true;
+            fn.values[0].set_host_by_construction(true);
             fn.params.push_back(vid(0));
 
             IrBlock b0;
@@ -330,7 +330,7 @@ int main() {
                     kc.imm = static_cast<uint64_t>(offsets[k]);
                     b0.instrs.push_back(kc);
                     fn.values[a].type = IrType::PTR;
-                    fn.values[a].is_host_ptr = true;
+                    fn.values[a].set_host_by_construction(true);
                     IrInstr ad = val(IrOp::ADD, a, IrType::PTR);
                     ad.operands.push_back(vid(0));
                     ad.operands.push_back(c);

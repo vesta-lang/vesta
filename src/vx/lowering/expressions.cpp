@@ -78,7 +78,7 @@ ir::IrValueId Lowering::lower_cast_expr(ast::CastExpr *e) {
                 // lower_var_decl), no solo en AOT.
                 al.host_alloca = true;
                 emit(current_block_, std::move(al));
-                fn_->values[addr].is_host_ptr = true;
+                fn_->values[addr].memory = ir::MemorySpace::HostByConstruction;
                 emit_zero_fill(addr, (uint64_t)lay.size_bytes, e->loc.line);
                 emit_struct_init_fields(
                     addr, lay,
@@ -157,7 +157,8 @@ ir::IrValueId Lowering::lower_cast_expr(ast::CastExpr *e) {
             if (!dst_is_lambda) return code;
             const ir::IrValueId fv =
                 stack_alloc_buf(16, e->loc.line, native_poo_);
-            if (native_poo_) fn_->values[fv].is_host_ptr = true;
+            if (native_poo_)
+                fn_->values[fv].memory = ir::MemorySpace::HostByConstruction;
             {
                 // [fv+0] = fn_addr
                 emit_store_typed(fv, code, ir::IrType::I64, e->loc.line);
@@ -174,7 +175,9 @@ ir::IrValueId Lowering::lower_cast_expr(ast::CastExpr *e) {
                 ad.operands = {fv, o8};
                 ad.source_line = e->loc.line;
                 emit(current_block_, std::move(ad));
-                if (native_poo_) fn_->values[fv8].is_host_ptr = true;
+                if (native_poo_)
+                    fn_->values[fv8].memory =
+                        ir::MemorySpace::HostByConstruction;
                 const ir::IrValueId z =
                     emit_const(ir::IrType::I64, 0, e->loc.line);
                 emit_store_typed(fv8, z, ir::IrType::I64, e->loc.line);
@@ -237,7 +240,8 @@ ir::IrValueId Lowering::lower_cast_expr(ast::CastExpr *e) {
         // v_op es la direccion de la funcion (i64).  Construir el slot.
         const ir::IrValueId fv_addr =
             stack_alloc_buf(16, e->loc.line, native_poo_);
-        if (native_poo_) fn_->values[fv_addr].is_host_ptr = true;
+        if (native_poo_)
+            fn_->values[fv_addr].memory = ir::MemorySpace::HostByConstruction;
         // [fv_addr + 0] = fn_addr (la direccion cruda).
         emit_store_typed(fv_addr, v_op, ir::IrType::I64, e->loc.line);
         // [fv_addr + 8] = 0 (env vacio).
@@ -252,7 +256,8 @@ ir::IrValueId Lowering::lower_cast_expr(ast::CastExpr *e) {
             ad.operands = {fv_addr, off8};
             ad.source_line = e->loc.line;
             emit(current_block_, std::move(ad));
-            if (native_poo_) fn_->values[fv8].is_host_ptr = true;
+            if (native_poo_)
+                fn_->values[fv8].memory = ir::MemorySpace::HostByConstruction;
             const ir::IrValueId z = emit_const(ir::IrType::I64, 0, e->loc.line);
             emit_store_typed(fv8, z, ir::IrType::I64, e->loc.line);
         }
@@ -276,7 +281,8 @@ ir::IrValueId Lowering::lower_cast_expr(ast::CastExpr *e) {
     //     {fn_addr,env}).
     if (src_type.kind == PrimitiveKind::FUNCTION && src_type.fn_is_raw &&
         (is_int_kind(dst_type.kind) || dst_ptr)) {
-        if (dst_ptr && native_poo_) fn_->values[v_op].is_host_ptr = true;
+        if (dst_ptr && native_poo_)
+            fn_->values[v_op].memory = ir::MemorySpace::HostByConstruction;
         return v_op; // identidad: el cfn ES la direccion
     }
     if (src_type.kind == PrimitiveKind::FUNCTION && !src_type.fn_is_raw &&
@@ -295,7 +301,8 @@ ir::IrValueId Lowering::lower_cast_expr(ast::CastExpr *e) {
         e->operand->kind == ast::NodeKind::IdentExpr && dst_ptr) {
         const ir::IrValueId fa =
             emit_load_typed(v_op, ir::IrType::I64, e->loc.line);
-        if (native_poo_) fn_->values[fa].is_host_ptr = true;
+        if (native_poo_)
+            fn_->values[fa].memory = ir::MemorySpace::HostByConstruction;
         return fa;
     }
 
@@ -322,8 +329,8 @@ ir::IrValueId Lowering::lower_cast_expr(ast::CastExpr *e) {
         // copy-prop suele eliminarlo).
         const ir::IrValueId dst =
             emit_ir_unop(ir::IrOp::BITCAST, v_op, ir::IrType::PTR, e->loc.line);
-        // Propagar flags segun el tipo destino.
-        fn_->values[dst].is_host_ptr = !dst_type.is_virtual;
+        // Propagar flags segun el tipo destino: lo decide la DECLARACION.
+        fn_->values[dst].set_host_by_type(!dst_type.is_virtual);
         // pointee_is_host_ptr: si el destino apunta a otro puntero
         // host (e.g. T**), el slot apuntado lleva un host_ptr.  Sin
         // tipo pointee accesible aqui, replicamos el flag del
@@ -344,14 +351,14 @@ ir::IrValueId Lowering::lower_cast_expr(ast::CastExpr *e) {
         const ir::IrValueId dst =
             emit_ir_unop(ir::IrOp::BITCAST, v_op, ir_use, e->loc.line);
         if (dst_ptr) {
-            fn_->values[dst].is_host_ptr = !dst_type.is_virtual;
+            fn_->values[dst].set_host_by_type(!dst_type.is_virtual);
         } else if (dst_type.kind == PrimitiveKind::FUNCTION && src_ptr) {
             // Puntero -> cfn: un cfn ES un puntero a codigo, asi que hereda la
             // naturaleza host/VM de su origen.  Sin esto, castear una direccion
             // NATIVA (`(cfn(...)) ptr_host`) perdia el bit y la llamada se
             // emitia como indirecta de la VM, que interpreta la direccion como
             // codigo VM -> los argumentos no llegan y el fallo es silencioso.
-            fn_->values[dst].is_host_ptr = fn_->values[v_op].is_host_ptr;
+            fn_->values[dst].memory = fn_->values[v_op].memory;
         }
         return dst;
     }
@@ -674,13 +681,20 @@ ir::IrValueId Lowering::lower_binary(ast::BinaryExpr *e) {
         const std::string &n =
             static_cast<const ast::IdentExpr *>(ce->callee.get())->name;
         static const std::unordered_set<std::string> STR_RET_BUILTINS = {
-            "to_str",           "chr",
-            "substr",           "concat",
-            "repeat",           "replace",
-            "str_concat",       "str_intern",
-            "gensym",           "comptime.to_str",
-            "comptime.str.concat",  "comptime.chr",
-            "comptime.str.substr",  "comptime.str.repeat",
+            "to_str",
+            "chr",
+            "substr",
+            "concat",
+            "repeat",
+            "replace",
+            "str_concat",
+            "str_intern",
+            "gensym",
+            "comptime.to_str",
+            "comptime.str.concat",
+            "comptime.chr",
+            "comptime.str.substr",
+            "comptime.str.repeat",
             "comptime.str.replace",
         };
         return STR_RET_BUILTINS.count(n) != 0;
@@ -819,7 +833,8 @@ ir::IrValueId Lowering::lower_binary(ast::BinaryExpr *e) {
                     const uint64_t idx =
                         out_mod_->intern_static_data(std::move(data));
                     r.ptr = fn_->new_value(ir::IrType::PTR);
-                    fn_->values[r.ptr].is_host_ptr = true;
+                    fn_->values[r.ptr].memory =
+                        ir::MemorySpace::HostByConstruction;
                     ir::IrInstr sa{};
                     sa.op = ir::IrOp::STR_LIT_ADDR;
                     sa.type = ir::IrType::PTR;
@@ -966,7 +981,7 @@ ir::IrValueId Lowering::lower_binary(ast::BinaryExpr *e) {
         // Propagar el flag is_host_ptr desde el puntero base.  El
         // resultado de la aritmetica sigue apuntando al mismo espacio
         // (host o VM) que el operando original.
-        fn_->values[dst].is_host_ptr = fn_->values[base_v].is_host_ptr;
+        fn_->values[dst].memory = fn_->values[base_v].memory;
         ir::IrInstr ins{};
         ins.op = (e->op == ast::BinOp::Add) ? ir::IrOp::ADD : ir::IrOp::SUB;
         ins.type = ir::IrType::PTR;
@@ -1144,9 +1159,9 @@ ir::IrValueId Lowering::lower_binary(ast::BinaryExpr *e) {
      * lleva dentro un puntero del ANFITRION, de 64 bits: recortarlo a 32 no
      * arregla un valor, destruye una direccion. */
     const bool toca_direccion =
-        fn_->values[dst].is_host_ptr ||
-        (l < fn_->values.size() && fn_->values[l].is_host_ptr) ||
-        (r < fn_->values.size() && fn_->values[r].is_host_ptr);
+        fn_->values[dst].is_host_ptr() ||
+        (l < fn_->values.size() && fn_->values[l].is_host_ptr()) ||
+        (r < fn_->values.size() && fn_->values[r].is_host_ptr());
     if (toca_direccion) return dst;
     return normalize_narrow(dst, result_ir, e->loc.line);
 }
@@ -1440,7 +1455,8 @@ ir::IrValueId Lowering::lower_unary(ast::UnaryExpr *e) {
                     // El slot vive en memoria host (gdata en interp/JIT,
                     // `.data` en AOT): la direccion sobrevive a viajar por
                     // memoria.
-                    fn_->values[va].is_host_ptr = true;
+                    fn_->values[va].memory =
+                        ir::MemorySpace::HostByConstruction;
                     return va;
                 }
             }
@@ -1456,7 +1472,7 @@ ir::IrValueId Lowering::lower_unary(ast::UnaryExpr *e) {
                 // `.data` en AOT; en el bloque host de la seccion `gdata` en
                 // interp/JIT).  Asi la direccion sobrevive a viajar por memoria
                 // -- a un campo, a un parametro, a la FFI, a un `lock cmpxchg`.
-                fn_->values[va].is_host_ptr = true;
+                fn_->values[va].memory = ir::MemorySpace::HostByConstruction;
                 return va;
             }
             const ir::IrValueId addr = lookup(id->name);
@@ -1519,7 +1535,7 @@ ir::IrValueId Lowering::lower_unary(ast::UnaryExpr *e) {
             // Limpiar is_virtual del ptr origen (si aplicable) antes
             // de devolverlo, igual que en el path LOAD normal.
             if (e->operand && e->operand->result_type.is_virtual) {
-                fn_->values[p].is_host_ptr = false;
+                fn_->values[p].memory = ir::MemorySpace::NotHost;
                 fn_->values[p].pointee_is_host_ptr = false;
             }
             return p;
@@ -1533,7 +1549,7 @@ ir::IrValueId Lowering::lower_unary(ast::UnaryExpr *e) {
         // de 'mov' (acceso VM) y causa SIGSEGV al intentar desreferenciar
         // una direccion virtual de la VM como si fuera puntero del host.
         if (e->operand && e->operand->result_type.is_virtual) {
-            fn_->values[p].is_host_ptr = false;
+            fn_->values[p].memory = ir::MemorySpace::NotHost;
             fn_->values[p].pointee_is_host_ptr = false;
         }
         const ir::IrType ft = ir_type_from_primitive(e->result_type.kind);
@@ -1546,7 +1562,7 @@ ir::IrValueId Lowering::lower_unary(ast::UnaryExpr *e) {
         // de movh y corromperia memoria VM.  El bit lo marco
         // @c write_local en el SSA value del slot.
         if (fn_->values[p].pointee_is_host_ptr) {
-            fn_->values[dst].is_host_ptr = true;
+            fn_->values[dst].memory = ir::MemorySpace::HostByConstruction;
         }
         // Multi-nivel de punteros host (i64****, etc.): cada deref
         // devuelve un valor que ES OTRO puntero host (apunta a una
@@ -1564,12 +1580,13 @@ ir::IrValueId Lowering::lower_unary(ast::UnaryExpr *e) {
         if (e->result_type.kind == PrimitiveKind::PTR ||
             e->result_type.kind == PrimitiveKind::ARRAY) {
             if (e->result_type.is_virtual) {
-                fn_->values[dst].is_host_ptr = false;
-            } else if (fn_->values[p].is_host_ptr) {
+                fn_->values[dst].memory = ir::MemorySpace::NotHost;
+            } else if (fn_->values[p].is_host_ptr()) {
                 // El resultado del deref de un host_ptr es OTRO
                 // host_ptr.  Asi p4=host_ptr -> *p4 = i64*** que
-                // apunta a celda host -> tambien host_ptr.
-                fn_->values[dst].is_host_ptr = true;
+                // apunta a celda host -> tambien host_ptr.  Es una
+                // DEDUCCION: se sigue el programa, nadie lo construyo asi.
+                fn_->values[dst].memory = ir::MemorySpace::HostByInference;
             }
         }
         return dst;

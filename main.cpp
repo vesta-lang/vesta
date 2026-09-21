@@ -63,6 +63,7 @@
 #include "jit/sched/cost_model.h" // --cpu: microarquitectura objetivo del scheduler
 #include "jit/keystone_asm_backend.h"  //  registrar backend asm
 #include "jit/inline_asm_trampoline.h" //  helper runner inline-asm
+#include "jit/abi_call_thunk.h"
 #include "jit/naked_native.h" // Bug 198: dispatcher naked (asm con simbolos propios)
 #include "runtime/profile.h" //
 #include "pkg/cli.h"
@@ -856,6 +857,11 @@ int main(int argc, char *argv[]) {
     // para punteros a funcion que fluyen a codigo nativo).
     jit::register_naked_dispatch_runner();
     jit::register_naked_fnaddr_runner();
+    /* Y el que hace CUMPLIR una convencion declarada al llamar desde el
+     * interprete: sin el se cumple la mitad -- los argumentos de pila si, los
+     * registros fijos no -- y media convencion no da un error, da otro
+     * resultado. */
+    jit::register_abi_call_runner();
 
     // Las funciones virtuales del compilador (`vesta_comptime`) tambien tienen
     // que estar registradas al EJECUTAR: un `.velb` puede llevar un cuerpo

@@ -33,6 +33,7 @@
 
 #include "vx/borrow/borrow_checker.h"
 
+#include "util/name_pool.h"       // el nombre vacio compartido
 #include "vx/diag/diag_catalog.h" // las palabras del mensaje, por idioma
 
 #include <utility>
@@ -67,6 +68,7 @@ std::string kind_word(BorrowKind k) {
 void BorrowChecker::reset() {
     owners_.clear();
     borrows_.clear();
+    anon_borrows_.clear();
     pending_last_use_.clear();
 }
 
@@ -173,6 +175,19 @@ void BorrowChecker::advance_stmt(uint32_t current_stmt_idx) {
         // el owner record.
         on_borrow_drop(nm, SourceLoc{});
     }
+
+    /* Y los que no tienen nombre, por la MISMA regla: su ultimo uso es la
+     * sentencia donde se escribieron -- un temporal no vive mas --, asi que
+     * al pasar de sentencia se sueltan.  Sin esto vivian hasta el final de la
+     * funcion y bloqueaban cualquier prestamo posterior del mismo lugar. */
+    for (size_t i = anon_borrows_.size(); i-- > 0;) {
+        const AnonBorrow &a = anon_borrows_[i];
+        if (a.meta.last_use_idx == 0 || current_stmt_idx <= a.meta.last_use_idx)
+            continue;
+        release_place_(a.meta);
+        anon_borrows_[i] = std::move(anon_borrows_.back());
+        anon_borrows_.pop_back();
+    }
 }
 
 void BorrowChecker::register_borrow(const std::string &borrower_name,
@@ -250,9 +265,57 @@ bool BorrowChecker::on_lend(const std::string &owner_name,
     return on_lend(p, borrower_name, loc_borrow, is_mut);
 }
 
+bool BorrowChecker::on_lend_anon(const std::string &owner_name, uint32_t key,
+                                 SourceLoc loc_borrow, bool is_mut,
+                                 uint32_t last_use_idx) {
+    borrow::Place p;
+    p.root = owner_name;
+    return on_lend_anon(p, key, loc_borrow, is_mut, last_use_idx);
+}
+
 bool BorrowChecker::on_lend(const borrow::Place &place,
                             const std::string &borrower_name,
                             SourceLoc loc_borrow, bool is_mut) {
+    if (!take_place_(place, borrower_name, loc_borrow, is_mut)) return false;
+    // Sin memoria que registrar no hay prestamo que apuntar: apuntarlo dejaria
+    // una entrada cuyo dueno no existe, que nadie puede soltar y que estorba a
+    // todo el que recorra la tabla.
+    if (!place.valid()) return true;
+    register_borrow(borrower_name, place, is_mut);
+    return true;
+}
+
+BorrowChecker::BorrowMeta *
+BorrowChecker::find_anon_(uint32_t src_offset) noexcept {
+    for (AnonBorrow &a : anon_borrows_)
+        if (a.src_offset == src_offset) return &a.meta;
+    return nullptr;
+}
+
+bool BorrowChecker::on_lend_anon(const borrow::Place &place, uint32_t key,
+                                 SourceLoc loc_borrow, bool is_mut,
+                                 uint32_t last_use_idx) {
+    /* El MISMO nodo otra vez es el MISMO prestamo, no uno nuevo.  El
+     * comprobador vuelve a mirar una expresion mas de una vez -- el lado
+     * derecho de una asignacion se ojea antes de comprobarlo de verdad --, y
+     * sin esto cada visita tomaba otro prestamo del mismo lugar: tres, y
+     * `lend_mut(u).f()` chocaba consigo mismo mientras `f(lend_mut(u))`, que
+     * es la misma llamada escrita del otro modo, compilaba. */
+    if (find_anon_(key) != nullptr) return true;
+    /* Sin nombre con que citarlo, que es la verdad: el catalogo ya sabe
+     * contarlo por su sitio (VX2029) y no hay que inventarle ninguno.  El
+     * vacio COMPARTIDO, que para eso esta: construir uno aqui seria una
+     * cadena por cada `lend` del programa. */
+    if (!take_place_(place, util::kEmptyName, loc_borrow, is_mut)) return false;
+    if (!place.valid()) return true;
+    anon_borrows_.push_back(
+        AnonBorrow{key, BorrowMeta{place, is_mut, last_use_idx, false, ""}});
+    return true;
+}
+
+bool BorrowChecker::take_place_(const borrow::Place &place,
+                                const std::string &cite, SourceLoc loc_borrow,
+                                bool is_mut) {
     if (!place.valid()) return true;      // no hay memoria que registrar
     OwnerState &st = owners_[place.root]; // crea la raiz si no existia
 
@@ -287,18 +350,47 @@ bool BorrowChecker::on_lend(const borrow::Place &place,
         same->kind = BorrowKind::Mutable;
         same->shared_count = 0;
         same->loc_taken = loc_borrow;
-        same->borrower_name = borrower_name;
+        same->borrower_name = cite;
     } else if (same->kind == BorrowKind::None) {
         same->kind = BorrowKind::Shared;
         same->shared_count = 1;
         same->loc_taken = loc_borrow;
-        same->borrower_name = borrower_name;
+        same->borrower_name = cite;
     } else {
         // Ya hay Shared sobre ESTE lugar; solo sube el contador.  Se conserva
         // loc_taken del primero, que es el que se cita.
         same->shared_count++;
     }
-    register_borrow(borrower_name, place, is_mut);
+    return true;
+}
+
+bool BorrowChecker::adopt_anon_borrow(uint32_t key,
+                                      const std::string &new_name) {
+    const BorrowMeta *found = find_anon_(key);
+    if (found == nullptr) return false;
+    BorrowMeta m = *found;
+    // Se saca de los anonimos con un intercambio con el ultimo: el orden de
+    // esta lista no significa nada, asi que desplazar el resto seria trabajo
+    // por nada.
+    for (size_t i = 0; i < anon_borrows_.size(); ++i)
+        if (anon_borrows_[i].src_offset == key) {
+            anon_borrows_[i] = std::move(anon_borrows_.back());
+            anon_borrows_.pop_back();
+            break;
+        }
+    /* El ultimo uso pasa a ser el del NOMBRE, que es lo que el pre-pase midio.
+     * El de antes decia "esta sentencia" porque un temporal no vive mas, y ya
+     * no es un temporal. */
+    auto plu = pending_last_use_.find(new_name);
+    m.last_use_idx = plu != pending_last_use_.end() ? plu->second : 0;
+    const borrow::Place owner = m.owner;
+    borrows_[new_name] = std::move(m);
+    /* Y que el lugar lo cite por su nombre: hasta ahora se citaba por su sitio
+     * porque no tenia ninguno. */
+    auto ost = owners_.find(owner.root);
+    if (ost != owners_.end())
+        if (BorrowRecord *rec = find_same_place_(ost->second, owner))
+            rec->borrower_name = new_name;
     return true;
 }
 
@@ -310,10 +402,15 @@ void BorrowChecker::on_borrow_drop(const std::string &borrower_name,
         // expresion temporal, no de variable nombrada).  No error.
         return;
     }
-    const borrow::Place owner = it->second.owner;
-    const bool is_mut = it->second.is_mut;
-    const std::string reborrow_source = it->second.reborrow_source;
+    const BorrowMeta m = it->second;
     borrows_.erase(it);
+    release_place_(m);
+}
+
+void BorrowChecker::release_place_(const BorrowMeta &m) {
+    const borrow::Place owner = m.owner;
+    const bool is_mut = m.is_mut;
+    const std::string reborrow_source = m.reborrow_source;
 
     auto ost = owners_.find(owner.root);
     if (ost == owners_.end()) return; // defensive

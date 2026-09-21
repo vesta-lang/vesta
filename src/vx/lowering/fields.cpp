@@ -75,7 +75,7 @@ std::string Lowering::generate_overlay_resolver(const StructLayout &lay,
     // Param `self` = puntero base de la vista (host).
     ir::IrValueId self_pv = child_fn.new_value(ir::IrType::PTR, "%self");
     child_fn.values[self_pv].is_param = true;
-    child_fn.values[self_pv].is_host_ptr = true;
+    child_fn.values[self_pv].memory = ir::MemorySpace::HostByConstruction;
     child_fn.params.push_back(self_pv);
     // @element: 2o param `index` (i64) = el elemento a resolver.  Orden de
     // params: self, [index], [root].
@@ -91,7 +91,7 @@ std::string Lowering::generate_overlay_resolver(const StructLayout &lay,
     if (fi.resolver_uses_parent) {
         root_pv = child_fn.new_value(ir::IrType::PTR, "%root");
         child_fn.values[root_pv].is_param = true;
-        child_fn.values[root_pv].is_host_ptr = true;
+        child_fn.values[root_pv].memory = ir::MemorySpace::HostByConstruction;
         child_fn.params.push_back(root_pv);
     }
 
@@ -123,7 +123,7 @@ std::string Lowering::generate_overlay_resolver(const StructLayout &lay,
             ir::IrValueId so =
                 emit_const(ir::IrType::I64, (uint64_t)sib.offset, 0);
             saddr = child_fn.new_value(ir::IrType::PTR);
-            child_fn.values[saddr].is_host_ptr = true;
+            child_fn.values[saddr].memory = ir::MemorySpace::HostByConstruction;
             ir::IrInstr a{};
             a.op = ir::IrOp::ADD;
             a.type = ir::IrType::PTR;
@@ -176,7 +176,7 @@ std::string Lowering::generate_overlay_extent(const StructLayout &lay) {
     child_fn.ret_type = ir::IrType::U64; // el span en bytes
     ir::IrValueId self_pv = child_fn.new_value(ir::IrType::PTR, "%self");
     child_fn.values[self_pv].is_param = true;
-    child_fn.values[self_pv].is_host_ptr = true;
+    child_fn.values[self_pv].memory = ir::MemorySpace::HostByConstruction;
     child_fn.params.push_back(self_pv);
 
     const ir::IrBlockId entry = child_fn.new_block("entry");
@@ -197,7 +197,7 @@ std::string Lowering::generate_overlay_extent(const StructLayout &lay) {
             ir::IrValueId so =
                 emit_const(ir::IrType::I64, (uint64_t)sib.offset, 0);
             saddr = child_fn.new_value(ir::IrType::PTR);
-            child_fn.values[saddr].is_host_ptr = true;
+            child_fn.values[saddr].memory = ir::MemorySpace::HostByConstruction;
             ir::IrInstr a{};
             a.op = ir::IrOp::ADD;
             a.type = ir::IrType::PTR;
@@ -249,7 +249,7 @@ std::string Lowering::generate_overlay_extent(const StructLayout &lay) {
         if (fi.offset_block) {
             const std::string rname = generate_overlay_resolver(lay, fi);
             ir::IrValueId addr = fn_->new_value(ir::IrType::PTR);
-            fn_->values[addr].is_host_ptr = true;
+            fn_->values[addr].memory = ir::MemorySpace::HostByConstruction;
             ir::IrInstr in{};
             in.op = ir::IrOp::CALL;
             in.func_name = rname;
@@ -292,6 +292,24 @@ std::string Lowering::generate_overlay_extent(const StructLayout &lay) {
     return fn_name;
 }
 
+const StructFieldInfo *
+Lowering::field_info_of(const ast::FieldAccessExpr *e) const {
+    if (e == nullptr || !e->base || e->field_name.empty()) return nullptr;
+    const Type &bt = e->base->result_type;
+    if (bt.struct_name.empty()) return nullptr;
+    if (bt.kind == PrimitiveKind::STRUCT) {
+        const auto it = tc_.struct_layouts().find(bt.struct_name);
+        if (it == tc_.struct_layouts().end()) return nullptr;
+        return find_field(it->second, e->field_name);
+    }
+    if (bt.kind == PrimitiveKind::CLASS) {
+        const auto it = tc_.class_layouts().find(bt.struct_name);
+        if (it == tc_.class_layouts().end()) return nullptr;
+        return find_field(it->second, e->field_name);
+    }
+    return nullptr;
+}
+
 ir::IrValueId Lowering::lower_field_addr(ast::FieldAccessExpr *e) {
     // `lib.G` sobre un global de otro modulo: no hay base que bajar (`lib` es
     // un namespace, no un valor), la direccion ES la del slot compartido.
@@ -301,7 +319,7 @@ ir::IrValueId Lowering::lower_field_addr(ast::FieldAccessExpr *e) {
         ir::IrValueId v = fn_->new_value(ir::IrType::PTR);
         // El storage vive en memoria host (seccion `gdata`), como el de
         // cualquier global.
-        fn_->values[v].is_host_ptr = true;
+        fn_->values[v].memory = ir::MemorySpace::HostByConstruction;
         ir::IrInstr is{};
         is.op = ir::IrOp::STR_LIT_ADDR;
         is.type = ir::IrType::PTR;
@@ -348,7 +366,7 @@ ir::IrValueId Lowering::lower_field_addr(ast::FieldAccessExpr *e) {
             const ir::IrValueId off_c =
                 emit_const(ir::IrType::I64, offset, e->loc.line);
             const ir::IrValueId ca = fn_->new_value(ir::IrType::PTR);
-            fn_->values[ca].is_host_ptr = fn_->values[base].is_host_ptr;
+            fn_->values[ca].memory = fn_->values[base].memory;
             ir::IrInstr ci{};
             ci.op = ir::IrOp::ADD;
             ci.type = ir::IrType::PTR;
@@ -373,7 +391,7 @@ ir::IrValueId Lowering::lower_field_addr(ast::FieldAccessExpr *e) {
     if (fifound->offset_block) {
         const std::string rname = generate_overlay_resolver(lay, *fifound);
         ir::IrValueId addr = fn_->new_value(ir::IrType::PTR);
-        fn_->values[addr].is_host_ptr = fn_->values[base].is_host_ptr;
+        fn_->values[addr].memory = fn_->values[base].memory;
         ir::IrInstr ins{};
         ins.op = ir::IrOp::CALL;
         ins.func_name = rname;
@@ -406,7 +424,7 @@ ir::IrValueId Lowering::lower_field_addr(ast::FieldAccessExpr *e) {
                 ir::IrValueId so = emit_const(
                     ir::IrType::I64, (uint64_t)sib.offset, e->loc.line);
                 saddr = fn_->new_value(ir::IrType::PTR);
-                fn_->values[saddr].is_host_ptr = fn_->values[base].is_host_ptr;
+                fn_->values[saddr].memory = fn_->values[base].memory;
                 ir::IrInstr a{};
                 a.op = ir::IrOp::ADD;
                 a.type = ir::IrType::PTR;
@@ -423,7 +441,7 @@ ir::IrValueId Lowering::lower_field_addr(ast::FieldAccessExpr *e) {
         pop_scope();
         if (off_val == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
         const ir::IrValueId fld_addr = fn_->new_value(ir::IrType::PTR);
-        fn_->values[fld_addr].is_host_ptr = fn_->values[base].is_host_ptr;
+        fn_->values[fld_addr].memory = fn_->values[base].memory;
         ir::IrInstr ins{};
         ins.op = ir::IrOp::ADD;
         ins.type = ir::IrType::PTR;
@@ -447,7 +465,7 @@ ir::IrValueId Lowering::lower_field_addr(ast::FieldAccessExpr *e) {
     // es host_ptr -> lee/escribe garbage.  Caso observado:
     // `(*ptr_of(unique_struct)).y` con offset=4 leia 0 (memoria VM
     // aleatoria) en lugar del valor real del campo.
-    fn_->values[fld_addr].is_host_ptr = fn_->values[base].is_host_ptr;
+    fn_->values[fld_addr].memory = fn_->values[base].memory;
     ir::IrInstr ins{};
     ins.op = ir::IrOp::ADD;
     ins.type = ir::IrType::PTR;
@@ -479,7 +497,7 @@ ir::IrValueId Lowering::emit_overlay_endian_swap(ast::Expr *base_expr,
             ir::IrValueId so =
                 emit_const(ir::IrType::I64, (uint64_t)sib.offset, line);
             saddr = fn_->new_value(ir::IrType::PTR);
-            fn_->values[saddr].is_host_ptr = fn_->values[ov_base].is_host_ptr;
+            fn_->values[saddr].memory = fn_->values[ov_base].memory;
             ir::IrInstr a{};
             a.op = ir::IrOp::ADD;
             a.type = ir::IrType::PTR;
@@ -594,7 +612,7 @@ ir::IrValueId Lowering::lower_class_field_load(ast::FieldAccessExpr *e) {
         // instancia, ver final de esta funcion).
         // VirtualPtr (s_typ.is_virtual == true) NO recibe is_host_ptr.
         if (s_typ.kind == PrimitiveKind::PTR && !s_typ.is_virtual) {
-            fn_->values[v_val].is_host_ptr = true;
+            fn_->values[v_val].memory = ir::MemorySpace::HostByConstruction;
         }
         /* Un `shared<T>` no se entrega como valor: en todo el resto del
          * compilador vale la DIRECCION DE SU RANURA -- de ahi leen `use_count`,
@@ -733,7 +751,15 @@ ir::IrValueId Lowering::lower_class_field_load(ast::FieldAccessExpr *e) {
     // VirtualPtr causaria que `*field` emitiera movh en vez de mov,
     // interpretando la VA como direccion host -> segfault.
     if (ftyp.kind == PrimitiveKind::PTR && !ftyp.is_virtual) {
-        fn_->values[dst].is_host_ptr = true;
+        fn_->values[dst].memory = ir::MemorySpace::HostByConstruction;
+    }
+    /* Y cuando el tipo del campo NO puede decirlo -- un entero del ancho de
+     * una direccion, que es como el lenguaje nombra una direccion --, lo dice
+     * lo que el compilador DEDUJO de todas las escrituras al campo.  Sin esto
+     * el valor sale sin marca y llamarlo baja a la indirecta DE LA MAQUINA,
+     * que no da error: devuelve CERO. */
+    if (fi_hit != nullptr && fi_hit->address_space == FieldAddressSpace::Host) {
+        fn_->values[dst].memory = ir::MemorySpace::HostByConstruction;
     }
     // Dynamic arrays `T[]` (size==0) stored as fields also hold host_ptrs
     // (from `new T[N]` via RAW_ALLOC).  Sin esto, `box.data[i] = ...`
@@ -745,7 +771,7 @@ ir::IrValueId Lowering::lower_class_field_load(ast::FieldAccessExpr *e) {
     // @c Type::make_array es is_virtual=true pero ese flag aplica a
     // arrays SIZED en stack; los dinamicos son siempre host.
     if (ftyp.kind == PrimitiveKind::ARRAY && ftyp.array_size == 0) {
-        fn_->values[dst].is_host_ptr = true;
+        fn_->values[dst].memory = ir::MemorySpace::HostByConstruction;
     }
     // Campo de tipo FUNCTION (lambda fn(...), NO cfn): en una CLASE el
     // campo guarda un PTR al slot heap de 16 bytes {fn_addr, env}
@@ -758,7 +784,7 @@ ir::IrValueId Lowering::lower_class_field_load(ast::FieldAccessExpr *e) {
     // El cfn (fn_is_raw) es la direccion cruda de 8 bytes (CALLIND
     // directo, sin deref de slot), no necesita host-ness aqui.
     if (ftyp.kind == PrimitiveKind::FUNCTION && !ftyp.fn_is_raw) {
-        fn_->values[dst].is_host_ptr = true;
+        fn_->values[dst].memory = ir::MemorySpace::HostByConstruction;
     }
     // fix - field de tipo CLASS guarda un GcHandle (estable a
     // evacuacion del GC).  Tras LOADear el handle, hacemos @c gcderef
@@ -769,7 +795,7 @@ ir::IrValueId Lowering::lower_class_field_load(ast::FieldAccessExpr *e) {
     if (ftyp.kind == PrimitiveKind::CLASS) {
         // raw_asm-elim 2026-05-28: gcderef + xchg -> IrOp::GC_DEREF_HOST.
         ir::IrValueId v_host = fn_->new_value(ir::IrType::I64);
-        fn_->values[v_host].is_host_ptr = true;
+        fn_->values[v_host].memory = ir::MemorySpace::HostByConstruction;
         fn_->values[v_host].is_gc_object = true;
         ir::IrInstr deref{};
         deref.op = ir::IrOp::GC_DEREF_HOST;
@@ -962,14 +988,14 @@ ir::IrValueId Lowering::lower_class_field_store(ast::FieldAccessExpr *target,
         auto it_sl = tc_.struct_layouts().find(ftyp.struct_name);
         if (it_sl != tc_.struct_layouts().end())
             sz = static_cast<uint64_t>(it_sl->second.size_bytes);
-        const bool dst_host = fn_->values[addr].is_host_ptr;
-        const bool src_host = fn_->values[rhs].is_host_ptr;
+        const bool dst_host = fn_->values[addr].is_host_ptr();
+        const bool src_host = fn_->values[rhs].is_host_ptr();
         const uint64_t qwords = (sz + 7) / 8;
         for (uint64_t qi = 0; qi < qwords; ++qi) {
             const ir::IrValueId v_off = emit_const(
                 ir::IrType::I64, static_cast<int64_t>(qi * 8), loc.line);
             const ir::IrValueId v_src_at = fn_->new_value(ir::IrType::PTR);
-            fn_->values[v_src_at].is_host_ptr = src_host;
+            fn_->values[v_src_at].set_host(src_host);
             {
                 ir::IrInstr ad{};
                 ad.op = ir::IrOp::ADD;
@@ -982,7 +1008,7 @@ ir::IrValueId Lowering::lower_class_field_store(ast::FieldAccessExpr *target,
             const ir::IrValueId v_word =
                 emit_load_typed(v_src_at, ir::IrType::I64, loc.line);
             const ir::IrValueId v_dst_at = fn_->new_value(ir::IrType::PTR);
-            fn_->values[v_dst_at].is_host_ptr = dst_host;
+            fn_->values[v_dst_at].set_host(dst_host);
             {
                 ir::IrInstr ad{};
                 ad.op = ir::IrOp::ADD;

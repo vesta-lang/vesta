@@ -429,7 +429,7 @@ IrValueId IrBuilder::alloca_bytes(uint32_t size_bytes) {
  */
 IrValueId IrBuilder::raw_alloc(IrValueId size_bytes) {
     const IrValueId id = new_value(IrType::PTR);
-    fn_.values[id].is_host_ptr = true;
+    fn_.values[id].memory = ir::MemorySpace::HostByConstruction;
     IrInstr ins{};
     ins.op = IrOp::RAW_ALLOC;
     ins.type = IrType::PTR;

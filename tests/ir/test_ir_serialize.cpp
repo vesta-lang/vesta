@@ -45,8 +45,11 @@ int fail_count = 0;
 
 /* Helpers de comparacion para verificar round-trip. */
 bool same_value(const ir::IrValue &a, const ir::IrValue &b) {
+    /* La CLASE entera, no solo si es del anfitrion: el viaje por la cache
+     * tiene que devolver COMO se supo, o un `HostByType` vuelve como deducido
+     * y la distincion se pierde justo en el modulo que se relee. */
     return a.type == b.type && a.is_param == b.is_param &&
-           a.is_const == b.is_const && a.is_host_ptr == b.is_host_ptr &&
+           a.is_const == b.is_const && a.memory == b.memory &&
            a.pointee_is_host_ptr == b.pointee_is_host_ptr &&
            a.is_gc_object == b.is_gc_object &&
            (a.is_const ? (a.const_val == b.const_val) : true);
@@ -233,7 +236,7 @@ void test_value_flags() {
     ir::IrValue v1;
     v1.id = vid(1);
     v1.type = ir::IrType::PTR;
-    v1.is_host_ptr = true;
+    v1.memory = ir::MemorySpace::HostByInference;
     v1.pointee_is_host_ptr = true;
     fn.values.push_back(v1);
 
@@ -262,6 +265,65 @@ void test_value_flags() {
     CHECK(same_function(fn, fn2), "round-trip con flags");
     CHECK(fn2.values[2].const_val == 0xDEADBEEFCAFE1234ULL,
           "const_val preservado");
+}
+
+/* ===================================================================== */
+/* De que memoria es, COMO se supo, y que eso sobreviva a la cache         */
+/* ===================================================================== */
+
+/**
+ * @brief Las CINCO clases vuelven del almacen tal cual entraron.
+ *
+ * No basta con que vuelva "es del anfitrion": lo que se guarda es COMO se
+ * supo -- lo dice el tipo, lo construyo el compilador, se dedujo -- y de eso
+ * depende que un consumidor sepa si puede creerselo sin comprobar.  Un modulo
+ * que se RELEE de la cache en vez de recompilarse tiene que contestar lo mismo
+ * que uno recien compilado; si no, el mismo programa se optimiza distinto
+ * segun si la cache estaba caliente.
+ *
+ * Las clases viajan en los dos bits altos del byte de banderas, sin cambiar la
+ * version del formato: el cero significa "no se dijo" y se deriva del bit de
+ * siempre, asi que lo guardado por un binario anterior se sigue leyendo.
+ */
+void test_memory_space_round_trip() {
+    static const ir::MemorySpace kTodas[] = {
+        ir::MemorySpace::NotHost,    ir::MemorySpace::HostByConstruction,
+        ir::MemorySpace::HostByType, ir::MemorySpace::HostByInference,
+        ir::MemorySpace::Unknown,
+    };
+
+    for (const ir::MemorySpace m : kTodas) {
+        ir::IrFunction fn;
+        fn.name = "de_que_memoria";
+        fn.ret_type = ir::IrType::VOID;
+
+        ir::IrValue v;
+        v.id = vid(0);
+        v.type = ir::IrType::PTR;
+        v.memory = m;
+        fn.values.push_back(v);
+
+        ir::IrBlock entry;
+        entry.id = blk(0);
+        entry.name = "entry";
+        ir::IrInstr ret;
+        ret.op = ir::IrOp::RET;
+        ret.type = ir::IrType::VOID;
+        entry.instrs.push_back(ret);
+        fn.blocks.push_back(entry);
+
+        std::vector<uint8_t> buf;
+        ir::serialize_function(fn, buf);
+        size_t off = 0;
+        ir::IrFunction fn2;
+        CHECK(ir::deserialize_function(buf, off, fn2),
+              "deserialize de la clase de memoria");
+        CHECK(fn2.values[0].memory == m, ir::memory_space_name(m));
+        /* Y la pregunta que de verdad hacen los consumidores sigue de acuerdo
+         * con la clase: un `Unknown` NO se puede tratar como del anfitrion. */
+        CHECK(fn2.values[0].is_host_ptr() == fn.values[0].is_host_ptr(),
+              "is_host_ptr coherente tras el viaje");
+    }
 }
 
 /* ===================================================================== */
@@ -755,6 +817,7 @@ int main() {
     test_asm_bindings_round_trip();
     test_complexity_dimensions();
     test_value_flags();
+    test_memory_space_round_trip();
     test_multi_block_branches();
     test_phi_nodes();
     test_call_with_func_name();

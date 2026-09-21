@@ -1078,6 +1078,67 @@ struct InlineSite {
  * Cada %nombre en el texto corresponde a un IrValue con un id unico.
  * Los parametros de funcion son valores especiales con is_param=true.
  */
+/**
+ * @enum MemorySpace
+ * @brief En que memoria vive una direccion, Y COMO SE SUPO.
+ *
+ * En el espacio de nombres y no dentro de @ref IrValue porque se escribe en
+ * cientos de sitios: anidarlo obligaria a `IrValue::MemorySpace::` en todos.
+ *
+ * ERA UN BOOLEANO (`is_host_ptr`), y ese es el problema que esto cierra: un
+ * bit no puede decir "no lo se", asi que lo que nadie miro y lo que se
+ * demostro que NO es del anfitrion salian iguales.  Equivocarse ahi no da un
+ * error -- da un CERO: la llamada indirecta de la maquina interpreta una
+ * direccion del proceso como codigo suyo, y si lo llamado era una syscall,
+ * cero es ademas `STATUS_SUCCESS`, o sea que lo que nunca se ejecuto se da
+ * por bueno.
+ *
+ * Y metia TRES clases de conocimiento en el mismo bit, contadas una a una
+ * antes de escribir esto:
+ *
+ *   - lo que el COMPILADOR construyo asi -- los parametros de un ayudante que
+ *     el mismo sintetiza, una reserva que un pase movio a memoria del
+ *     anfitrion, un valor que el optimizador crea --;
+ *   - lo que el TIPO declara -- `T*` no virtual es del anfitrion,
+ *     `VirtualPtr<T>` es de la maquina --;
+ *   - y lo que se DEDUJO siguiendo el programa.
+ *
+ * Las dos primeras son ENTRADAS, afirmaciones de quien lo sabe de primera
+ * mano; la tercera es una conclusion.  Quien lee una conclusion puede querer
+ * saber de donde sale; quien lee una afirmacion, no.
+ *
+ * UN SOLO BYTE, como el booleano al que sustituye: @ref IrValue es caliente
+ * -- una por valor SSA -- y engordarla se paga en cada funcion del programa.
+ */
+enum class MemorySpace : uint8_t {
+    /**
+     * @brief No es una direccion del anfitrion.
+     *
+     * CERO a proposito: es lo que valia el `false` de antes, asi que lo que
+     * aun no se haya migrado sigue significando exactamente lo mismo.
+     *
+     * Mientras dure la migracion arrastra la ambiguedad vieja -- un valor que
+     * nadie miro tambien vale cero --, y por eso existe @c Unknown: para que
+     * un sitio que de verdad no sabe pueda decirlo en vez de afirmar que no
+     * lo es.
+     */
+    NotHost = 0,
+    /// El compilador lo CONSTRUYO asi.  No se dedujo: es la consecuencia de
+    /// lo que el mismo acaba de hacer.
+    HostByConstruction,
+    /// El TIPO lo declara.  Viene del fuente, no de mirar el programa.
+    HostByType,
+    /// Se DEDUJO siguiendo el programa: de los operandos, de una copia, o
+    /// adelantando un almacen a su carga.
+    HostByInference,
+    /// Nadie lo sabe.  NO es lo mismo que @c NotHost, y confundirlos es justo
+    /// lo que esto viene a impedir.
+    Unknown,
+};
+
+/// Nombre estable para volcados.  NO es texto de usuario.
+const char *memory_space_name(MemorySpace m);
+
 struct IrValue {
     IrValueId id =
         IR_NO_VALUE; ///< identificador unico (indice en IrFunction::values)
@@ -1091,12 +1152,85 @@ struct IrValue {
     /// entonces esta informacion se tiraba: al explicar un fallo salia `%8`
     /// por un lado y `r1=0x2a` por otro sin decir que son lo mismo.
     uint8_t reg = 0xFFu;
-    /// true si el valor (debe ser PTR) apunta a memoria HOST (e.g. retorno
-    /// de @c rawalloc).  Los LOAD/STORE consultan este bit para decidir
-    /// entre @c mov [rp] (s=0, memoria VM) y @c movh [rp] (s=1, memoria
-    /// host).  La aritmetica de punteros y subscript propagan el bit
-    /// desde el operando base.
-    bool is_host_ptr = false;
+    /**
+     * @brief En que memoria vive la direccion que lleva este valor, Y COMO SE
+     *        SUPO.
+     *
+     * Los LOAD/STORE lo consultan para decidir entre @c mov [rp] (memoria de
+     * la maquina) y @c movh [rp] (memoria del anfitrion), y la llamada
+     * indirecta para decidir entre la de la maquina y la via nativa.
+     *
+     * ERA UN BOOLEANO, y ese es el problema que esto viene a cerrar: un bit no
+     * puede decir "no lo se", asi que lo no marcado y lo demostrado que NO es
+     * del anfitrion salian iguales.  Y equivocarse ahi no da un error -- da un
+     * CERO: la indirecta de la maquina interpreta una direccion del proceso
+     * como codigo suyo, y si lo llamado era una syscall, cero es ademas
+     * `STATUS_SUCCESS`, o sea que lo que nunca se ejecuto se da por bueno.
+     *
+     * Y ademas metia TRES clases de conocimiento en el mismo bit, que se
+     * contaron una a una antes de escribir esto:
+     *
+     *   - lo que el COMPILADOR construyo asi (los parametros de un ayudante
+     *     que el mismo sintetiza, una reserva que un pase movio a memoria del
+     *     anfitrion, un valor que el optimizador crea);
+     *   - lo que el TIPO declara (`T*` no virtual es del anfitrion,
+     *     `VirtualPtr<T>` es de la maquina);
+     *   - y lo que se DEDUJO siguiendo el programa.
+     *
+     * Las dos primeras son ENTRADAS -- afirmaciones de quien lo sabe de
+     * primera mano -- y la tercera una conclusion.  Quien lee una conclusion
+     * puede querer saber de donde sale; quien lee una afirmacion, no.
+     *
+     * UN SOLO BYTE, como el booleano al que sustituye: esta estructura es
+     * caliente -- una por valor SSA -- y engordarla se paga en cada funcion
+     * del programa.
+     */
+    MemorySpace memory = MemorySpace::NotHost;
+
+    /// @return true si se puede afirmar que la direccion es del anfitrion.
+    /// Un @c Unknown contesta false, que es lo conservador: no poder
+    /// demostrarlo no es demostrar lo contrario, pero tampoco autoriza a
+    /// tratarlo como si lo fuera.
+    bool is_host_ptr() const {
+        return memory != MemorySpace::NotHost && memory != MemorySpace::Unknown;
+    }
+
+    /**
+     * @brief Lo anota a partir de un booleano ya calculado.
+     *
+     * Queda como @c HostByInference, y no es un valor por defecto comodo: un
+     * sitio que CALCULA una condicion para decidirlo esta deduciendo, por
+     * definicion.  Lo que se afirma de primera mano no pasa por aqui -- se
+     * escribe @c memory directamente con la clase que corresponda --.
+     */
+    void set_host(bool yes) {
+        memory = yes ? MemorySpace::HostByInference : MemorySpace::NotHost;
+    }
+
+    /**
+     * @brief Lo anota cuando quien lo decide es el TIPO del valor.
+     *
+     * Para un sitio que consulta la declaracion -- si es @c is_virtual, si el
+     * tipo es una clase -- y no sigue el programa para averiguarlo.
+     *
+     * @param yes Resultado de esa consulta al tipo.
+     */
+    void set_host_by_type(bool yes) {
+        memory = yes ? MemorySpace::HostByType : MemorySpace::NotHost;
+    }
+
+    /**
+     * @brief Lo anota cuando el valor lo CONSTRUYE el propio compilador.
+     *
+     * Para la reserva que el compilador acaba de planificar, o el resultado de
+     * una operacion que el mismo emitio: no se deduce nada, se sabe porque se
+     * eligio.
+     *
+     * @param yes Si esa construccion lo puso en memoria del anfitrion.
+     */
+    void set_host_by_construction(bool yes) {
+        memory = yes ? MemorySpace::HostByConstruction : MemorySpace::NotHost;
+    }
     /// Limitacion A (cerrada): true si el valor es un PTR a memoria VM
     /// (tipicamente la direccion de un slot ALLOCA en el stack del
     /// proceso) cuyo CONTENIDO es a su vez un host_ptr.  Lo setea el
@@ -1948,6 +2082,15 @@ struct IrFunction {
     std::vector<InlineSite> inline_sites;
     bool is_native = false;   ///< true si es stub para funcion nativa
     bool is_variadic = false; ///< true si acepta argc variable
+    /**
+     * @brief `@Inline`: metela en quien la llame aunque no quepa por tamano.
+     *
+     * El umbral del inliner es politica para el caso general; esto dice que
+     * en esta funcion la cuenta ya la hizo el programador.  NO salta las
+     * reglas de CORRECCIoN -- recursiva, asm crudo, @Naked --, que no son de
+     * conveniencia sino de posibilidad.
+     */
+    bool wants_inline = false;
     /**
      * @brief Alcanzable desde FUERA del modulo.
      *

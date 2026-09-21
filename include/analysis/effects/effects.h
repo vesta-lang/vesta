@@ -156,6 +156,44 @@ bool no_alias(const AbstractLoc &a, const AbstractLoc &b);
  */
 bool must_overlap(const AbstractLoc &a, const AbstractLoc &b);
 
+/**
+ * @brief Se DEMUESTRA que @p a y @p b no comparten ni un byte?
+ *
+ * El espejo de @ref must_overlap, y tampoco es la negacion de nadie: hay tres
+ * respuestas -- se demuestra que si, se demuestra que no, y no se sabe -- y
+ * las dos que se demuestran tienen cada una su predicado.  La tercera es lo
+ * que queda cuando los dos dicen que no.
+ *
+ * @par Por que no vale `!may_alias`
+ * Porque @ref may_alias es el oraculo de la OPTIMIZACIoN, y ahi una promesa
+ * DECLARADA cuenta: dos parametros que declaran su direccion se dan por
+ * disjuntos porque el contrato lo dice.  Eso es correcto para decidir si se
+ * reordena -- para eso existe un contrato -- y es veneno para VERIFICAR, donde
+ * la pregunta es otra:
+ *
+ *     optimizacion:  pueden pisarse, con lo que estamos dispuestos a asumir?
+ *     verificacion:  pueden pisarse, SOLO CON LA EVIDENCIA?
+ *
+ * Mientras las dos las contesto la misma funcion, la comprobacion de una
+ * promesa se apoyaba en la propia promesa: `outer(borrow_mut p, borrow_mut q)`
+ * llamando a `inner(p, q)` daba la llamada por disjunta -- porque `p` y `q`
+ * prometen -- y con eso la promesa de `inner` quedaba "verificada".  La cadena
+ * terminaba en una suposicion.
+ *
+ * La mitad positiva de este corte ya estaba hecha: @ref must_overlap existe
+ * justo porque usar @ref may_alias para acusar invertia su sentido.  Esta es
+ * la otra mitad, que se quedo sin hacer.
+ *
+ * @par Que se admite como evidencia
+ * Solo la ESTRUCTURA: la clase del sitio, la identidad de la raiz y los rangos
+ * de bytes.  Ninguna promesa.  En particular, dos parametros con indices
+ * distintos NO se demuestran disjuntos -- la raiz de un parametro es su
+ * POSICIoN, o sea un nombre, y nada impide que quien llama pase la misma
+ * direccion dos veces --, que es precisamente lo que @ref may_alias deja pasar
+ * cuando las dos declaran.
+ */
+bool must_not_overlap(const AbstractLoc &a, const AbstractLoc &b);
+
 // ===========================================================================
 // LocSet -- conjunto de AbstractLoc con TOP absorbente (is_top).  Cuando entra
 // Unknown, colapsa a top y vacia el vector (comparaciones O(1)).

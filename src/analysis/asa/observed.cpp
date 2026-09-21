@@ -12,6 +12,8 @@
 
 #include "analysis/asa/observed.h"
 
+#include "ir/ir_optimizer.h" // la clasificacion del destino de un salto
+
 namespace analysis {
 namespace asa {
 
@@ -172,6 +174,97 @@ bool straight_line_bulk_fact(FactStore &store, const ir::IrFunction &fn,
 
     f.scope.stage = stage;
     f.proof.rule = "adjacent-stores-tile-the-range";
+    out = std::move(f);
+    return true;
+}
+
+const char *code_origin_unknown_code(ir::CallTargetUnknown why) {
+    switch (why) {
+    case ir::CallTargetUnknown::Parameter: return "origin.from_param";
+    case ir::CallTargetUnknown::FromMemory: return "origin.from_memory";
+    case ir::CallTargetUnknown::Computed: return "origin.computed";
+    case ir::CallTargetUnknown::Disagree: return "origin.disagree";
+    case ir::CallTargetUnknown::TooDeep: return "origin.too_deep";
+    case ir::CallTargetUnknown::None: break;
+    }
+    return "origin.unknown";
+}
+
+UnknownReason code_origin_unknown_kind(ir::CallTargetUnknown why) {
+    switch (why) {
+    case ir::CallTargetUnknown::Parameter:
+        /* Llego de fuera de la funcion: aqui dentro no hay nada que mirar.  Lo
+         * sabe quien la llama, y la accion es declararlo. */
+        return UnknownReason::OpaqueBoundary;
+    case ir::CallTargetUnknown::FromMemory:
+        /* Salio de una carga.  SI se puede deducir -- mirando quien escribe
+         * ahi -- pero este analisis no cubre esa forma, y decirlo asi es lo
+         * que permite saber que escribir para que pase a ser demostrable. */
+        return UnknownReason::ShapeNotRecognized;
+    case ir::CallTargetUnknown::Computed:
+    case ir::CallTargetUnknown::Disagree:
+        /* Depende de algo que solo existe al ejecutar: una cuenta, o cual de
+         * los dos caminos se tome.
+         *
+         * Y NO es @c SourcesDisagree aunque uno se llame "disagree": alli
+         * significa que dos PRODUCTORES del mismo hecho no coinciden -- un
+         * fallo del compilador, que tiene que gritar --, y lo de aqui es que
+         * dos CAMINOS del programa llevan cosas distintas, que es legitimo. */
+        return UnknownReason::RuntimeDependent;
+    case ir::CallTargetUnknown::TooDeep:
+        /* Se renuncio por presupuesto.  No es culpa del programa, es del
+         * analisis, y decirlo asi es lo honesto. */
+        return UnknownReason::BudgetExceeded;
+    case ir::CallTargetUnknown::None: break;
+    }
+    return UnknownReason::NothingToSay;
+}
+
+bool code_origin_fact(FactStore &store, const ir::IrFunction &fn,
+                      const ir::CallTargetSite &site, const char *stage,
+                      Source source, Fact &out) {
+    /* De lo que no se pudo afirmar no se arma hecho: lo que corresponde es
+     * decir POR QUE, y eso lo hace el productor con su motivo.  Un hecho de
+     * certeza desconocida armado aqui seria dos formas de decir lo mismo. */
+    if (site.memory == ir::CallTargetMemory::Unknown) return false;
+
+    Fact f;
+    f.what.domain = kProducerCodeOrigin;
+    /* Dos hechos DISTINTOS y no uno con una bandera: quien los consuma hace
+     * cosas distintas con cada uno -- a lo nuestro se le puede mirar el
+     * cuerpo, inlinarlo y derivarle efectos; a lo ajeno, nada de eso -- y una
+     * bandera invita a tratarlos como el mismo con un matiz. */
+    f.what.code = site.memory == ir::CallTargetMemory::Machine
+                      ? "origin.ours"
+                      : "origin.foreign";
+
+    /* El sujeto es el VALOR que lleva la direccion, no la linea: es una
+     * entidad del intermedio, asi que el hecho se puede cruzar con lo que
+     * otros dominios digan de ese mismo valor -- de donde sale, que rango
+     * tiene -- en vez de quedarse suelto. */
+    f.about.kind = Subject::Kind::Value;
+    f.about.function = store.intern(fn.name);
+    f.about.id = site.target;
+
+    /* Y DONDE, para quien tenga delante el fuente. */
+    if (site.line > 0)
+        f.seal.origin.site = Anchor{Anchor::Kind::Line, site.line};
+
+    /* DEMOSTRADO: se siguio la cadena de definiciones hasta el origen.  Lo que
+     * no llego salio por el otro camino, como una renuncia con su motivo. */
+    f.seal.certainty = Certainty::Proven;
+    f.seal.origin.source = source;
+    f.seal.origin.producer = kProducerCodeOrigin;
+    f.seal.origin.function = f.about.function;
+
+    /* SOLO EN LA MAQUINA.  En nativo la distincion no significa nada: alli
+     * todo es codigo real y las dos formas de llamar caen en la misma
+     * instruccion -- lo hace ya el bajado nativo, que convierte la via nativa
+     * de vuelta en la indirecta --.  Sin este sello el hecho afirmaria en un
+     * objetivo algo que solo es cierto en otro. */
+    f.scope.isa = kIsaVelb;
+    f.scope.stage = stage;
+    f.proof.rule = "reaching-defs-to-label-or-ffi-boundary";
     out = std::move(f);
     return true;
 }

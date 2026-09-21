@@ -275,6 +275,39 @@ bool closes_as_type_args(const std::vector<Piece> &pieces, size_t open,
     return false;
 }
 
+/**
+ * @brief Indica si tras el `)` de un supuesto cast puede venir lo que
+ * convierte.
+ *
+ * Un cast va SIEMPRE pegado a un valor, asi que lo que no puede empezar uno
+ * delata que esos parentesis no eran un cast.  Es lo que separa el cast de la
+ * lista de PARAMETROS de un declarador al estilo de C: en `i64 (*c)(i64) = 0;`
+ * el `(i64)` final se ve exactamente igual que `(i64)x`, y sin esto el `=` de
+ * detras se pegaba al parentesis -- `i64 (*c)(i64)= 0;` --.
+ *
+ * @param k Categoria del token que sigue al `)`.
+ * @return Cierto si ahi puede empezar el valor convertido.
+ */
+bool cast_value_follows(TokenKind k) {
+    /* Un binario INEQUIVOCO pide un operando a la izquierda, asi que lo de
+     * delante era un valor y no un tipo.  Ahi entran el `=` que delata la
+     * lista de parametros y el `->` de un tipo funcion.  La lista es UNA y
+     * vive en la cabecera compartida: repetirla aqui la dejaria a medias el
+     * dia que el lenguaje gane un operador. */
+    if (always_binary(k)) return false;
+    switch (k) {
+    // Cierra o separa: no empieza nada.
+    case TokenKind::RPAREN:
+    case TokenKind::RBRACKET:
+    case TokenKind::RBRACE:
+    case TokenKind::COMMA:
+    case TokenKind::SEMICOLON:
+    case TokenKind::COLON:
+    case TokenKind::DOT: return false;
+    default: return true;
+    }
+}
+
 } // namespace
 
 /**
@@ -293,6 +326,35 @@ bool closes_as_type_args(const std::vector<Piece> &pieces, size_t open,
  * @param k Categoria del token.
  * @return Cierto si nombra un tipo.
  */
+bool always_binary(TokenKind k) {
+    switch (k) {
+    case TokenKind::SLASH:
+    case TokenKind::PERCENT:
+    case TokenKind::EQ:
+    case TokenKind::NEQ:
+    case TokenKind::LE:
+    case TokenKind::GE:
+    case TokenKind::AND_AND:
+    case TokenKind::OR_OR:
+    case TokenKind::ASSIGN:
+    case TokenKind::PLUS_ASSIGN:
+    case TokenKind::MINUS_ASSIGN:
+    case TokenKind::STAR_ASSIGN:
+    case TokenKind::SLASH_ASSIGN:
+    case TokenKind::PERCENT_ASSIGN:
+    case TokenKind::AMP_ASSIGN:
+    case TokenKind::PIPE_ASSIGN:
+    case TokenKind::CARET_ASSIGN:
+    case TokenKind::SHL_ASSIGN:
+    case TokenKind::SHR_ASSIGN:
+    case TokenKind::PIPE:
+    case TokenKind::CARET:
+    case TokenKind::FAT_ARROW:
+    case TokenKind::ARROW: return true;
+    default: return false;
+    }
+}
+
 bool is_modifier(TokenKind k) {
     switch (k) {
     case TokenKind::KW_PUBLIC:
@@ -319,7 +381,6 @@ bool precedes_type(TokenKind k) {
     default: return false;
     }
 }
-
 
 size_t skip_decl_qualifiers(const std::vector<Piece> &pieces, size_t i) {
     size_t j = i;
@@ -545,7 +606,14 @@ std::vector<Role> annotate_roles(const std::vector<Piece> &pieces) {
             const size_t ini = skip_decl_qualifiers(pieces, i + 1);
             const TokenKind tipo =
                 ini < pieces.size() ? kind_of(pieces[ini]) : TokenKind::RPAREN;
-            if (is_type_keyword(tipo) || tipo == TokenKind::IDENTIFIER) {
+            /* `cfn` y `fn` nombran un tipo igual que `i64`, pero no estan en
+             * el rango de las palabras de tipo -- el suyo lleva parentesis y
+             * flecha --, asi que sin nombrarlos aqui un `(cfn(...) -> R)&f` ni
+             * llegaba a mirarse y su `&` salia como un `y` logico. */
+            const bool fn_type_head =
+                tipo == TokenKind::KW_CFN || tipo == TokenKind::KW_FN;
+            if (is_type_keyword(tipo) || tipo == TokenKind::IDENTIFIER ||
+                fn_type_head) {
                 /* Un TIPO con nombre propio ya delata el cast sin necesitar
                  * estrella: `(i64) - 1` es negar, no restar.  Con un
                  * IDENTIFICADOR no se puede decir lo mismo -- `(v) - 1` es una
@@ -557,25 +625,101 @@ std::vector<Role> annotate_roles(const std::vector<Piece> &pieces) {
                 const bool tipo_nombrado = is_type_keyword(tipo) ||
                                            (tipo == TokenKind::IDENTIFIER &&
                                             tipos.count(pieces[ini].text) != 0);
+                /* Un tipo FUNCION trae sus propios parentesis y su flecha, asi
+                 * que contar estrellas no lo reconoce: se busca el `)` que
+                 * cierra al `(` de fuera. */
                 size_t t = ini + 1;
                 size_t estrellas = 0;
-                while (t < pieces.size()) {
-                    const TokenKind tk = kind_of(pieces[t]);
-                    if (tk == TokenKind::STAR) {
-                        ++estrellas;
-                        ++t;
-                        continue;
+                if (fn_type_head) {
+                    /* Se busca el `)` que cierra al `(` de fuera, y de paso
+                     * DoNDE estaba la flecha, que es lo que separa un cast de
+                     * una lista de parametros. */
+                    int depth = 0;
+                    size_t arrow = 0;
+                    for (t = ini; t < pieces.size(); ++t) {
+                        const TokenKind tk = kind_of(pieces[t]);
+                        if (tk == TokenKind::LPAREN) {
+                            ++depth;
+                        } else if (tk == TokenKind::RPAREN) {
+                            if (depth == 0) break;
+                            --depth;
+                        } else if (tk == TokenKind::ARROW && depth == 0) {
+                            arrow = t;
+                        }
                     }
-                    if (tk == TokenKind::LBRACKET ||
-                        tk == TokenKind::RBRACKET) {
-                        ++t;
-                        continue;
+                    /* Los parentesis de un CAST llevan un tipo y NADA MAS.
+                     * Tras la flecha viene el tipo devuelto y ya: si aparece
+                     * un segundo nombre, ese es el del PARaMETRO y esto no era
+                     * un cast sino una firma.
+                     *
+                     * Sin esto, `f(fn(T) -> T g) {` se tomaba por un cast --
+                     * el barrido saltaba hasta el `)` de fuera sin mirar lo
+                     * que habia dentro -- y entonces al `{` del cuerpo se le
+                     * quitaba el espacio de delante, porque tras un cast viene
+                     * un valor.  Lo cazo mirar los diffs del corpus: la suite
+                     * no podia, porque el corpus se habia reformateado con el
+                     * fallo dentro y quedaba consistente consigo mismo. */
+                    size_t nombres = 0;
+                    for (size_t q = arrow + 1; arrow != 0 && q < t; ++q) {
+                        const TokenKind tk = kind_of(pieces[q]);
+                        if (tk == TokenKind::IDENTIFIER || is_type_keyword(tk))
+                            ++nombres;
                     }
-                    break;
+                    if (nombres > 1) t = pieces.size(); // no es un cast
+                } else {
+                    while (t < pieces.size()) {
+                        const TokenKind tk = kind_of(pieces[t]);
+                        if (tk == TokenKind::STAR) {
+                            ++estrellas;
+                            ++t;
+                            continue;
+                        }
+                        if (tk == TokenKind::LBRACKET ||
+                            tk == TokenKind::RBRACKET) {
+                            ++t;
+                            continue;
+                        }
+                        break;
+                    }
+                    /* Y el declarador ABSTRACTO de C: `(i64 (*)(i64))x`.
+                     * Ahi el tipo va PARTIDO -- `i64` delante, `(*)(i64)`
+                     * detras --, asi que ni contar estrellas ni buscar la
+                     * flecha lo reconoce: hay que saltar el `(*)` y su lista
+                     * de parametros para llegar al `)` de fuera.  Sin esto el
+                     * cast en la grafia de C no se veia y su `&` salia como
+                     * un `y` logico, igual que le pasaba al de `cfn`. */
+                    if (t < pieces.size() &&
+                        kind_of(pieces[t]) == TokenKind::LPAREN) {
+                        size_t d = t + 1;
+                        size_t punteros = 0;
+                        while (d < pieces.size() &&
+                               kind_of(pieces[d]) == TokenKind::STAR) {
+                            ++punteros;
+                            ++d;
+                        }
+                        if (punteros > 0 && d + 1 < pieces.size() &&
+                            kind_of(pieces[d]) == TokenKind::RPAREN &&
+                            kind_of(pieces[d + 1]) == TokenKind::LPAREN) {
+                            int depth = 0;
+                            size_t p = d + 1;
+                            for (; p < pieces.size(); ++p) {
+                                const TokenKind tk = kind_of(pieces[p]);
+                                if (tk == TokenKind::LPAREN) {
+                                    ++depth;
+                                } else if (tk == TokenKind::RPAREN &&
+                                           --depth == 0) {
+                                    ++p;
+                                    break;
+                                }
+                            }
+                            if (p < pieces.size()) t = p;
+                        }
+                    }
                 }
-                const bool es_cast = (estrellas > 0 || tipo_nombrado) &&
-                                     t < pieces.size() &&
-                                     kind_of(pieces[t]) == TokenKind::RPAREN;
+                const bool es_cast =
+                    (estrellas > 0 || tipo_nombrado || fn_type_head) &&
+                    t < pieces.size() &&
+                    kind_of(pieces[t]) == TokenKind::RPAREN;
                 if (es_cast) {
                     if (estrellas > 0 && t > decl_until) decl_until = t;
                     /* Tras el `)` de un cast viene un VALOR, asi que lo que
@@ -584,12 +728,13 @@ std::vector<Role> annotate_roles(const std::vector<Piece> &pieces) {
                      * porque quien lo decide solo mira el token de al lado, y
                      * desde ahi un `)` de cast y uno de agrupacion se ven
                      * igual -- `(v) - 1` SI es una resta --. */
-                    /* Salvo que lo que siga sea un `->`: entonces esos
-                     * parentesis son los PARAMETROS de un tipo funcion
-                     * (`fn(i32) -> i32`), que se escribe igual que un cast y no
-                     * lo es.  Sin esta salida el `->` se quedaba pegado. */
+                    /* Salvo que detras no pueda empezar un VALOR: entonces
+                     * esos parentesis no convertian nada, eran los PARAMETROS
+                     * de un declarador -- `fn(i32) -> i32`, o el
+                     * `i64 (*c)(i64) = 0;` de C --, que se escriben igual que
+                     * un cast y no lo son. */
                     if (t + 1 < pieces.size() &&
-                        kind_of(pieces[t + 1]) != TokenKind::ARROW)
+                        cast_value_follows(kind_of(pieces[t + 1])))
                         tras_cast[t + 1] = 1u;
                 }
             }

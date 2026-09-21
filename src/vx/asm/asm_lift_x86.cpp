@@ -353,7 +353,7 @@ bool lift_x86(ir::IrFunction &fn, ir::IrBlockId block, const std::string &body,
         // El slot del var register-bound conserva su naturaleza (host/VM) en el
         // flag del valor del ALLOCA: lo respetamos (los register() suelen vivir
         // en memoria host -- alloc + movh).
-        const bool slot_host = fn.values[b->second.slot].is_host_ptr;
+        const bool slot_host = fn.values[b->second.slot].is_host_ptr();
         const ir::IrValueId v = emit_load(
             fn, block, b->second.slot, b->second.width_bits, slot_host, line);
         cur[canon] = v;
@@ -1170,7 +1170,7 @@ bool lift_x86(ir::IrFunction &fn, ir::IrBlockId block, const std::string &body,
             auto b = bound.find(r);
             auto v = cur.find(r);
             if (b != bound.end() && v != cur.end()) {
-                const bool slot_host = fn.values[b->second.slot].is_host_ptr;
+                const bool slot_host = fn.values[b->second.slot].is_host_ptr();
                 emit_store(fn, block, v->second, b->second.slot,
                            b->second.width_bits, slot_host, line);
             }

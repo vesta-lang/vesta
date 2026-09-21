@@ -2450,8 +2450,7 @@ ComptimeEvalResult comptime_eval_expr(const TypeChecker &tc,
                 if (!idx.ok || idx.is_str || idx.value < 0 ||
                     static_cast<size_t>(idx.value) >= reach.size())
                     return r;
-                const ScopedMethod &sm =
-                    reach[static_cast<size_t>(idx.value)];
+                const ScopedMethod &sm = reach[static_cast<size_t>(idx.value)];
                 if (cid->name == "scoped.method.name") {
                     r.ok = true;
                     r.is_str = true;

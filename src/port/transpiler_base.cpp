@@ -803,7 +803,7 @@ void Transpiler::emit_instr(EmitContext &ctx, const ir::IrInstr &ins) {
         if (!ins.operands.empty() && ctx.fn) {
             bool host = false;
             if (ins.operands[0] < ctx.fn->values.size()) {
-                host = ctx.fn->values[ins.operands[0]].is_host_ptr;
+                host = ctx.fn->values[ins.operands[0]].is_host_ptr();
             }
             backend_.emit_load(ctx, ins.dst, ins.operands[0], ins.type, host);
         }
@@ -814,7 +814,7 @@ void Transpiler::emit_instr(EmitContext &ctx, const ir::IrInstr &ins) {
         if (ins.operands.size() >= 2 && ctx.fn) {
             bool host = false;
             if (ins.operands[1] < ctx.fn->values.size()) {
-                host = ctx.fn->values[ins.operands[1]].is_host_ptr;
+                host = ctx.fn->values[ins.operands[1]].is_host_ptr();
             }
             backend_.emit_store(ctx, ins.operands[0], ins.operands[1], ins.type,
                                 host);

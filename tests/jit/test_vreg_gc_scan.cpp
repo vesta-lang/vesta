@@ -98,7 +98,7 @@ static void test_gc_root_found_by_scan() {
     ir::IrValueId x = fn.new_value(I64), r = fn.new_value(I64),
                   sum = fn.new_value(I64);
     fn.values[thisp].is_gc_object = true;
-    fn.values[thisp].is_host_ptr = true; // -> HOSTPTR
+    fn.values[thisp].set_host_by_construction(true); // -> HOSTPTR
     fn.params = {thisp, x};
     ir::IrBlockId bb = fn.new_block("e");
     {
@@ -222,7 +222,7 @@ static void test_aot_host_leaf_stackmap() {
     ir::IrValueId x = fn.new_value(I64), r = fn.new_value(I64),
                   sum = fn.new_value(I64);
     fn.values[thisp].is_gc_object = true;
-    fn.values[thisp].is_host_ptr = true; // -> HOSTPTR
+    fn.values[thisp].set_host_by_construction(true); // -> HOSTPTR
     fn.params = {thisp, x};
     ir::IrBlockId bb = fn.new_block("e");
     {

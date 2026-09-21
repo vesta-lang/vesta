@@ -866,13 +866,17 @@ void Lowering::lower_while(ast::WhileStmt *s) {
             // objeto perdido (UAF).  Ademas LOAD/STORE emitirian mov en vez de
             // movh.  Todos los args no-null de un mismo PHI comparten host-ness
             // (null=0 es indiferente), asi que el OR es correcto.
+            // El PHI FUSIONA la memoria de sus entradas: es una deduccion
+            // sobre el programa, no un valor que el compilador construyera.
             if (static_cast<size_t>(post) < fn_->values.size() &&
-                fn_->values[post].is_host_ptr) {
-                fn_->values[vi.phi_value].is_host_ptr = true;
+                fn_->values[post].is_host_ptr()) {
+                fn_->values[vi.phi_value].memory =
+                    ir::MemorySpace::HostByInference;
             }
             if (static_cast<size_t>(vi.pre_loop) < fn_->values.size() &&
-                fn_->values[vi.pre_loop].is_host_ptr) {
-                fn_->values[vi.phi_value].is_host_ptr = true;
+                fn_->values[vi.pre_loop].is_host_ptr()) {
+                fn_->values[vi.phi_value].memory =
+                    ir::MemorySpace::HostByInference;
             }
         }
     } else {
@@ -913,8 +917,7 @@ void Lowering::lower_while(ast::WhileStmt *s) {
             if (static_cast<size_t>(vi.phi_value) < fn_->values.size()) {
                 fn_->values[phi.dst].is_gc_object =
                     fn_->values[vi.phi_value].is_gc_object;
-                fn_->values[phi.dst].is_host_ptr =
-                    fn_->values[vi.phi_value].is_host_ptr;
+                fn_->values[phi.dst].memory = fn_->values[vi.phi_value].memory;
             }
             // Edge desde cond_end_block: trae el phi_value del header
             // (visto al evaluar la condicion como falsa).
@@ -1401,8 +1404,7 @@ void Lowering::lower_return(ast::ReturnStmt *s) {
                 // v_local al v_src_at para que el LOAD use `movh` (host) en
                 // lugar de `mov` (VM mem).  Sin esto, el retorno de un
                 // value-string leeria 24 bytes de vm_mem (cero/basura).
-                fn_->values[v_src_at].is_host_ptr =
-                    fn_->values[v_local].is_host_ptr;
+                fn_->values[v_src_at].memory = fn_->values[v_local].memory;
                 // LOAD i64 from src+off
                 const ir::IrValueId v_tmp =
                     emit_load_typed(v_src_at, ir::IrType::I64, s->loc.line);
@@ -1418,8 +1420,7 @@ void Lowering::lower_return(ast::ReturnStmt *s) {
                 // memory (ALLOCA del caller); sin esta propagacion
                 // el STORE escribe a vm_mem mientras el caller lee
                 // host -> Result tag/value/error siempre en cero.
-                fn_->values[v_dst_at].is_host_ptr =
-                    fn_->values[sret_retbuf_].is_host_ptr;
+                fn_->values[v_dst_at].memory = fn_->values[sret_retbuf_].memory;
                 // STORE i64 [dst+off] = tmp
                 emit_store_typed(v_dst_at, v_tmp, ir::IrType::I64, s->loc.line);
             }

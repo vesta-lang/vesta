@@ -109,7 +109,7 @@ ir::IrValueId Lowering::read_local(const std::string &name, ir::IrType ir_ty,
     // el round-trip `T* p = malloc(); ...; LOAD &p` perderia el bit y
     // el siguiente LOAD/STORE indirecto emitiria mov en vez de movh.
     if (host_bearing_locals_.count(name)) {
-        fn_->values[dst].is_host_ptr = true;
+        fn_->values[dst].memory = ir::MemorySpace::HostByConstruction;
     }
     return dst;
 }
@@ -131,7 +131,7 @@ void Lowering::write_local(const std::string &name, ir::IrValueId v,
                 is.imm = sit->second.slot;
                 is.source_line = source_line;
                 emit(current_block_, std::move(is));
-                fn_->values[addr].is_host_ptr = true;
+                fn_->values[addr].memory = ir::MemorySpace::HostByConstruction;
             }
             emit_store_typed(addr, v, sit->second.ld_type, source_line);
             return;
@@ -175,7 +175,7 @@ void Lowering::write_local(const std::string &name, ir::IrValueId v,
     // vez marcado, el local queda host-bearing aunque despues le asignen
     // un valor VM.  Aceptable porque en la practica los locales mantienen
     // su naturaleza a lo largo de su vida.
-    if (v != ir::IR_NO_VALUE && fn_->values[v].is_host_ptr) {
+    if (v != ir::IR_NO_VALUE && fn_->values[v].is_host_ptr()) {
         host_bearing_locals_.insert(name);
         fn_->values[addr].pointee_is_host_ptr = true;
     }

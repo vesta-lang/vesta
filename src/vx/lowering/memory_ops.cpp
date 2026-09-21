@@ -289,11 +289,11 @@ uint64_t Lowering::ensure_memcpy_dispatch() {
             hf.ret_type = ir::IrType::VOID;
             const ir::IrValueId p_dst = hf.new_value(ir::IrType::PTR, "%dst");
             hf.values[p_dst].is_param = true;
-            hf.values[p_dst].is_host_ptr = true;
+            hf.values[p_dst].memory = ir::MemorySpace::HostByConstruction;
             hf.params.push_back(p_dst);
             const ir::IrValueId p_src = hf.new_value(ir::IrType::PTR, "%src");
             hf.values[p_src].is_param = true;
-            hf.values[p_src].is_host_ptr = true;
+            hf.values[p_src].memory = ir::MemorySpace::HostByConstruction;
             hf.params.push_back(p_src);
             const ir::IrValueId p_n = hf.new_value(ir::IrType::I64, "%n");
             hf.values[p_n].is_param = true;
@@ -342,11 +342,11 @@ uint64_t Lowering::ensure_memcpy_dispatch() {
         hf.ret_type = ir::IrType::VOID;
         const ir::IrValueId p_dst = hf.new_value(ir::IrType::PTR, "%dst");
         hf.values[p_dst].is_param = true;
-        hf.values[p_dst].is_host_ptr = true;
+        hf.values[p_dst].memory = ir::MemorySpace::HostByConstruction;
         hf.params.push_back(p_dst);
         const ir::IrValueId p_src = hf.new_value(ir::IrType::PTR, "%src");
         hf.values[p_src].is_param = true;
-        hf.values[p_src].is_host_ptr = true;
+        hf.values[p_src].memory = ir::MemorySpace::HostByConstruction;
         hf.params.push_back(p_src);
         const ir::IrValueId p_n = hf.new_value(ir::IrType::I64, "%n");
         hf.values[p_n].is_param = true;
@@ -606,7 +606,8 @@ void Lowering::ensure_auto_multiversion(ir::IrModule &out_module) {
             (f.name == "main") ? std::string("__vx_main_body") : f.name + "$mv";
         e.ret = f.ret_type;
         for (ir::IrValueId pid : f.params)
-            e.params.push_back({f.values[pid].type, f.values[pid].is_host_ptr});
+            e.params.push_back(
+                {f.values[pid].type, f.values[pid].is_host_ptr()});
         f.name = e.body_name; // renombrado en sitio (sin add_function)
         mv.push_back(std::move(e));
     }
@@ -643,7 +644,9 @@ void Lowering::ensure_auto_multiversion(ir::IrModule &out_module) {
         for (const auto &pi : e.params) {
             const ir::IrValueId pv = w.new_value(pi.ty);
             w.values[pv].is_param = true;
-            w.values[pv].is_host_ptr = pi.host;
+            // El compilador SINTETIZA este envoltorio y elige la memoria de
+            // cada parametro al hacerlo.
+            w.values[pv].set_host_by_construction(pi.host);
             w.params.push_back(pv);
             sparams.push_back(pv);
         }
@@ -654,7 +657,7 @@ void Lowering::ensure_auto_multiversion(ir::IrModule &out_module) {
 
         // v_fpaddr = &<body>$fp ; v_fp = LOAD i64 [v_fpaddr].
         ir::IrValueId v_fpaddr = w.new_value(ir::IrType::PTR);
-        w.values[v_fpaddr].is_host_ptr = true;
+        w.values[v_fpaddr].memory = ir::MemorySpace::HostByConstruction;
         {
             ir::IrInstr la{};
             la.op = ir::IrOp::STR_LIT_ADDR;
@@ -665,7 +668,7 @@ void Lowering::ensure_auto_multiversion(ir::IrModule &out_module) {
             w.append(current_block_, std::move(la));
         }
         ir::IrValueId v_fp = w.new_value(ir::IrType::PTR);
-        w.values[v_fp].is_host_ptr = true;
+        w.values[v_fp].memory = ir::MemorySpace::HostByConstruction;
         {
             ir::IrInstr ld{};
             ld.op = ir::IrOp::LOAD;
@@ -1079,7 +1082,8 @@ ir::IrValueId Lowering::stack_alloc_buf(uint64_t bytes, uint32_t line,
     } else {
         emit(current_block_, std::move(al));
     }
-    if (host_memory) fn_->values[v_buf].is_host_ptr = true;
+    if (host_memory)
+        fn_->values[v_buf].memory = ir::MemorySpace::HostByConstruction;
     return v_buf;
 }
 
@@ -1142,7 +1146,7 @@ ir::IrValueId Lowering::unique_slot_buf(uint32_t line) {
 ir::IrValueId Lowering::emit_ptr_add(ir::IrValueId base, ir::IrValueId off,
                                      uint32_t source_line) {
     const ir::IrValueId v = fn_->new_value(ir::IrType::PTR);
-    fn_->values[v].is_host_ptr = fn_->values[base].is_host_ptr;
+    fn_->values[v].memory = fn_->values[base].memory;
     ir::IrInstr ad{};
     ad.op = ir::IrOp::ADD;
     ad.type = ir::IrType::I64;
@@ -1178,7 +1182,7 @@ ir::IrValueId Lowering::emit_ptr_add(ir::IrValueId base, uint64_t off,
 ir::IrValueId Lowering::emit_host_ptr_add(ir::IrValueId base, ir::IrValueId off,
                                           uint32_t source_line) {
     const ir::IrValueId v = emit_ptr_add(base, off, source_line);
-    fn_->values[v].is_host_ptr = true;
+    fn_->values[v].memory = ir::MemorySpace::HostByConstruction;
     return v;
 }
 
@@ -1203,7 +1207,7 @@ ir::IrValueId Lowering::emit_host_ptr_add(ir::IrValueId base, ir::IrValueId off,
 ir::IrValueId Lowering::emit_load_typed(ir::IrValueId addr, ir::IrType ty,
                                         uint32_t source_line, bool host_ptr) {
     const ir::IrValueId v = fn_->new_value(ty);
-    if (host_ptr) fn_->values[v].is_host_ptr = true;
+    if (host_ptr) fn_->values[v].memory = ir::MemorySpace::HostByConstruction;
     ir::IrInstr ld{};
     ld.op = ir::IrOp::LOAD;
     ld.type = ty;
@@ -1254,7 +1258,7 @@ ir::IrValueId Lowering::emit_vtable_method_ptr(ir::IrValueId obj,
             emit_const(ir::IrType::I64,
                        static_cast<uint64_t>(vtable_index) * 8u, source_line);
         v_slot = fn_->new_value(ir::IrType::PTR);
-        fn_->values[v_slot].is_host_ptr = true;
+        fn_->values[v_slot].memory = ir::MemorySpace::HostByConstruction;
         ir::IrInstr ad{};
         ad.op = ir::IrOp::ADD;
         // Una direccion se suma SIN signo.  Es lo unico que separa esto de
@@ -1278,7 +1282,7 @@ ir::IrValueId Lowering::emit_load_host_ptr(ir::IrValueId addr,
     // que no tienen por que decirse igual.  Lo primero es lo que el resto del
     // bajado consulta para decidir el acceso; lo segundo, cuanto se lee.
     const ir::IrValueId v = fn_->new_value(ir::IrType::PTR);
-    fn_->values[v].is_host_ptr = true;
+    fn_->values[v].memory = ir::MemorySpace::HostByConstruction;
     ir::IrInstr ld{};
     ld.op = ir::IrOp::LOAD;
     ld.type = ir::IrType::I64;
@@ -1439,7 +1443,7 @@ void Lowering::emit_memcpy(ir::IrValueId dst, ir::IrValueId src,
 ir::IrValueId Lowering::emit_str_lit_addr(uint64_t idx, uint32_t source_line,
                                           bool host_ptr) {
     const ir::IrValueId v = fn_->new_value(ir::IrType::PTR);
-    if (host_ptr) fn_->values[v].is_host_ptr = true;
+    if (host_ptr) fn_->values[v].memory = ir::MemorySpace::HostByConstruction;
     ir::IrInstr la{};
     la.op = ir::IrOp::STR_LIT_ADDR;
     la.type = ir::IrType::PTR;

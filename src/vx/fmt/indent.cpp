@@ -469,10 +469,10 @@ std::string reindent(const std::vector<Piece> &pieces, std::string_view tail,
              * columna que sus hermanas, que es justo lo que `R77` quiere
              * conservar.  Un `asm { nop };` de una sola linea no se toca: la
              * regla es para los bloques repartidos. */
-            const bool first_of_body =
-                idx > 0 && asm_depth == 1 && !pieces[idx - 1].drop &&
-                is(pieces[idx - 1], TokenKind::LBRACE) &&
-                llave_partida[idx - 1];
+            const bool first_of_body = idx > 0 && asm_depth == 1 &&
+                                       !pieces[idx - 1].drop &&
+                                       is(pieces[idx - 1], TokenKind::LBRACE) &&
+                                       llave_partida[idx - 1];
             if (nl_pos == std::string_view::npos && first_of_body) {
                 text.push_back('\n');
                 ++cur_line;

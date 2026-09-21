@@ -165,7 +165,7 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
                     (static_cast<uint64_t>(slay.size_bytes) + 7ULL) & ~7ULL;
                 const ir::IrValueId v_buf =
                     stack_alloc_buf(buf_bytes, e->loc.line, true);
-                fn_->values[v_buf].is_host_ptr = true;
+                fn_->values[v_buf].memory = ir::MemorySpace::HostByConstruction;
 
                 /* Los valores por defecto de los campos, ANTES del cuerpo: la
                  * semantica es "defectos primero, constructor encima".
@@ -248,7 +248,7 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
             ir::IrValueId base = lower_expr(e->args[0].get());
             if (base == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
             // El overlay es una VISTA sobre memoria host: forzar la naturaleza.
-            fn_->values[base].is_host_ptr = true;
+            fn_->values[base].memory = ir::MemorySpace::HostByConstruction;
             return base;
         }
     }
@@ -336,6 +336,18 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
             ins.operands = std::move(arg_ids);
             ins.source_line = e->loc.line;
             emit(current_block_, std::move(ins));
+            /* DE QUE MEMORIA es lo que devuelve, que aqui NO estaba.
+             *
+             * Este atajo del FFI declarativo sale por su propio `return` y se
+             * saltaba entera la regla que el camino generico de llamada si
+             * aplica.  Lo mismo que hace el thunk de `&funcion`, y por el
+             * mismo sitio: lo que se afirma de una nativa no puede depender
+             * de por cual de los dos caminos se llegue. */
+            if (dst != ir::IR_NO_VALUE) {
+                const FunctionSig *ext_sig = tc_.function_sig_by_name(id->name);
+                if (ext_sig != nullptr)
+                    mark_extern_return_memory(*fn_, dst, ext_sig->return_type);
+            }
             return dst;
         }
     }
@@ -399,20 +411,24 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
             std::vector<ir::IrValueId> args;
             if (!lower_indirect_call_args(e, id->result_type, args))
                 return ir::IR_NO_VALUE;
-            const ir::IrType rt = ir_type_from_primitive(
-                id->result_type.pointee ? id->result_type.pointee->kind
-                                        : PrimitiveKind::VOID);
-            const ir::IrValueId dst =
-                (rt == ir::IrType::VOID) ? ir::IR_NO_VALUE : fn_->new_value(rt);
+            /* En un `cfn` el tipo devuelto es su `pointee`.  Lo demas -- si
+             * hace falta hueco, con que tipo se emite y que se devuelve -- lo
+             * contesta un solo sitio. */
+            const Type cfn_ret = id->result_type.pointee
+                                     ? *id->result_type.pointee
+                                     : Type{PrimitiveKind::VOID};
+            const SretCall sc =
+                prepare_sret_call(sret_info(cfn_ret), cfn_ret, e->loc.line);
+            if (sc.uses_buffer) args.insert(args.begin(), sc.buffer);
             ir::IrInstr ins{};
             ins.op = ir::IrOp::CALLIND;
-            ins.type = rt;
-            ins.dst = dst;
+            ins.type = sc.call_type;
+            ins.dst = sc.dst;
             ins.func_ptr = fnp;
             ins.operands = std::move(args);
             ins.source_line = e->loc.line;
             emit(current_block_, std::move(ins));
-            return dst;
+            return sc.result();
         }
         // Direccion del function value (16 bytes en stack).  Si es
         // una variable address-taken, read_local devuelve el LOAD;
@@ -547,25 +563,11 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
     const SretInfo si = sret_info_for(callee_sym);
     const bool callee_is_sret = si.uses_buffer;
     ir::IrValueId v_call_retbuf = ir::IR_NO_VALUE;
-    if (callee_is_sret) {
-        v_call_retbuf = fn_->new_value(ir::IrType::PTR);
-        ir::IrInstr al{};
-        al.op = ir::IrOp::ALLOCA;
-        al.type = ir::IrType::I8; // unidad: 1 byte
-        al.dst = v_call_retbuf;
-        // Tiene que medir EXACTAMENTE lo que el llamado copia: el llamado
-        // escribe `bytes/8` palabras, asi que quedarse corto es escribir
-        // fuera, en el marco de quien llama.
-        al.imm = si.bytes;
-        al.source_line = e->loc.line;
-        // Donde vive: en memoria del anfitrion para los agregados, porque el
-        // llamado marca su parametro como puntero de anfitrion y escribe con
-        // `movh`.  Un lambda y un puntero inteligente NO: su bajado tiene su
-        // propio manejo de memoria (entorno en el monton, bloque de control).
-        if (si.host_buffer) al.host_alloca = true;
-        emit(current_block_, std::move(al));
-        if (si.host_buffer) fn_->values[v_call_retbuf].is_host_ptr = true;
-    }
+    /* El mismo sitio que el resto de caminos, con la respuesta que este tiene:
+     * la del NOMBRE, que sabe mas que la del tipo. */
+    const SretCall sc_direct =
+        prepare_sret_call(si, e->result_type, e->loc.line);
+    if (callee_is_sret) v_call_retbuf = sc_direct.buffer;
 
     // Bajar argumentos.  Si es sret, el retbuf va PRIMERO (convencion
     // espejo al lower_function que lo recibe como primer parametro).
@@ -680,10 +682,11 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
                         al.source_line = e->loc.line;
                         emit(current_block_, std::move(al));
                         if (fresh_is_host)
-                            fn_->values[fresh].is_host_ptr = true;
+                            fn_->values[fresh].memory =
+                                ir::MemorySpace::HostByConstruction;
                         emit_enum_copy(fresh, v_arg,
-                                       fn_->values[v_arg].is_host_ptr, sret_sz,
-                                       e->loc.line);
+                                       fn_->values[v_arg].is_host_ptr(),
+                                       sret_sz, e->loc.line);
                         v_arg = fresh;
                     }
                 }
@@ -821,7 +824,7 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
     // el path CALLVIRT (metodos) que ya marcaba is_gc_object para retorno
     // CLASS.
     if (dst != ir::IR_NO_VALUE && callee_kind == PrimitiveKind::CLASS) {
-        fn_->values[dst].is_host_ptr = true;
+        fn_->values[dst].memory = ir::MemorySpace::HostByConstruction;
         fn_->values[dst].is_gc_object = true;
     }
     // BUG-1 fix: un callee que declara devolver un puntero/array HOST
@@ -924,7 +927,7 @@ ir::IrValueId Lowering::lower_new_expr(ast::NewExpr *e) {
         }
         // RAW_ALLOC(total) -> host_ptr.
         const ir::IrValueId v_ptr = fn_->new_value(ir::IrType::PTR);
-        fn_->values[v_ptr].is_host_ptr = true;
+        fn_->values[v_ptr].memory = ir::MemorySpace::HostByConstruction;
         ir::IrInstr ra{};
         ra.op = ir::IrOp::RAW_ALLOC;
         ra.type = ir::IrType::PTR;
@@ -984,7 +987,7 @@ ir::IrValueId Lowering::lower_new_expr(ast::NewExpr *e) {
             // equivalente semanticamente al RAW_ASM previo `gcderef + xchg +
             // mov`.
             const ir::IrValueId v_obj = fn_->new_value(ir::IrType::PTR);
-            fn_->values[v_obj].is_host_ptr = true;
+            fn_->values[v_obj].memory = ir::MemorySpace::HostByConstruction;
             fn_->values[v_obj].is_gc_object = true;
             {
                 ir::IrInstr ra{};
@@ -1070,7 +1073,7 @@ ir::IrValueId Lowering::lower_new_expr(ast::NewExpr *e) {
     // GC.  Marcamos is_gc_object para que el regalloc, al spillarlo
     // alrededor de cualquier CALL posterior (que pueda disparar GC),
     // emita el dance gchandle/gcderef y refresque el host_ptr.
-    fn_->values[dst].is_host_ptr = true;
+    fn_->values[dst].memory = ir::MemorySpace::HostByConstruction;
     fn_->values[dst].is_gc_object = true;
     // M.L7 ext: clase importada cross-module.  El helper @c __new_<X>
     // en el dep fue emitido con el nombre LOCAL del dep (e.g. "Buffer"),
@@ -1175,7 +1178,8 @@ std::string Lowering::generate_lambda_helper(ast::LambdaExpr *e) {
     if (native_poo_ && !e->captures.empty()) {
         native_env_param = child_fn.new_value(ir::IrType::PTR, "%__env");
         child_fn.values[native_env_param].is_param = true;
-        child_fn.values[native_env_param].is_host_ptr = true; // bare: env host
+        child_fn.values[native_env_param].memory =
+            ir::MemorySpace::HostByConstruction; // bare: env host
         child_fn.params.push_back(native_env_param);
     }
 
@@ -1211,7 +1215,8 @@ std::string Lowering::generate_lambda_helper(ast::LambdaExpr *e) {
             // stack VM.  Marcamos is_host_ptr para que LOAD/STORE
             // contra el env block emitan @c movh en lugar de @c mov.
             if (e->env_in_heap) {
-                child_fn.values[env_ptr].is_host_ptr = true;
+                child_fn.values[env_ptr].memory =
+                    ir::MemorySpace::HostByConstruction;
             }
             // raw_asm-elim wave 3: prologue del closure helper lee R14
             // (env_ptr) via IrOp::READ_VM_REG (path VM/JIT).
@@ -1255,8 +1260,11 @@ std::string Lowering::generate_lambda_helper(ast::LambdaExpr *e) {
                 // heap (caso de closures retornadas por una funcion,
                 // donde el env sobrevive al stack del creador via
                 // alocacion en heap GC).
-                if (child_fn.values[env_ptr].is_host_ptr) {
-                    child_fn.values[addr_i].is_host_ptr = true;
+                // Deducido: la base es del anfitrion, luego desplazarla sigue
+                // apuntando ahi.  El valor es NUEVO, no el mismo que cruza.
+                if (child_fn.values[env_ptr].is_host_ptr()) {
+                    child_fn.values[addr_i].memory =
+                        ir::MemorySpace::HostByInference;
                 }
                 ir::IrValueId off = emit_const(
                     ir::IrType::I64, static_cast<uint64_t>(i * 8), e->loc.line);
@@ -1295,7 +1303,8 @@ std::string Lowering::generate_lambda_helper(ast::LambdaExpr *e) {
                 // escribian en una direccion VM mientras el owner leia la
                 // celda host: las mutaciones de la lambda no se veian desde
                 // fuera (el test 56_linkedlist_hof devolvia el `acc` base).
-                child_fn.values[raw_v].is_host_ptr = true;
+                child_fn.values[raw_v].memory =
+                    ir::MemorySpace::HostByConstruction;
                 address_taken_locals_.insert(e->captures[i]);
                 bind(e->captures[i], raw_v);
             } else {
@@ -1325,7 +1334,8 @@ std::string Lowering::generate_lambda_helper(ast::LambdaExpr *e) {
                         ck == PrimitiveKind::CLASS ||
                         ck == PrimitiveKind::OPTIONAL ||
                         ck == PrimitiveKind::RESULT) {
-                        child_fn.values[final_v].is_host_ptr = true;
+                        child_fn.values[final_v].memory =
+                            ir::MemorySpace::HostByConstruction;
                     }
                 }
                 bind(e->captures[i], final_v);
@@ -1507,7 +1517,7 @@ ir::IrValueId Lowering::lower_lambda_expr(ast::LambdaExpr *e) {
         // closures que escapan).  Coste vs RAW_ALLOC: 1 slot extra en
         // HandleTable + zero-init del payload (que ya hacia rawalloc).
         env_addr = fn_->new_value(ir::IrType::PTR);
-        fn_->values[env_addr].is_host_ptr = true;
+        fn_->values[env_addr].memory = ir::MemorySpace::HostByConstruction;
         const ir::IrValueId v_size = emit_const(
             ir::IrType::I64, static_cast<uint64_t>(N * 8), e->loc.line);
         ir::IrInstr ins{};
@@ -1557,8 +1567,11 @@ ir::IrValueId Lowering::lower_lambda_expr(ast::LambdaExpr *e) {
             ir::IrValueId addr_i = env_addr;
             if (i > 0) {
                 addr_i = fn_->new_value(ir::IrType::PTR);
-                if (fn_->values[env_addr].is_host_ptr) {
-                    fn_->values[addr_i].is_host_ptr = true;
+                // Deducido: desplazar una base del anfitrion no cambia de
+                // memoria.
+                if (fn_->values[env_addr].is_host_ptr()) {
+                    fn_->values[addr_i].memory =
+                        ir::MemorySpace::HostByInference;
                 }
                 ir::IrValueId off = emit_const(
                     ir::IrType::I64, static_cast<uint64_t>(i * 8), e->loc.line);
@@ -1599,7 +1612,7 @@ ir::IrValueId Lowering::lower_lambda_expr(ast::LambdaExpr *e) {
     // -------------------------------------------------------------
     ir::IrValueId fv_addr = fn_->new_value(ir::IrType::PTR);
     if (e->env_owned_by_field) {
-        fn_->values[fv_addr].is_host_ptr = true;
+        fn_->values[fv_addr].memory = ir::MemorySpace::HostByConstruction;
         const ir::IrValueId v_size =
             emit_const(ir::IrType::I64, 16, e->loc.line);
         ir::IrInstr al{};
@@ -1632,7 +1645,7 @@ ir::IrValueId Lowering::lower_lambda_expr(ast::LambdaExpr *e) {
         ir::IrValueId fv_plus_8 = fn_->new_value(ir::IrType::PTR);
         // Si el slot es heap (RAW_ALLOC, env_owned_by_field), el STORE a
         // [slot+8] debe usar movh (host).
-        fn_->values[fv_plus_8].is_host_ptr = fn_->values[fv_addr].is_host_ptr;
+        fn_->values[fv_plus_8].memory = fn_->values[fv_addr].memory;
         ir::IrValueId off8 = emit_const(ir::IrType::I64, 8, e->loc.line);
         ir::IrInstr ad{};
         ad.op = ir::IrOp::ADD;
@@ -1707,6 +1720,9 @@ void Lowering::generate_extern_cfn_thunks(ir::IrModule &out) {
             ins.source_line = 0;
             fn.append(entry, std::move(ins));
         }
+        /* Y de que memoria es lo que devuelve, por el mismo sitio que la
+         * llamada directa: el thunk reenvia a la MISMA nativa. */
+        mark_extern_return_memory(fn, dst, sig->return_type);
         {
             ir::IrInstr ret{};
             ret.op = ir::IrOp::RET;
@@ -1998,7 +2014,7 @@ bool Lowering::try_lower_struct_default_ctor(ast::CallExpr *e,
             // Agregado -> host en los tres modos, no solo en AOT.
             al.host_alloca = true;
             emit(current_block_, std::move(al));
-            fn_->values[addr].is_host_ptr = true;
+            fn_->values[addr].memory = ir::MemorySpace::HostByConstruction;
         } else {
             addr = lower_expr(fa->base.get());
             if (addr == ir::IR_NO_VALUE) {
@@ -2238,7 +2254,8 @@ bool Lowering::try_lower_namespaced_call(ast::CallExpr *e, ir::IrValueId &out) {
         al.imm = si_ns.bytes;
         if (si_ns.host_buffer) {
             al.host_alloca = true;
-            fn_->values[v_call_retbuf_ns].is_host_ptr = true;
+            fn_->values[v_call_retbuf_ns].memory =
+                ir::MemorySpace::HostByConstruction;
         }
         al.source_line = e->loc.line;
         emit(current_block_, std::move(al));
@@ -2626,10 +2643,17 @@ bool Lowering::try_lower_indirect_call(ast::CallExpr *e, ir::IrValueId &out) {
     std::vector<ir::IrValueId> args;
     if (!lower_indirect_call_args(e, e->callee->result_type, args))
         return ir::IR_NO_VALUE;
-    const ir::IrType rt = ir_type_from_primitive(e->result_type.kind);
-    const ir::IrValueId dst = (e->result_type.kind == PrimitiveKind::VOID)
-                                  ? ir::IR_NO_VALUE
-                                  : fn_->new_value(rt);
+    /* Todo lo que el retorno decide, de una vez y en un solo sitio.  Hasta
+     * aqui solo lo preguntaba el camino directo, y por el NOMBRE del destino
+     * (@c sret_info_for); una llamada indirecta no tiene nombre, asi que nadie
+     * preguntaba -- ni se reservaba el hueco ni se pasaba su direccion, y el
+     * llamado escribia donde apuntara la ranura --.  El TIPO la contesta, y
+     * aqui se conoce. */
+    const SretCall sc = prepare_sret_call(sret_info(e->result_type),
+                                          e->result_type, e->loc.line);
+    if (sc.uses_buffer) args.insert(args.begin(), sc.buffer);
+    const ir::IrType rt = sc.call_type;
+    const ir::IrValueId dst = sc.dst;
     // El callee puede ser un LAMBDA (fn(...), fat-pointer de 16 bytes) o un
     // puntero a funcion CRUDO (cfn(...), 8 bytes).  Lambda: fnp es el
     // PUNTERO al slot {fn_addr, env} -> cargar fn_addr de [fnp+0] y env de
@@ -2658,7 +2682,7 @@ bool Lowering::try_lower_indirect_call(ast::CallExpr *e, ir::IrValueId &out) {
             // backends para que la carga de env emita movh/mov correcto.
             // Antes solo se propagaba en native_poo (AOT) -> en VM/JIT un
             // closure-en-campo cargaba env con mov (vm_mem) -> basura.
-            fn_->values[fnp8].is_host_ptr = fn_->values[fnp].is_host_ptr;
+            fn_->values[fnp8].memory = fn_->values[fnp].memory;
         }
         const ir::IrValueId env =
             emit_load_typed(fnp8, ir::IrType::I64, e->loc.line);
@@ -2675,7 +2699,7 @@ bool Lowering::try_lower_indirect_call(ast::CallExpr *e, ir::IrValueId &out) {
         ins.operands = std::move(cargs);
         ins.source_line = e->loc.line;
         emit(current_block_, std::move(ins));
-        out = dst;
+        out = sc.result();
         return true;
     }
     // Naturaleza HOST vs VM del puntero: un cfn cuyo valor es una direccion
@@ -2686,7 +2710,7 @@ bool Lowering::try_lower_indirect_call(ast::CallExpr *e, ir::IrValueId &out) {
     // nativa, la misma que usa `ffi_call`.  La distincion sale del dato que
     // el IR ya lleva por valor (@c is_host_ptr), igual que decide `mov`
     // frente a `movh`; no hace falta marcarla en el tipo.
-    if (fnp != ir::IR_NO_VALUE && fn_->values[fnp].is_host_ptr) {
+    if (fnp != ir::IR_NO_VALUE && fn_->values[fnp].is_host_ptr()) {
         ir::IrInstr ni{};
         ni.op = ir::IrOp::CALLN;
         ni.type = rt;
@@ -2698,7 +2722,7 @@ bool Lowering::try_lower_indirect_call(ast::CallExpr *e, ir::IrValueId &out) {
             ni.operands.push_back(a);
         ni.source_line = e->loc.line;
         emit(current_block_, std::move(ni));
-        out = dst;
+        out = sc.result();
         return true;
     }
     ir::IrInstr ins{};
@@ -2714,7 +2738,7 @@ bool Lowering::try_lower_indirect_call(ast::CallExpr *e, ir::IrValueId &out) {
     ins.call_abi_regs = e->callee->result_type.fn_param_abi_regs();
     ins.source_line = e->loc.line;
     emit(current_block_, std::move(ins));
-    out = dst;
+    out = sc.result();
     return true;
 }
 

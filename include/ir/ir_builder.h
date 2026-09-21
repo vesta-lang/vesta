@@ -180,7 +180,7 @@ class IrBuilder {
     /// Libera un host_ptr devuelto por @c raw_alloc.
     void raw_free(IrValueId ptr);
 
-    /// Lee @p type bytes desde el puntero @p ptr.  Si @c ptr.is_host_ptr,
+    /// Lee @p type bytes desde el puntero @p ptr.  Si @c ptr.is_host_ptr(),
     /// el emisor usa @c movh (memoria host); sino @c mov (memoria VM).
     IrValueId load(IrValueId ptr, IrType type);
     /// Escribe @p value (de tipo @p type) en @p ptr.

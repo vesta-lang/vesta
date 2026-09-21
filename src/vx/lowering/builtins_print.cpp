@@ -252,10 +252,9 @@ bool Lowering::try_lower_print_builtins(ast::CallExpr *e, Builtin b,
      * evita construir los ayudantes para una llamada que no va a usarlos. */
     if (!(is_print || is_println || is_echo || is_flush || is_gc_collect ||
           is_gc_finalize_all || scalar || is_print_pad || is_write ||
-          is_term_clear ||
-          is_term_clear_line || is_term_move || is_term_save_cursor ||
-          is_term_restore_cursor || is_term_hide_cursor ||
-          is_term_show_cursor || is_term_reset))
+          is_term_clear || is_term_clear_line || is_term_move ||
+          is_term_save_cursor || is_term_restore_cursor ||
+          is_term_hide_cursor || is_term_show_cursor || is_term_reset))
         return false;
 
     auto emit_print_newline = [&](uint32_t line) {
@@ -458,8 +457,8 @@ bool Lowering::try_lower_print_builtins(ast::CallExpr *e, Builtin b,
             if (native_poo_) {
                 emit_io_prim(scalar->bare, {vf}, e->loc.line);
             } else {
-                ir::IrValueId bits = emit_ir_unop(
-                    ir::IrOp::BITCAST, vf, ir::IrType::I64, e->loc.line);
+                ir::IrValueId bits = emit_ir_unop(ir::IrOp::BITCAST, vf,
+                                                  ir::IrType::I64, e->loc.line);
                 emit_native_call(kVestaIoLib, scalar->vm, {bits},
                                  ir::IrType::VOID, e->loc.line);
             }
@@ -545,8 +544,8 @@ bool Lowering::try_lower_print_builtins(ast::CallExpr *e, Builtin b,
      * se ejecute, que es justo lo que no puede pasar. */
     if (is_write) {
         if (e->args.size() != 2) {
-            return builtin_error(
-                e->loc, "'write' requiere (ptr, len)", out_value);
+            return builtin_error(e->loc, "'write' requiere (ptr, len)",
+                                 out_value);
         }
         ir::IrValueId v_ptr = lower_expr(e->args[0].get());
         ir::IrValueId v_len = lower_expr(e->args[1].get());
@@ -556,7 +555,7 @@ bool Lowering::try_lower_print_builtins(ast::CallExpr *e, Builtin b,
         }
         v_len = cast_if_needed(v_len, fn_->values[v_len].type, ir::IrType::I64,
                                e->loc.line, /*is_explicit=*/true);
-        const bool is_host_mem = fn_->values[v_ptr].is_host_ptr;
+        const bool is_host_mem = fn_->values[v_ptr].is_host_ptr();
         if (native_poo_) {
             emit_io_prim("__vx_write", {v_ptr, v_len}, e->loc.line);
         } else if (is_host_mem) {

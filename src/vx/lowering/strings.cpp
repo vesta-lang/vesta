@@ -67,14 +67,14 @@ std::string Lowering::ensure_strcmp_helper() {
     hf.ret_type = ir::IrType::I64;
     const ir::IrValueId p_pa = hf.new_value(ir::IrType::PTR, "%pa");
     hf.values[p_pa].is_param = true;
-    hf.values[p_pa].is_host_ptr = true;
+    hf.values[p_pa].memory = ir::MemorySpace::HostByConstruction;
     hf.params.push_back(p_pa);
     const ir::IrValueId p_la = hf.new_value(ir::IrType::I64, "%la");
     hf.values[p_la].is_param = true;
     hf.params.push_back(p_la);
     const ir::IrValueId p_pb = hf.new_value(ir::IrType::PTR, "%pb");
     hf.values[p_pb].is_param = true;
-    hf.values[p_pb].is_host_ptr = true;
+    hf.values[p_pb].memory = ir::MemorySpace::HostByConstruction;
     hf.params.push_back(p_pb);
     const ir::IrValueId p_lb = hf.new_value(ir::IrType::I64, "%lb");
     hf.values[p_lb].is_param = true;
@@ -237,7 +237,8 @@ ir::IrValueId Lowering::build_native_string_interp(ast::StringLitExpr *slit) {
     //    crecen inline (SSO) o transicionan a HEAP via
     //    build_native_string_append_inplace.  El slot vive en host stack.
     const ir::IrValueId v_slot = fn_->new_value(ir::IrType::PTR);
-    if (native_poo_) fn_->values[v_slot].is_host_ptr = true;
+    if (native_poo_)
+        fn_->values[v_slot].memory = ir::MemorySpace::HostByConstruction;
     {
         ir::IrInstr al{};
         al.op = ir::IrOp::ALLOCA;
@@ -263,7 +264,8 @@ ir::IrValueId Lowering::build_native_string_interp(ast::StringLitExpr *slit) {
         const uint64_t plen = static_cast<uint64_t>(part.size());
         // Buffer scratch de plen bytes (sin nul; append no lo necesita).
         ir::IrValueId v_scratch = stack_alloc_buf(plen, ln, native_poo_);
-        if (native_poo_) fn_->values[v_scratch].is_host_ptr = true;
+        if (native_poo_)
+            fn_->values[v_scratch].memory = ir::MemorySpace::HostByConstruction;
         // STOREs empaquetados (qword/dword/word/byte) de los bytes.
         std::vector<uint8_t> data(part.begin(), part.end());
         auto store_chunk = [&](uint64_t off, uint64_t val, ir::IrType ty) {
@@ -361,7 +363,8 @@ ir::IrValueId Lowering::build_native_string_interp(ast::StringLitExpr *slit) {
             }
             // scratch de 4 bytes (max UTF-8).
             ir::IrValueId v_scr = stack_alloc_buf(4, ln, native_poo_);
-            if (native_poo_) fn_->values[v_scr].is_host_ptr = true;
+            if (native_poo_)
+                fn_->values[v_scr].memory = ir::MemorySpace::HostByConstruction;
             const std::string ctoa_fn = ensure_ctoa_helper();
             ir::IrValueId v_len =
                 emit_call(ctoa_fn, {v_scr, v_cp}, ir::IrType::I64, ln);
@@ -383,7 +386,8 @@ ir::IrValueId Lowering::build_native_string_interp(ast::StringLitExpr *slit) {
             if (v_ch == ir::IR_NO_VALUE) return false;
             // Buffer scratch de 1 byte con el char.
             ir::IrValueId v_scr = stack_alloc_buf(1, ln, native_poo_);
-            if (native_poo_) fn_->values[v_scr].is_host_ptr = true;
+            if (native_poo_)
+                fn_->values[v_scr].memory = ir::MemorySpace::HostByConstruction;
             emit_store_typed(v_scr, v_ch, ir::IrType::U8, ln);
             build_native_string_append_inplace(
                 v_slot, v_scr, emit_const(ir::IrType::I64, 1, ln), ln);
@@ -409,7 +413,8 @@ ir::IrValueId Lowering::build_native_string_interp(ast::StringLitExpr *slit) {
             }
             // scratch de 24 bytes (suficiente para i64 con signo).
             ir::IrValueId v_scr = stack_alloc_buf(24, ln, native_poo_);
-            if (native_poo_) fn_->values[v_scr].is_host_ptr = true;
+            if (native_poo_)
+                fn_->values[v_scr].memory = ir::MemorySpace::HostByConstruction;
             // CALL al helper itoa (no inline): evita el const-fold
             // mid-expression que daba longitudes erroneas con argumento
             // constante (el itoa vive en una funcion aparte con loops).
@@ -430,7 +435,8 @@ ir::IrValueId Lowering::build_native_string_interp(ast::StringLitExpr *slit) {
                 emit_ir_unop(ir::IrOp::ZEXT, v_b, ir::IrType::I64, ln);
             // scratch de 8 bytes (cabe "false" + margen).
             ir::IrValueId v_scr = stack_alloc_buf(8, ln, native_poo_);
-            if (native_poo_) fn_->values[v_scr].is_host_ptr = true;
+            if (native_poo_)
+                fn_->values[v_scr].memory = ir::MemorySpace::HostByConstruction;
             const std::string btoa_fn = ensure_btoa_helper();
             ir::IrValueId v_len =
                 emit_call(btoa_fn, {v_scr, v_b64}, ir::IrType::I64, ln);
@@ -474,7 +480,8 @@ ir::IrValueId Lowering::load_native_string_field(ir::IrValueId v_slot,
     }
     const ir::IrType rt = as_host ? ir::IrType::PTR : ir::IrType::I64;
     ir::IrValueId v_val = fn_->new_value(rt);
-    if (as_host) fn_->values[v_val].is_host_ptr = true;
+    if (as_host)
+        fn_->values[v_val].memory = ir::MemorySpace::HostByConstruction;
     ir::IrInstr ld{};
     ld.op = ir::IrOp::LOAD;
     ld.type = ir::IrType::I64;
@@ -601,7 +608,7 @@ ir::IrValueId Lowering::emit_native_str_data_ptr(ir::IrValueId v_slot,
     // ver ensure_strdata_helper / el comentario del blacklist del inliner).
     const std::string name = ensure_strdata_helper();
     ir::IrValueId v = fn_->new_value(ir::IrType::PTR);
-    fn_->values[v].is_host_ptr = true;
+    fn_->values[v].memory = ir::MemorySpace::HostByConstruction;
     ir::IrInstr ca{};
     ca.op = ir::IrOp::CALL;
     ca.type = ir::IrType::PTR;
@@ -671,7 +678,7 @@ std::string Lowering::ensure_str_cplen_helper() {
     hf.ret_type = ir::IrType::I64;
     const ir::IrValueId p_p = hf.new_value(ir::IrType::PTR, "%p");
     hf.values[p_p].is_param = true;
-    hf.values[p_p].is_host_ptr = true;
+    hf.values[p_p].memory = ir::MemorySpace::HostByConstruction;
     hf.params.push_back(p_p);
     const ir::IrValueId p_blen = hf.new_value(ir::IrType::I64, "%blen");
     hf.values[p_blen].is_param = true;
@@ -798,7 +805,7 @@ std::string Lowering::ensure_str_to_utf16_helper() {
     hf.ret_type = ir::IrType::PTR;
     const ir::IrValueId p_p = hf.new_value(ir::IrType::PTR, "%p");
     hf.values[p_p].is_param = true;
-    hf.values[p_p].is_host_ptr = true;
+    hf.values[p_p].memory = ir::MemorySpace::HostByConstruction;
     hf.params.push_back(p_p);
     const ir::IrValueId p_blen = hf.new_value(ir::IrType::I64, "%blen");
     hf.values[p_blen].is_param = true;
@@ -832,7 +839,7 @@ std::string Lowering::ensure_str_to_utf16_helper() {
     ir::IrValueId v_units = bin(ir::IrOp::ADD, p_blen, cst(1));
     ir::IrValueId v_bytes = bin(ir::IrOp::SHL, v_units, cst(1)); // *2
     ir::IrValueId v_out = fn_->new_value(ir::IrType::PTR);
-    fn_->values[v_out].is_host_ptr = true;
+    fn_->values[v_out].memory = ir::MemorySpace::HostByConstruction;
     {
         ir::IrInstr al{};
         al.op = ir::IrOp::RAW_ALLOC;
@@ -983,7 +990,7 @@ ir::IrValueId Lowering::emit_native_str_to_utf16(ir::IrValueId v_ptr,
                                                  uint32_t source_line) {
     const std::string name = ensure_str_to_utf16_helper();
     ir::IrValueId v = fn_->new_value(ir::IrType::PTR);
-    fn_->values[v].is_host_ptr = true;
+    fn_->values[v].memory = ir::MemorySpace::HostByConstruction;
     ir::IrInstr ca{};
     ca.op = ir::IrOp::CALL;
     ca.type = ir::IrType::PTR;
@@ -1039,7 +1046,7 @@ std::string Lowering::ensure_strdata_helper() {
     hf.ret_type = ir::IrType::PTR;
     const ir::IrValueId p_s = hf.new_value(ir::IrType::PTR, "%s");
     hf.values[p_s].is_param = true;
-    hf.values[p_s].is_host_ptr = true;
+    hf.values[p_s].memory = ir::MemorySpace::HostByConstruction;
     hf.params.push_back(p_s);
     const ir::IrBlockId e = hf.new_block("entry");
 
@@ -1079,7 +1086,7 @@ std::string Lowering::ensure_strlen_helper() {
     hf.ret_type = ir::IrType::I64;
     const ir::IrValueId p_s = hf.new_value(ir::IrType::PTR, "%s");
     hf.values[p_s].is_param = true;
-    hf.values[p_s].is_host_ptr = true;
+    hf.values[p_s].memory = ir::MemorySpace::HostByConstruction;
     hf.params.push_back(p_s);
     const ir::IrBlockId e = hf.new_block("entry");
 
@@ -1139,7 +1146,7 @@ void Lowering::emit_native_str_make_writable(ir::IrValueId v_slot,
         const ir::IrValueId v_cap = emit_ir_binop(ir::IrOp::ADD, v_len, v_uno,
                                                   ir::IrType::I64, source_line);
         ir::IrValueId v_buf = fn_->new_value(ir::IrType::PTR);
-        fn_->values[v_buf].is_host_ptr = true;
+        fn_->values[v_buf].memory = ir::MemorySpace::HostByConstruction;
         {
             ir::IrInstr ra{};
             ra.op = ir::IrOp::RAW_ALLOC;
@@ -1189,7 +1196,7 @@ void Lowering::emit_native_str_free_if_heap(ir::IrValueId v_slot,
     ir::IrValueId v_to_free_i = emit_ir_binop(ir::IrOp::AND, v_ptr0, v_mask,
                                               ir::IrType::I64, source_line);
     ir::IrValueId v_to_free = fn_->new_value(ir::IrType::PTR);
-    fn_->values[v_to_free].is_host_ptr = true;
+    fn_->values[v_to_free].memory = ir::MemorySpace::HostByConstruction;
     {
         ir::IrInstr bc{};
         bc.op = ir::IrOp::BITCAST;
@@ -1271,7 +1278,7 @@ void Lowering::emit_str_meta_sso(ir::IrValueId v_slot, ir::IrValueId v_len,
     // store-forwarding del move se resuelve via MEMCPY (no i64 LOADs),
     // ver emit_native_str_move_copy.
     ir::IrValueId v_addr23 = fn_->new_value(ir::IrType::PTR);
-    fn_->values[v_addr23].is_host_ptr = fn_->values[v_slot].is_host_ptr;
+    fn_->values[v_addr23].memory = fn_->values[v_slot].memory;
     {
         ir::IrValueId v_off = emit_const(ir::IrType::I64, 23, source_line);
         ir::IrInstr ad{};
@@ -1363,7 +1370,8 @@ ir::IrValueId Lowering::emit_folded_string_blob(const std::string &utf8,
     }
 
     const ir::IrValueId v = emit_str_lit_addr(slot, line);
-    fn_->values[v].is_host_ptr = true; // gdata vive en memoria host
+    fn_->values[v].memory =
+        ir::MemorySpace::HostByConstruction; // gdata vive en memoria host
     return v;
 }
 
@@ -1451,7 +1459,7 @@ ir::IrValueId Lowering::emit_strraw(ir::IrValueId v_str, uint32_t source_line) {
     // Es PTR-typed con is_host_ptr=true para que LOAD/STORE posteriores
     // emitan movh (memoria host) en vez de mov (memoria VM).
     const ir::IrValueId v_ptr = fn_->new_value(ir::IrType::PTR);
-    fn_->values[v_ptr].is_host_ptr = true;
+    fn_->values[v_ptr].memory = ir::MemorySpace::HostByConstruction;
     ir::IrInstr ins{};
     ins.op = ir::IrOp::STRRAW;
     ins.type = ir::IrType::PTR;
@@ -1553,7 +1561,7 @@ std::string Lowering::ensure_ctoa_helper() {
     hf.ret_type = ir::IrType::I64;
     const ir::IrValueId p_buf = hf.new_value(ir::IrType::PTR, "%buf");
     hf.values[p_buf].is_param = true;
-    hf.values[p_buf].is_host_ptr = true;
+    hf.values[p_buf].memory = ir::MemorySpace::HostByConstruction;
     hf.params.push_back(p_buf);
     const ir::IrValueId p_cp = hf.new_value(ir::IrType::I64, "%cp");
     hf.values[p_cp].is_param = true;
@@ -1589,7 +1597,7 @@ std::string Lowering::ensure_ctoa_helper() {
         ir::IrValueId v_dst = p_buf;
         if (off != 0) {
             v_dst = fn_->new_value(ir::IrType::PTR);
-            fn_->values[v_dst].is_host_ptr = true;
+            fn_->values[v_dst].memory = ir::MemorySpace::HostByConstruction;
             ir::IrInstr ad{};
             ad.op = ir::IrOp::ADD;
             ad.type = ir::IrType::I64;
@@ -1800,7 +1808,7 @@ std::string Lowering::ensure_btoa_helper() {
     hf.ret_type = ir::IrType::I64;
     const ir::IrValueId p_buf = hf.new_value(ir::IrType::PTR, "%buf");
     hf.values[p_buf].is_param = true;
-    hf.values[p_buf].is_host_ptr = true;
+    hf.values[p_buf].memory = ir::MemorySpace::HostByConstruction;
     hf.params.push_back(p_buf);
     const ir::IrValueId p_b = hf.new_value(ir::IrType::I64, "%b");
     hf.values[p_b].is_param = true;

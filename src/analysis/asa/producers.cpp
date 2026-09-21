@@ -1297,6 +1297,12 @@ void register_builtin_producers() {
      * disparaba no habia forma de saber si es que no lo vio o es que decidio
      * no tocarlo -- y las quince razones para no verlo no las contaba nadie. */
     register_bulk_memory_producer();
+    /* Y el que dice DE QUIEN es el codigo al que salta una llamada.  Lo
+     * calculaba solo el pase que elige como emitirla, asi que el perfilado
+     * tenia que deducirlo por rangos de direccion en ejecucion -- adivinando,
+     * y pagandolo en el camino caliente -- y la traza no podia decir de quien
+     * era un marco.  Es la misma pregunta y ahora se hace una sola vez. */
+    register_code_origin_producer();
     /* Y el de las vistas `@overlay`: lo que el frontend SABE de como esta
      * puesto un formato, que se quedaba dentro del comprobador de tipos.  Sin
      * el, "que bytes cubre este campo" no se le podia preguntar a nadie -- ni

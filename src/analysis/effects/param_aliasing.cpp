@@ -87,14 +87,27 @@ bool proven_overlap(const ParamReach &a, const ParamReach &b) {
  * con nadie.
  */
 bool proven_disjoint(const ParamReach &a, const ParamReach &b) {
-    /* El respaldo primero: dos raices distintas ya son disjuntas y no hace
-     * falta mirar ningun cuerpo. */
-    if (no_alias(a.base, b.base)) return true;
+    /* Se pregunta por lo DEMOSTRADO y no por @c may_alias -- el mismo corte
+     * que ya se hizo arriba con @ref proven_overlap, y que aqui se habia
+     * quedado sin hacer.
+     *
+     * @c may_alias es el oraculo de la OPTIMIZACIoN: ahi una promesa declarada
+     * cuenta, y dos parametros que declaran su direccion se dan por disjuntos
+     * porque el contrato lo dice.  Correcto para decidir si se reordena; y
+     * usarlo AQUi hacia que la comprobacion de una promesa se apoyara en la
+     * promesa -- `outer(borrow_mut p, borrow_mut q)` llamando a `inner(p, q)`
+     * daba la llamada por disjunta porque `p` y `q` prometen, y con eso la de
+     * `inner` quedaba "verificada".  La cadena terminaba en una suposicion.
+     *
+     * Con la evidencia sola se afirma menos y no se afirma de mas: lo que
+     * antes salia `Disjoint` por el contrato ahora sale `Unknown`, que es lo
+     * que de verdad se sabe. */
+    if (must_not_overlap(a.base, b.base)) return true;
     if (!a.known || !b.known || !a.complete || !b.complete) return false;
     if (a.reached.is_top || b.reached.is_top) return false;
     for (const AbstractLoc &la : a.reached.locs)
         for (const AbstractLoc &lb : b.reached.locs)
-            if (may_alias(la, lb)) return false;
+            if (!must_not_overlap(la, lb)) return false;
     return true;
 }
 

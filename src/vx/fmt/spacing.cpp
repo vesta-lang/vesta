@@ -87,44 +87,6 @@ bool keyword_takes_paren(TokenKind k) {
 }
 
 /**
- * @brief Indica si el token es un operador binario INEQUIVOCO.
- *
- * Inequivoco quiere decir que no puede ser otra cosa en ningun contexto.  Los
- * que si pueden -- `*`, `&`, `<`, `>` -- se quedan fuera a proposito.
- *
- * @param k Categoria del token.
- * @return Cierto si siempre es binario.
- */
-bool always_binary(TokenKind k) {
-    switch (k) {
-    case TokenKind::SLASH:
-    case TokenKind::PERCENT:
-    case TokenKind::EQ:
-    case TokenKind::NEQ:
-    case TokenKind::LE:
-    case TokenKind::GE:
-    case TokenKind::AND_AND:
-    case TokenKind::OR_OR:
-    case TokenKind::ASSIGN:
-    case TokenKind::PLUS_ASSIGN:
-    case TokenKind::MINUS_ASSIGN:
-    case TokenKind::STAR_ASSIGN:
-    case TokenKind::SLASH_ASSIGN:
-    case TokenKind::PERCENT_ASSIGN:
-    case TokenKind::AMP_ASSIGN:
-    case TokenKind::PIPE_ASSIGN:
-    case TokenKind::CARET_ASSIGN:
-    case TokenKind::SHL_ASSIGN:
-    case TokenKind::SHR_ASSIGN:
-    case TokenKind::PIPE:
-    case TokenKind::CARET:
-    case TokenKind::FAT_ARROW:
-    case TokenKind::ARROW: return true;
-    default: return false;
-    }
-}
-
-/**
  * @brief Indica si el token es un prefijo que va PEGADO a lo que sigue (`R62`).
  * @param k Categoria del token.
  * @return Cierto si nunca lleva espacio detras.

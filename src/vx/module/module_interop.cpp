@@ -1322,8 +1322,8 @@ void export_typechecker_to_vxi(const TypeChecker &tc, uint64_t source_hash,
              * anterior: sin esto un `@Provides` de otro modulo se ignoraba en
              * silencio. */
             if (cand->provides_builtin != Builtin::Unknown)
-                s.provides_builtin = std::string(
-                    builtin_name(cand->provides_builtin));
+                s.provides_builtin =
+                    std::string(builtin_name(cand->provides_builtin));
             s.is_internal =
                 tc.function_is_internal(fname); // NS.3: package-scoped
             s.param_types.reserve(cand->param_types.size());
@@ -2080,7 +2080,8 @@ void inject_generic_templates_from_vxi(
              * REESCRITURA, no la declaracion.
              *
              * Registrarlo no lo hace escribible: los que llegan por aqui son
-             * privados o empiezan por `__`, que esta reservado al compilador. */
+             * privados o empiezan por `__`, que esta reservado al compilador.
+             */
             const std::string label =
                 !sym.mangled_label.empty()
                     ? sym.mangled_label
@@ -2229,8 +2230,7 @@ void inject_generic_templates_from_vxi(
          * compilado y su `.vxi` al lado --. */
         if (!wanted.empty() && wanted.find(nm) == wanted.end()) {
             bool found = false;
-            for (size_t sep = nm.find("__");
-                 sep != std::string::npos && !found;
+            for (size_t sep = nm.find("__"); sep != std::string::npos && !found;
                  sep = nm.find("__", sep + 1)) {
                 if (sep + 2 >= nm.size()) break;
                 found = wanted.find(nm.substr(sep + 2)) != wanted.end();
@@ -2394,6 +2394,45 @@ static EnumLayout enum_layout_from_vxi_(TypeChecker &tc, const VxiSymbol &s,
 // `import "x";` o `import "x" as alias;` requieren namespace support,
 // pendiente en M2.x).
 // ---------------------------------------------------------------------------
+/**
+ * @brief Lo que se va a inyectar: QUE se pidio y CUAL de los simbolos del
+ *        modulo lo cumple.
+ *
+ * Los dos juntos porque un nombre puede cumplirse con VARIOS: un grupo
+ * sobrecargado exporta una entrada por hermana, cada una con su etiqueta.
+ */
+struct PendingSymbol {
+    const TypeChecker::VxiOnlyEntry *asked =
+        nullptr;          ///< lo que pidio el `only`
+    size_t sym_index = 0; ///< indice en `mod.symbols` que lo cumple
+};
+
+/**
+ * @brief Anyade a @p out TODAS las entradas del modulo que se llaman como
+ *        @p asked, no la primera.
+ *
+ * Antes esto se hacia con un mapa nombre -> UN indice, y `emplace` se queda
+ * con el primero: pedir `only h` traia la hermana que cayera antes en el
+ * fichero y las demas no existian para quien importa.  Eso no daba un error
+ * -- la llamada resolvia contra la unica que habia llegado --: daba OTRA
+ * funcion, y en silencio.
+ *
+ * @param mod   Modulo importado.
+ * @param asked La entrada del `only` que se esta resolviendo.
+ * @param out   Recibe una @ref PendingSymbol por cada coincidencia.
+ */
+static void collect_named_symbols(const VxiModule &mod,
+                                  const TypeChecker::VxiOnlyEntry &asked,
+                                  std::vector<PendingSymbol> &out) {
+    for (size_t i = 0; i < mod.symbols.size(); ++i) {
+        if (mod.symbols[i].name != asked.name) continue;
+        PendingSymbol p;
+        p.asked = &asked;
+        p.sym_index = i;
+        out.push_back(p);
+    }
+}
+
 void import_vxi_into_typechecker(
     TypeChecker &tc, const VxiModule &mod,
     const std::vector<TypeChecker::VxiOnlyEntry> &only_symbols,
@@ -2433,12 +2472,12 @@ void import_vxi_into_typechecker(
         default: return false;
         }
     };
-    std::vector<const TypeChecker::VxiOnlyEntry *> ordered;
+    std::vector<PendingSymbol> ordered;
     ordered.reserve(only_symbols.size());
     for (const auto &os : only_symbols)
-        if (is_type_sym(os)) ordered.push_back(&os);
+        if (is_type_sym(os)) collect_named_symbols(mod, os, ordered);
     for (const auto &os : only_symbols)
-        if (!is_type_sym(os)) ordered.push_back(&os);
+        if (!is_type_sym(os)) collect_named_symbols(mod, os, ordered);
 
     // Mapa nombre-de-tipo-en-el-ORIGEN -> local_name.  El .vxi serializa los
     // param_types/return_type de los metodos con el nombre CANONICO (mangled
@@ -2449,10 +2488,9 @@ void import_vxi_into_typechecker(
     // modulo no resolveria cross-module (`a / b` con a,b:u128 daba "u128 no
     // declara /").
     std::unordered_map<std::string, Type> origin_to_local;
-    for (const auto *os_ptr : ordered) {
-        auto it = by_name.find(os_ptr->name);
-        if (it == by_name.end()) continue;
-        const VxiSymbol &s = mod.symbols[it->second];
+    for (const auto &pending : ordered) {
+        const TypeChecker::VxiOnlyEntry *os_ptr = pending.asked;
+        const VxiSymbol &s = mod.symbols[pending.sym_index];
         switch (s.kind) {
         case VxiSymbolKind::STRUCT:
         case VxiSymbolKind::CLASS: break;
@@ -2514,16 +2552,12 @@ void import_vxi_into_typechecker(
         return base;
     };
 
-    for (const auto *os_ptr : ordered) {
-        const auto &os = *os_ptr;
-        auto it = by_name.find(os.name);
-        if (it == by_name.end()) {
-            // El simbolo solicitado no existe en el modulo importado.
-            // El caller (compiler.cpp) emitira un diagnostico claro.
-            // Aqui solo skipeamos para no abortar las demas inyecciones.
-            continue;
-        }
-        const VxiSymbol &s = mod.symbols[it->second];
+    /* Un simbolo pedido que el modulo no tiene no llega aqui: `ordered` se
+     * construyo de sus coincidencias, asi que sin ninguna no hay entrada.  El
+     * diagnostico lo da el caller. */
+    for (const auto &pending : ordered) {
+        const auto &os = *pending.asked;
+        const VxiSymbol &s = mod.symbols[pending.sym_index];
         const std::string local_name = os.rename.empty() ? os.name : os.rename;
 
         // Clave CANONICA del simbolo (ns_path -> "std__ntwindows__T").  Es la
@@ -3001,7 +3035,8 @@ void register_namespace_for_import(TypeChecker &tc,
                 cmi.link_name = mi.mangled_label;
                 cmi.param_types.reserve(mi.param_types.size());
                 for (const auto &pt : mi.param_types)
-                    cmi.param_types.push_back(resolve_with_mangled_fallback(pt));
+                    cmi.param_types.push_back(
+                        resolve_with_mangled_fallback(pt));
                 L.methods.push_back(std::move(cmi));
             }
             tc.register_imported_struct(mangled, std::move(L));

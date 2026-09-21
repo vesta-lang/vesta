@@ -289,7 +289,7 @@ bool Lowering::mc_emit_copy(ir::IrValueId v_idx, ast::Expr *limit,
     // address-taken y su binding es la direccion del slot, no el valor) o un
     // host_ptr, bailar: usarlo como indice produciria basura.
     if (idx_ty == ir::IrType::PTR || idx_ty == ir::IrType::F32 ||
-        idx_ty == ir::IrType::F64 || fn_->values[v_idx].is_host_ptr)
+        idx_ty == ir::IrType::F64 || fn_->values[v_idx].is_host_ptr())
         return false;
     const ir::IrValueId base_dst = lower_expr(dst_base);
     const ir::IrValueId base_src = lower_expr(src_base);
@@ -343,7 +343,9 @@ bool Lowering::mc_emit_copy(ir::IrValueId v_idx, ast::Expr *limit,
     // dst_ptr = base_dst + byteoff;  src_ptr = base_src + byteoff (HOST).
     auto ptr_add = [&](ir::IrValueId base, ir::IrValueId off) -> ir::IrValueId {
         const ir::IrValueId d = fn_->new_value(ir::IrType::PTR);
-        fn_->values[d].is_host_ptr = true; // verificado HOST en mc_match_copy
+        fn_->values[d].memory =
+            ir::MemorySpace::HostByConstruction; // verificado HOST en
+                                                 // mc_match_copy
         ir::IrInstr i{};
         i.op = ir::IrOp::ADD;
         i.type = ir::IrType::PTR;
@@ -815,8 +817,11 @@ uint64_t Lowering::vec_chunk_width(uint64_t auto_width) const noexcept {
 ir::IrValueId Lowering::vec_elem_ptr(ir::IrValueId base, ir::IrValueId off,
                                      uint32_t ln) {
     const ir::IrValueId d = fn_->new_value(ir::IrType::PTR);
-    fn_->values[d].is_host_ptr =
-        (base < fn_->values.size()) && fn_->values[base].is_host_ptr;
+    /* La direccion derivada esta en la misma memoria que su base, y lo esta
+     * POR LA MISMA RAZoN: se lleva la clase entera y no un si/no. */
+    fn_->values[d].memory = (base < fn_->values.size())
+                                ? fn_->values[base].memory
+                                : ir::MemorySpace::NotHost;
     ir::IrInstr in{};
     in.op = ir::IrOp::ADD;
     in.type = ir::IrType::PTR;
@@ -2171,7 +2176,7 @@ bool Lowering::try_vectorize_reduction_for(ast::Stmt *s) {
     // --- entry: acc_slot host U*width bytes; zero U accs; BR uhdr ---
     current_block_ = entry;
     const ir::IrValueId acc_slot = fn_->new_value(ir::IrType::PTR);
-    fn_->values[acc_slot].is_host_ptr = true;
+    fn_->values[acc_slot].memory = ir::MemorySpace::HostByConstruction;
     {
         ir::IrInstr al{};
         al.op = ir::IrOp::ALLOCA;
@@ -2198,7 +2203,7 @@ bool Lowering::try_vectorize_reduction_for(ast::Stmt *s) {
     // buffer cubre el rango de disp del unroll (0..(U-1)*width).
     if (is_scalar_fma) {
         v_b = fn_->new_value(ir::IrType::PTR);
-        fn_->values[v_b].is_host_ptr = true;
+        fn_->values[v_b].memory = ir::MemorySpace::HostByConstruction;
         ir::IrInstr al{};
         al.op = ir::IrOp::ALLOCA;
         al.type = ir::IrType::I8;

@@ -30,6 +30,7 @@
 #include "util/thread_owned.h" // el objetivo por hilo, sin `thread_local`
 #include "vx/parser.h"
 
+#include "vx/annotation_names.h" // la lista de las que el lenguaje conoce
 #include "vx/hook_points.h"
 
 #include "vx/contract_when.h"
@@ -782,6 +783,19 @@ void Parser::error_here(const char *msg) {
 
 void Parser::error_at(const Token &tok, const char *msg) {
     diags_.error(tok.loc, msg);
+}
+
+bool Parser::check_annotation_name_(const std::string &name,
+                                    const SourceLoc &loc) {
+    if (annotation_exists(name)) return true;
+    /* Si hay un nombre cercano, lo mas probable es una errata y se dice CUAL:
+     * quien se equivoca aqui casi siempre esta a una letra de la buena.  Si no
+     * lo hay, lo que hace falta es saber que ese nombre no existe. */
+    if (const char *sug = annotation_nearest(name))
+        diags_.diag(loc, DiagLevel::ERR, "VXP092", {name, sug});
+    else
+        diags_.diag(loc, DiagLevel::ERR, "VXP093", {name});
+    return false;
 }
 
 // -----------------------------------------------------------------------
@@ -1758,7 +1772,8 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
     /* `@Provides(<builtin>)`: que builtin implementa la funcion de debajo.  Se
      * resuelve aqui, al leer el lexema, y viaja como VALOR. */
     Builtin top_provides_builtin = Builtin::Unknown;
-    bool top_is_naked = false;          /*  NR: @Naked (ISRs/stubs) */
+    bool top_is_naked = false;    /*  NR: @Naked (ISRs/stubs) */
+    bool top_is_inline = false;   /* @Inline: metela aunque no quepa */
     bool top_is_no_idiom = false; /* @NoIdiom: sin reconocimiento de idiomas */
     bool top_is_noexcept = false; /* @NoExcept: fn sin excepciones */
     bool top_is_string_concat = false; /* C-3: @StringConcat */
@@ -1853,6 +1868,8 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
                 top_is_pure = true;
             else if (current_.lexeme == "Naked")
                 top_is_naked = true;
+            else if (current_.lexeme == "Inline")
+                top_is_inline = true;
             else if (current_.lexeme == "NoIdiom")
                 top_is_no_idiom = true;
             else if (current_.lexeme == "NoInstrument")
@@ -1935,40 +1952,57 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
              * leer `@Provides`, estas dejaron de leerse y el parser se las
              * tragaba: compilaba, salia con codigo cero, y el binario usaba el
              * asignador de la biblioteca en vez del del programador. */
-            const bool es_gancho_retirado =
+            const bool is_retired_hook =
                 (current_.lexeme == "AllocatorOverride" ||
                  current_.lexeme == "PanicHandler");
-            const std::string gancho_viejo =
-                es_gancho_retirado ? current_.lexeme : std::string();
-            const SourceLoc loc_gancho = current_.loc;
+            /* El nombre y su posicion, guardados antes de consumirlo: los
+             * necesitan tanto el mensaje de las retiradas como el de las que
+             * no existen, y los dos tienen que apuntar a la MARCA. */
+            const std::string ann_name = current_.lexeme;
+            const SourceLoc ann_loc = current_.loc;
             (void)consume();
-            if (es_gancho_retirado) {
+            if (is_retired_hook) {
                 /* El reemplazo se nombra entero.  Para el del asignador son
                  * DOS, porque el rol ya no se adivina por el tipo de retorno
-                 * -- reservar y liberar son builtins distintos y se dicen --. */
-                /* El separador es una BARRA y no una conjuncion: este texto lo
+                 * -- reservar y liberar son builtins distintos y se dicen --.
+                 *
+                 * El separador es una BARRA y no una conjuncion: este texto lo
                  * comparten los dos idiomas, asi que una "o" saldria tambien
                  * en el mensaje en ingles.  Lo que depende del idioma vive en
                  * el catalogo; aqui solo van los nombres. */
-                const char *reemplazo =
-                    (gancho_viejo == "PanicHandler")
+                const char *replacement =
+                    (ann_name == "PanicHandler")
                         ? "`@Provides(panic)`"
                         : "`@Provides(malloc)` / `@Provides(free)`";
-                diags_.diag(loc_gancho, DiagLevel::ERR, "VXP091",
-                            {gancho_viejo, reemplazo});
+                diags_.diag(ann_loc, DiagLevel::ERR, "VXP091",
+                            {ann_name, replacement});
                 /* Y se consume su lista de argumentos si la lleva, para que el
                  * error sea UNO y no arrastre otro de sintaxis detras. */
                 if (current_.kind == TokenKind::LPAREN) {
-                    int prof = 0;
+                    int depth = 0;
                     do {
-                        if (current_.kind == TokenKind::LPAREN) ++prof;
-                        else if (current_.kind == TokenKind::RPAREN) --prof;
+                        if (current_.kind == TokenKind::LPAREN)
+                            ++depth;
+                        else if (current_.kind == TokenKind::RPAREN)
+                            --depth;
                         (void)consume();
-                    } while (prof > 0 &&
+                    } while (depth > 0 &&
                              current_.kind != TokenKind::END_OF_FILE);
                 }
                 continue;
             }
+            /* Y lo que NO es ninguna anotacion se dice AQUI.
+             *
+             * El bucle sigue igual para las que conoce; lo que cambia es que
+             * un nombre inventado ya no cae al descarte generico del final
+             * -- que lo consumia y seguia como si nada --.  Se comprueba
+             * despues de las retiradas para que esas den SU mensaje, que dice
+             * el reemplazo, y no un "no existe" a secas.
+             *
+             * No se aborta: se emite el error y se deja que el bucle consuma
+             * los argumentos como siempre, para que la declaracion de debajo
+             * se siga parseando y el usuario vea todos sus errores de una. */
+            (void)check_annotation_name_(ann_name, ann_loc);
             // @complexity(O(...)[, n = <expr>]): contrato de coste para el
             // modo --analyze.  Se captura el texto RAW entre los parens y se
             // parte por la primera coma (la sub-expr de coste va antes; los
@@ -2857,6 +2891,7 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
         if (fd && top_provides_builtin != Builtin::Unknown)
             fd->provides_builtin = top_provides_builtin;
         if (fd && top_is_naked) fd->is_naked = true;
+        if (fd && top_is_inline) fd->is_inline = true;
         if (fd && top_is_no_idiom) fd->is_no_idiom = true;
         // Variante por modo: la del interprete conserva el nombre para que los
         // puntos de llamada no cambien; la del JIT sale con sufijo, y el JIT
@@ -3395,6 +3430,38 @@ bool Parser::looks_like_cast() const noexcept {
             ++off;
         }
         if (depth != 0) return false;
+    }
+    /* Declarador ABSTRACTO al estilo de C: `R (*)(T)`.
+     *
+     * Tras el tipo de retorno viene `( '*'+ ')' '(' ... ')'`, y sin saltarlo el
+     * `)` que se busca justo debajo seria el del declarador y no el del cast:
+     * `(i64 (*)(i64))&f` ni llegaba a mirarse como cast, y el error hablaba de
+     * una expresion primaria que falta.  La DECLARACION con esta grafia ya
+     * existia (`i64 (*g)(i64)`), asi que la escapatoria del cast estaba en una
+     * sola de las dos formas de escribir el mismo tipo. */
+    if (mut_lex.peek_at(off).kind == TokenKind::LPAREN) {
+        size_t probe = off + 1;
+        int stars = 0;
+        while (mut_lex.peek_at(probe).kind == TokenKind::STAR) {
+            ++probe;
+            ++stars;
+        }
+        if (stars > 0 && mut_lex.peek_at(probe).kind == TokenKind::RPAREN &&
+            mut_lex.peek_at(probe + 1).kind == TokenKind::LPAREN) {
+            probe += 2; // el `)` del declarador y el `(` de los parametros
+            int depth = 1;
+            const size_t MAXP = 128;
+            while (depth > 0 && probe < MAXP) {
+                const TokenKind k = mut_lex.peek_at(probe).kind;
+                if (k == TokenKind::END_OF_FILE) return false;
+                if (k == TokenKind::LPAREN)
+                    ++depth;
+                else if (k == TokenKind::RPAREN)
+                    --depth;
+                ++probe;
+            }
+            if (depth == 0) off = probe;
+        }
     }
     // Tras todo, debe haber `)`.
     if (mut_lex.peek_at(off).kind != TokenKind::RPAREN) return false;
@@ -5323,8 +5390,7 @@ std::unique_ptr<ast::NamespaceDecl> Parser::parse_namespace_decl() {
             if (current_.kind == TokenKind::KW_NAMESPACE) {
                 if (!namespace_ahead_is_block()) break;
                 auto sibling = parse_namespace_decl();
-                if (sibling)
-                    pending_sibling_ns_.push_back(std::move(sibling));
+                if (sibling) pending_sibling_ns_.push_back(std::move(sibling));
                 continue;
             }
             // extern "lib" { fn ...; } produce N decls (una por fn);
@@ -6168,6 +6234,43 @@ void Parser::parse_struct_body_(ast::StructDecl &sd, bool is_overlay) {
                     annot_override = true; // @Override en un metodo de struct
                 continue;
             }
+            /* Cualquier OTRA anotacion sobre un miembro de struct.
+             *
+             * Un struct es una clase ligera -- campos, metodos, constructores,
+             * `@Virtual`, y se puede declarar abstracto --, asi que escribirle
+             * una anotacion es lo natural.  Y hasta aqui el `@` se quedaba sin
+             * consumir, con lo que el error lo daba el lector del miembro:
+             * "se esperaba un tipo de campo o metodo", que acusa a la linea de
+             * debajo y no menciona la anotacion.  Lo mismo daba una errata que
+             * una anotacion buena que este sitio no admite, que son dos
+             * problemas distintos.
+             *
+             * Ahora se dicen por separado, y el `@` se consume para que el
+             * miembro se siga leyendo. */
+            if (current_.kind == TokenKind::AT &&
+                lex_.peek_at(0).kind == TokenKind::IDENTIFIER) {
+                (void)consume(); // '@'
+                const SourceLoc aloc = current_.loc;
+                const std::string an = consume().lexeme;
+                if (annotation_exists(an))
+                    diags_.diag(aloc, DiagLevel::ERR, "VXP094",
+                                {an, "`@Virtual` / `@Override`"});
+                else
+                    (void)check_annotation_name_(an, aloc);
+                /* Y sus argumentos, si los lleva, para que el error sea UNO. */
+                if (current_.kind == TokenKind::LPAREN) {
+                    int depth = 0;
+                    do {
+                        if (current_.kind == TokenKind::LPAREN)
+                            ++depth;
+                        else if (current_.kind == TokenKind::RPAREN)
+                            --depth;
+                        (void)consume();
+                    } while (depth > 0 &&
+                             current_.kind != TokenKind::END_OF_FILE);
+                }
+                continue;
+            }
             break;
         }
         // Modificadores de acceso opcionales en el miembro.  Los
@@ -6994,7 +7097,15 @@ std::unique_ptr<ast::ClassDecl> Parser::parse_class_decl() {
             (void)consume(); // '@'
             if (current_.kind == TokenKind::IDENTIFIER) {
                 const std::string aname = current_.lexeme;
+                const SourceLoc aloc = current_.loc;
                 (void)consume();
+                /* Lo que no es ninguna anotacion se dice, igual que en el nivel
+                 * superior: aqui vive `@Override`, que es OBLIGATORIA al
+                 * redefinir, y una errata la convertia en nada.
+                 *
+                 * No se aborta: se sigue leyendo el miembro para que el usuario
+                 * vea todos sus errores de una vez. */
+                (void)check_annotation_name_(aname, aloc);
                 uint8_t this_kind = 0;
                 if (aname == "Before")
                     this_kind = 1;
@@ -7716,7 +7827,6 @@ Parser::register_temp_type_aliases(const std::vector<std::string> &names) {
     }
     return inserted;
 }
-
 
 void Parser::unregister_temp_type_aliases(
     const std::vector<std::string> &inserted) {
@@ -8743,10 +8853,34 @@ bool Parser::parse_call_arg(ast::CallExpr *call) {
         }
         name = consume().lexeme;
         if (!match(TokenKind::ASSIGN)) {
-            error_here("se esperaba '=' tras '.parametro'");
+            /* Un nombre SIN valor es el filtro por ranura de `&f(.min, .max)`:
+             * ahi no hay valores que dar -- no se llama a nadie --, solo se
+             * dice a cual de las homonimas se apunta.  La grafia es la misma
+             * del init designado, que es la que el lenguaje ya tiene para
+             * nombrar una ranura.
+             *
+             * Se distingue por que NO hay argumentos: una lista de nombres a
+             * secas no es una llamada valida de ninguna otra forma, asi que la
+             * grafia queda libre y no hay ambiguedad que deshacer. */
+            if (!call->args.empty()) {
+                diags_.diag(current_.loc, DiagLevel::ERR, "VXP095", {});
+                return false;
+            }
+            call->arg_names.push_back(std::move(name));
+            return true;
+        }
+        if (call->args.empty() && !call->arg_names.empty()) {
+            diags_.diag(current_.loc, DiagLevel::ERR, "VXP096", {});
             return false;
         }
     } else if (!call->arg_names.empty()) {
+        if (call->args.empty()) {
+            /* Los de delante eran nombres a secas: esto es el filtro, no una
+             * llamada, y un valor aqui no significa nada. */
+            error_here("'&f(.a, .b)' nombra ranuras y ya esta: no se mezclan "
+                       "con argumentos, porque no se esta llamando a nadie");
+            return false;
+        }
         /* Ya hubo uno con nombre: los de detras tambien lo llevan.  Si no, a
          * que ranura va este dependeria de la firma, y eso deja de leerse en
          * el sitio de la llamada. */
@@ -8765,6 +8899,18 @@ bool Parser::parse_call_arg(ast::CallExpr *call) {
     if (lleva_nombres && call->arg_names.size() < call->args.size())
         call->arg_names.resize(call->args.size());
     call->args.push_back(std::move(arg));
+    /* Y si este argumento ES el hueco.
+     *
+     * Se apunta AQUI, donde el dato esta en la mano, y no se redescubre luego
+     * recorriendo los argumentos: lo pregunta la resolucion de CADA llamada
+     * por el punto -- para saber si el miembro se la queda o si hay que
+     * reescribir --, y eso es una vez por llamada del programa contra una
+     * lectura de un bool. */
+    if (call->args.back() &&
+        call->args.back()->kind == ast::NodeKind::IdentExpr &&
+        static_cast<const ast::IdentExpr *>(call->args.back().get())->name ==
+            "_")
+        call->has_receiver_hole = true;
     if (lleva_nombres) call->arg_names.push_back(std::move(name));
     return true;
 }
@@ -9065,6 +9211,16 @@ std::unique_ptr<ast::Expr> Parser::parse_unary() {
         const SourceLoc loc = current_.loc;
         (void)consume(); // '('
         auto type_node = parse_type_node();
+        /* Y si lo que sigue es el declarador abstracto de C, el tipo es un
+         * puntero a funcion y lo leido hasta aqui era su RETORNO.  Lo arma el
+         * mismo sitio que ya lo hace en un parametro y en un campo: escribir
+         * el mismo tipo de dos maneras no puede resolverse de dos maneras. */
+        {
+            std::string fp_name;
+            std::unique_ptr<ast::TypeNode> fp_type;
+            if (try_parse_c_func_ptr_(type_node, fp_name, fp_type))
+                type_node = std::move(fp_type);
+        }
         (void)expect(TokenKind::RPAREN, "se esperaba ')' al cerrar el cast");
         auto operand = parse_unary();
         auto ce = std::make_unique<ast::CastExpr>();

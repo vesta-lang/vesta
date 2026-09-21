@@ -109,7 +109,7 @@ ir::IrValueId Lowering::build_native_string_concat(ir::IrValueId v_a,
         ir::IrValueId v_cap = emit_ir_binop(ir::IrOp::ADD, v_total, v_one,
                                             ir::IrType::I64, source_line);
         ir::IrValueId v_buf = fn_->new_value(ir::IrType::PTR);
-        fn_->values[v_buf].is_host_ptr = true;
+        fn_->values[v_buf].memory = ir::MemorySpace::HostByConstruction;
         {
             ir::IrInstr ra{};
             ra.op = ir::IrOp::RAW_ALLOC;
@@ -240,7 +240,7 @@ void Lowering::build_native_string_finalize(ir::IrValueId v_slot,
                                             ir::IrType::I64, source_line);
         // buf = RAW_ALLOC(cap).
         ir::IrValueId v_buf = fn_->new_value(ir::IrType::PTR);
-        fn_->values[v_buf].is_host_ptr = true;
+        fn_->values[v_buf].memory = ir::MemorySpace::HostByConstruction;
         {
             ir::IrInstr ra{};
             ra.op = ir::IrOp::RAW_ALLOC;
@@ -381,7 +381,7 @@ void Lowering::build_native_string_append_inplace(ir::IrValueId v_dst_slot,
     current_block_ = heap_bb;
     {
         ir::IrValueId v_new_buf = fn_->new_value(ir::IrType::PTR);
-        fn_->values[v_new_buf].is_host_ptr = true;
+        fn_->values[v_new_buf].memory = ir::MemorySpace::HostByConstruction;
         {
             ir::IrInstr ra{};
             ra.op = ir::IrOp::RAW_ALLOC;
@@ -667,7 +667,7 @@ std::string Lowering::ensure_itoa_helper(bool is_signed) {
     hf.ret_type = ir::IrType::I64;
     const ir::IrValueId p_buf = hf.new_value(ir::IrType::PTR, "%buf");
     hf.values[p_buf].is_param = true;
-    hf.values[p_buf].is_host_ptr = true;
+    hf.values[p_buf].memory = ir::MemorySpace::HostByConstruction;
     hf.params.push_back(p_buf);
     const ir::IrValueId p_val = hf.new_value(ir::IrType::I64, "%val");
     hf.values[p_val].is_param = true;

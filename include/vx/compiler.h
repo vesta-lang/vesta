@@ -844,13 +844,14 @@ struct CompileResult {
     struct ComptimeValueSnapshot {
         std::string name;  ///< Nombre de la constante comptime.
         std::string scope; ///< Ambito (best-effort; "" = global/desconocido).
-        std::string type_kind;    ///< "int"|"string"|"array"|"struct"|"type".
-        std::string value_str;    ///< Representacion legible del valor.
-        SourceLoc loc;            ///< Ubicacion de la expresion (para hover);
-                                  ///< line==0 si no aplica (consts top-level).
-        std::string builtin_kind; ///< "type.size"/"type.align"/"type.kind"/"type.id"/
-                                  ///< "type.name" si proviene de un builtin; ""
-                                  ///< para constantes comptime normales.
+        std::string type_kind; ///< "int"|"string"|"array"|"struct"|"type".
+        std::string value_str; ///< Representacion legible del valor.
+        SourceLoc loc;         ///< Ubicacion de la expresion (para hover);
+                               ///< line==0 si no aplica (consts top-level).
+        std::string
+            builtin_kind; ///< "type.size"/"type.align"/"type.kind"/"type.id"/
+                          ///< "type.name" si proviene de un builtin; ""
+                          ///< para constantes comptime normales.
     };
     std::vector<ComptimeValueSnapshot> comptime_values;
 };
@@ -1054,6 +1055,42 @@ void vx_report_asm_preconditions(const ir::IrModule &mod, Diagnostics &diags,
 void vx_report_bounds(const ir::IrModule &mod, Diagnostics &diags,
                       const std::string &file, analysis::asa::FactBase &base,
                       DiagLevel level);
+
+/**
+ * @brief Se queja de las llamadas indirectas cuyo destino no se sabe de que
+ *        memoria es.
+ *
+ * Un tipo plano puede llevar una direccion del ANFITRION o una de la MAQUINA,
+ * y el tipo no lo dice.  El compilador lo DEDUCE donde puede; donde no llega,
+ * esto lo dice en vez de suponer -- y suponer sale caro: la llamada indirecta
+ * de la maquina interpreta el valor como codigo suyo, asi que con una
+ * direccion del proceso no da un error, DEVUELVE CERO.
+ *
+ * Corre sobre el codigo de DESPUES de optimizar, que es donde la cuenta es
+ * justa: las llamadas cuyo destino se conoce ya se volvieron directas antes, y
+ * quejarse de ellas seria pedir que se declare lo que ya se sabe.
+ *
+ * @param mod   El modulo ya optimizado.
+ * @param diags Donde dejar el veredicto.
+ * @param file  Fichero raiz al que colgar la linea.
+ * @param level Peso: @c ERR al construir, @c WARN al analizar.
+ */
+void vx_report_callind_memory(const ir::IrModule &mod, Diagnostics &diags,
+                              const std::string &file, DiagLevel level);
+
+/**
+ * @brief Mide cuantas direcciones de funcion NUESTRAS cruzan a codigo real.
+ *
+ * Solo mide, detras de su interruptor.  Antes de cambiar como se emite una
+ * direccion de funcion hay que saber si el fallo ocurre de verdad y cuanto hay
+ * de cada clase: la diferencia entre las que hay y las que cruzan es
+ * exactamente lo que se puede abaratar.
+ *
+ * @param mod  El modulo ya optimizado.
+ * @param base La base de hechos, de donde salen def-use, points-to y escape.
+ */
+void vx_report_fn_addr_crossing(const ir::IrModule &mod,
+                                analysis::asa::FactBase &base);
 
 /**
  * @brief Avisa de las promesas de exclusividad que el programa incumple.

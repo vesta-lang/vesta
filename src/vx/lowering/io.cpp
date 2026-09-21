@@ -144,7 +144,7 @@ void Lowering::emit_print_string_literal(const std::string &text,
     if (native_poo_) {
         // AOT/bare: sin proc -> escribir los bytes via __vx_write (el
         // usuario puede redefinirlo en Vesta).  v_str es host_ptr.
-        fn_->values[v_str].is_host_ptr = true;
+        fn_->values[v_str].memory = ir::MemorySpace::HostByConstruction;
         emit_io_prim("__vx_write", {v_str, v_len}, line);
         return;
     }

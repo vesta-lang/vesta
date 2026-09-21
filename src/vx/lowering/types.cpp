@@ -152,7 +152,7 @@ ir::IrValueId Lowering::enforce_nonnull(ir::IrValueId v, int line) {
     uw.source_line = line;
     emit(current_block_, std::move(uw));
     // Lo que sale es el mismo puntero: conserva de que memoria es.
-    fn_->values[v_new].is_host_ptr = fn_->values[v].is_host_ptr;
+    fn_->values[v_new].memory = fn_->values[v].memory;
     fn_->values[v_new].pointee_is_host_ptr = fn_->values[v].pointee_is_host_ptr;
     fn_->values[v_new].is_gc_object = fn_->values[v].is_gc_object;
     return v_new;
@@ -165,7 +165,11 @@ Lowering::TypeMemory Lowering::type_memory(const Type &t) const {
      * que salvarlo por su manejador cuando una llamada por medio pueda mover
      * el monton. */
     if (t.kind == PrimitiveKind::CLASS) {
-        m.is_host_ptr = true;
+        /* POR EL TIPO, no por construccion: esto no lo dedujo nadie mirando el
+         * programa ni lo fabrico el compilador -- lo dice el fuente, y por eso
+         * se puede creer sin mas.  Por aqui pasan TODAS las marcas que salen
+         * de un tipo, asi que distinguirlo cuesta una linea. */
+        m.memory = ir::MemorySpace::HostByType;
         m.is_gc_object = true;
         return m;
     }
@@ -175,7 +179,7 @@ Lowering::TypeMemory Lowering::type_memory(const Type &t) const {
     if ((t.kind != PrimitiveKind::PTR && t.kind != PrimitiveKind::ARRAY) ||
         t.is_virtual)
         return m;
-    m.is_host_ptr = true;
+    m.memory = ir::MemorySpace::HostByType;
     // `T**`: un deref intermedio tiene que conservar que lo de dentro tambien
     // es del anfitrion.
     if (t.pointee &&
@@ -190,7 +194,10 @@ Lowering::TypeMemory Lowering::type_memory(const Type &t) const {
 void Lowering::apply_type_memory(ir::IrFunction &fn, ir::IrValueId v,
                                  const TypeMemory &m) const {
     if (v == ir::IR_NO_VALUE || v >= fn.values.size()) return;
-    if (m.is_host_ptr) fn.values[v].is_host_ptr = true;
+    /* Se copia la CLASE, no se vuelve a decidir: quien armo el @c TypeMemory
+     * ya sabia si venia del tipo, y aplastarla aqui perderia justo lo que
+     * distingue una afirmacion del fuente de una deduccion. */
+    if (m.is_host_ptr()) fn.values[v].memory = m.memory;
     if (m.is_gc_object) fn.values[v].is_gc_object = true;
     if (m.pointee_is_host_ptr) fn.values[v].pointee_is_host_ptr = true;
 }
@@ -198,6 +205,41 @@ void Lowering::apply_type_memory(ir::IrFunction &fn, ir::IrValueId v,
 void Lowering::mark_value_from_type(ir::IrValueId v, const Type &t) {
     if (!fn_) return;
     apply_type_memory(*fn_, v, type_memory(t));
+}
+
+void Lowering::mark_extern_return_memory(ir::IrFunction &fn, ir::IrValueId dst,
+                                         const Type &ret) const {
+    if (dst == ir::IR_NO_VALUE || dst >= fn.values.size()) return;
+    /* Primero lo que dice el TIPO, que vale igual aqui que en cualquier otra
+     * llamada: un puntero, un array o una referencia a clase. */
+    apply_type_memory(fn, dst, type_memory(ret));
+    /* Y ademas lo que dice la FRONTERA, que el tipo no puede decir.
+     *
+     * Una direccion tambien viaja como entero -- `GetProcAddress` devuelve
+     * `uintptr`, no `u8*` --, y entonces no hay tipo al que preguntarle de que
+     * memoria es.  Lo sabe el SITIO: al otro lado de una `extern` corre codigo
+     * nativo, que no tiene memoria de la maquina virtual y por tanto no puede
+     * devolver una direccion suya.  La afirmacion es sobre la frontera, no
+     * sobre ningun tipo: `uintptr` es un tipo de la stdlib como otro
+     * cualquiera -- lo unico que declara son sus conversiones con `void*` --,
+     * asi que atar la regla a el seria atarla a un nombre.
+     *
+     * Lo que costaba que faltase: la direccion llegaba sin marca y llamarla
+     * bajaba a CALLIND -- indirecta DE LA MAQUINA, que la interpreta como
+     * codigo suyo -- en vez de la via nativa.  No da error: DEVUELVE CERO, y
+     * cero es ademas `STATUS_SUCCESS`, asi que una syscall que nunca llego a
+     * ejecutarse se daba por buena.
+     *
+     * Solo los enteros del ancho de un puntero: en uno mas estrecho no cabe
+     * una direccion, y marcarlo no diria nada de nadie. */
+    if (util::flag_on(util::FlagId::NoExternHostRet)) return;
+    switch (ret.kind) {
+    case PrimitiveKind::I64:
+    case PrimitiveKind::U64: break;
+    default: return;
+    }
+    if (size_of_type(ret) != kPointerBytes) return;
+    fn.values[dst].memory = ir::MemorySpace::HostByConstruction;
 }
 
 OptionalLayout Lowering::optional_layout(const Type &t) const {
@@ -234,7 +276,7 @@ size_t Lowering::size_of_type(const Type &t) const {
         auto ite = elayouts.find(t.struct_name);
         return (ite == elayouts.end()) ? 0 : ite->second.size_bytes;
     }
-    if (t.kind == PrimitiveKind::PTR) return 8;
+    if (t.kind == PrimitiveKind::PTR) return kPointerBytes;
     if (t.kind == PrimitiveKind::ARRAY) {
         // T[N] ocupa N*sizeof(T) bytes; T[] (size==0) decae a puntero.
         // bug4: para T[] (dynamic) sin tamano fijo, sizeof = 8 (el
@@ -496,8 +538,10 @@ Lowering::ParamAbi Lowering::param_abi(const ast::ParamDecl &p) const {
     if (p.type && p.dir != ParamDir::None &&
         is_by_ref_out_param(p.dir, tc_.resolve_type_node(p.type.get()))) {
         abi.type = ir::IrType::PTR;
-        abi.mem.is_host_ptr = true; // la direccion de un hueco del anfitrion
-        abi.by_ref = true;          // y quien lo declare tiene que saberlo
+        abi.mem.memory =
+            ir::MemorySpace::HostByConstruction; // la direccion de un hueco del
+                                                 // anfitrion
+        abi.by_ref = true; // y quien lo declare tiene que saberlo
         return abi;
     }
 
@@ -506,7 +550,7 @@ Lowering::ParamAbi Lowering::param_abi(const ast::ParamDecl &p) const {
             static_cast<const ast::PrimitiveTypeNode *>(p.type.get());
         abi.type = ir_type_from_primitive(ptn->prim);
         if (native_poo_ && ptn->prim == PrimitiveKind::STRING)
-            abi.mem.is_host_ptr = true;
+            abi.mem.memory = ir::MemorySpace::HostByConstruction;
     } else if (p.type) {
         /* Un tipo compuesto -- un puntero, un array, un nombre que hay que
          * resolver -- no se lee del nodo: se le pregunta al comprobador de
@@ -528,7 +572,7 @@ Lowering::ParamAbi Lowering::param_abi(const ast::ParamDecl &p) const {
         if (sem.kind == PrimitiveKind::STRUCT ||
             sem.kind == PrimitiveKind::OPTIONAL ||
             sem.kind == PrimitiveKind::RESULT)
-            abi.mem.is_host_ptr = true;
+            abi.mem.memory = ir::MemorySpace::HostByConstruction;
     }
 
     if (p.is_variadic) {
@@ -536,7 +580,7 @@ Lowering::ParamAbi Lowering::param_abi(const ast::ParamDecl &p) const {
         // lo que se declaro: eso manda sobre todo lo de arriba.
         abi.type = ir::IrType::PTR;
         abi.mem = TypeMemory{};
-        abi.mem.is_host_ptr = true;
+        abi.mem.memory = ir::MemorySpace::HostByConstruction;
     }
     return abi;
 }

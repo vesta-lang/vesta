@@ -43,7 +43,7 @@ bool lower_static_field(ir::IrFunction &fn, const ir::IrInstr &in,
     addr.imm = slot;
     addr.source_line = in.source_line;
     const ir::IrValueId v_addr = addr.dst;
-    fn.values[v_addr].is_host_ptr = true;
+    fn.values[v_addr].memory = ir::MemorySpace::HostByConstruction;
     out.push_back(std::move(addr));
 
     ir::IrInstr acc{};

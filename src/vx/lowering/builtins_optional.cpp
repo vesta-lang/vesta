@@ -96,7 +96,7 @@ ir::IrValueId Lowering::emit_optional_value(ir::IrValueId v_arg, const Type &at,
         // el buffer.  Sin esto, un Optional en un buffer del anfitrion -- el
         // que devuelve una funcion -- se leia con la instruccion de la maquina
         // virtual y daba cero.
-        fn_->values[v_at].is_host_ptr = fn_->values[v_arg].is_host_ptr;
+        fn_->values[v_at].memory = fn_->values[v_arg].memory;
         // Un agregado no se carga en un registro: su valor ES su direccion.  Se
         // devuelve el puntero y quien lo consuma copia los bytes que necesite.
         if (payload_st.kind == PrimitiveKind::STRUCT &&
@@ -206,7 +206,7 @@ bool Lowering::try_lower_optional_builtins(ast::CallExpr *e, Builtin b,
         // a memoria VM en una direccion host (fuera de rango) y se pierde
         // (unwrap devuelve 0).  Funcionaba por SUERTE cuando la direccion del
         // alloc caia en rango VM.  Ok/Err ya tenian esta propagacion; Some no.
-        fn_->values[v_buf8].is_host_ptr = fn_->values[v_buf].is_host_ptr;
+        fn_->values[v_buf8].memory = fn_->values[v_buf].memory;
         if (payload_is_struct) {
             // Copia de los bytes del struct al payload.  `v_payload` es la
             // direccion del agregado (asi viajan los structs por valor aqui).
@@ -307,7 +307,7 @@ bool Lowering::try_lower_optional_builtins(ast::CallExpr *e, Builtin b,
             e->loc.line);
         const ir::IrValueId v_at = emit_ptr_add(v_buf, v_off, e->loc.line);
         // BugFix sret-cross-mem (2026-06-04): propagar is_host_ptr.
-        fn_->values[v_at].is_host_ptr = fn_->values[v_buf].is_host_ptr;
+        fn_->values[v_at].memory = fn_->values[v_buf].memory;
         /* Un agregado no viaja en un registro: su valor ES su direccion, asi
          * que hay que COPIAR sus bytes.  Guardandolo como una palabra se
          * guardaba la direccion de algo que muere, y lo que se sacaba eran
@@ -378,7 +378,7 @@ bool Lowering::try_lower_optional_builtins(ast::CallExpr *e, Builtin b,
         const ir::IrValueId v_at = emit_ptr_add(v_buf, v_off, e->loc.line);
         // BugFix sret-cross-mem (2026-06-04): propagar is_host_ptr de
         // v_buf al v_at para que el LOAD downstream emita `movh`/`loadzh`.
-        fn_->values[v_at].is_host_ptr = fn_->values[v_buf].is_host_ptr;
+        fn_->values[v_at].memory = fn_->values[v_buf].memory;
         /* Un agregado no se carga en un registro: su valor ES su direccion.
          * Se devuelve el puntero y quien lo consuma copia lo que necesite --
          * igual que hace `unwrap` sobre un `Optional<struct>`. */

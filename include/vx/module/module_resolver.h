@@ -66,8 +66,7 @@ struct AutoImportNsTag {};
  * 60% de los 116 millones de reservas de compilar no se podia atribuir a nadie
  * --.  Ver @ref util::NamedAlloc.
  */
-using NamespaceList =
-    util::NamedVector<const std::string *, AutoImportNsTag>;
+using NamespaceList = util::NamedVector<const std::string *, AutoImportNsTag>;
 
 /**
  * @brief Estado de un nodo del dep graph durante DFS.  WHITE = no visitado,

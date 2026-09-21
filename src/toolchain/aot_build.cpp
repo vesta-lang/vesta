@@ -1313,7 +1313,8 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
      * La respuesta NO es fusionar el I/O siempre -- eso seria una dependencia
      * obligatoria, y un binario que no imprime no debe cargar con ella --, sino
      * preguntarlo cuando la imagen ya esta completa.  Asi la dependencia se
-     * DERIVA de que hay codigo que la usa, en vez de asertarse desde un flag. */
+     * DERIVA de que hay codigo que la usa, en vez de asertarse desde un flag.
+     */
     auto resolve_io_hook = [&](bool *changed) -> int {
         if (aot_no_io || aot_freestanding) return 0;
         const std::string io_pfx = "vx_bare_io:";

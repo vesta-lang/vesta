@@ -63,6 +63,7 @@ int run_worker_from_source(std::string code, const std::string &file_name,
 #include <unordered_set>
 
 #include "ir/ir_emitter.h"
+#include "analysis/escape/fn_addr_escape.h" // que direcciones tienen que ser reales
 #include "ir/ir_optimizer.h"
 #include "ir/module_spill.h" // bajar los cuerpos a disco mientras no hablan
 #include "ir/parallel_for.h"
@@ -1647,64 +1648,68 @@ collect_imports_(const ast::ModuleNode &mod,
         !owner_dir.empty() && self_path.size() > owner_dir.size() &&
         self_path.compare(0, owner_dir.size(), owner_dir) == 0;
     if (auto_imports != nullptr && !auto_imports->empty() && !inside_owner) {
-      for (const std::string *nsp : *auto_imports) {
-        if (nsp == nullptr || nsp->empty()) continue;
-        const std::string &ns = *nsp;
-        bool already = false;
-        for (const auto &r : out)
-            if (r.ns_path == ns || r.module_name == ns) already = true;
-        if (already) continue;
-        ImportRequest req;
-        req.by_namespace = true;
-        req.ns_path = ns;
-        req.module_name = ns;
-        req.local_name = ns;
-        /* `only *`, no llano.
-         *
-         * Hacen falta las DOS cosas y cada forma traia una sola: el llano
-         * inyecta las plantillas pero no declara sus simbolos -- el proveedor
-         * quedaba invisible --, y `only *` declara lo publico, que es lo que
-         * hace que se le encuentre.  Lo que al principio faltaba con `only *`
-         * -- que el cuerpo de la plantilla resolviera sus ayudantes -- ya no
-         * depende del modo: viajan porque una plantilla los nombra. */
-        /* EXACTAMENTE como un `import std.alloc;` escrito a mano.
-         *
-         * Nada de `only *` ademas: en un import escrito las dos cosas son
-         * EXCLUYENTES (`is_plain = sin only Y sin glob`), asi que ponerlas
-         * juntas creaba un estado que no ocurre nunca -- y el consumidor lo
-         * trataba por una rama u otra segun donde se mirara.  Lo que hace falta
-         * es el llano, que es el que registra el namespace y con el las
-         * plantillas del modulo. */
-        req.only_all = false;
-        /* Y LLANA ademas, que es la que trae las PLANTILLAS.
-         *
-         * `only *` se expande sobre la lista de SIMBOLOS del modulo, y una
-         * plantilla no esta ahi -- no emite simbolo, lo emiten sus instancias
-         * --, asi que por esa via el proveedor generico no llegaba.  Con el
-         * `import` escrito a mano si llegaba, y esa es toda la diferencia: el
-         * mismo programa compilaba o no segun si alguien habia escrito una
-         * linea que no hace falta.
-         *
-         * Se veia solo con la cache FRIA, que es lo que lo hacia tan raro: en
-         * caliente el modulo llega por otro camino y el proveedor aparece. */
-        req.is_plain = true;
-        if (ns_to_modname != nullptr) {
-            auto it = ns_to_modname->find(ns);
-            if (it != ns_to_modname->end() && !it->second.empty())
-                /* El nombre ENTERO.  Esto decia `.front()`, y el mapa devuelve
-                 * una cadena, no una lista: eso es su primer CARACTER, y
-                 * asignar un `char` a un `std::string` compila sin rechistar.
-                 * O sea que el modulo `alloc` se registraba con el nombre `a`,
-                 * y una funcion del usuario llamada asi chocaba con el -- solo
-                 * ese nombre, lo que hacia el fallo desconcertante --. */
-                req.module_name = it->second;
+        for (const std::string *nsp : *auto_imports) {
+            if (nsp == nullptr || nsp->empty()) continue;
+            const std::string &ns = *nsp;
+            bool already = false;
+            for (const auto &r : out)
+                if (r.ns_path == ns || r.module_name == ns) already = true;
+            if (already) continue;
+            ImportRequest req;
+            req.by_namespace = true;
+            req.ns_path = ns;
+            req.module_name = ns;
+            req.local_name = ns;
+            /* `only *`, no llano.
+             *
+             * Hacen falta las DOS cosas y cada forma traia una sola: el llano
+             * inyecta las plantillas pero no declara sus simbolos -- el
+             * proveedor quedaba invisible --, y `only *` declara lo publico,
+             * que es lo que hace que se le encuentre.  Lo que al principio
+             * faltaba con `only *`
+             * -- que el cuerpo de la plantilla resolviera sus ayudantes -- ya
+             * no depende del modo: viajan porque una plantilla los nombra. */
+            /* EXACTAMENTE como un `import std.alloc;` escrito a mano.
+             *
+             * Nada de `only *` ademas: en un import escrito las dos cosas son
+             * EXCLUYENTES (`is_plain = sin only Y sin glob`), asi que ponerlas
+             * juntas creaba un estado que no ocurre nunca -- y el consumidor lo
+             * trataba por una rama u otra segun donde se mirara.  Lo que hace
+             * falta es el llano, que es el que registra el namespace y con el
+             * las plantillas del modulo. */
+            req.only_all = false;
+            /* Y LLANA ademas, que es la que trae las PLANTILLAS.
+             *
+             * `only *` se expande sobre la lista de SIMBOLOS del modulo, y una
+             * plantilla no esta ahi -- no emite simbolo, lo emiten sus
+             * instancias
+             * --, asi que por esa via el proveedor generico no llegaba.  Con el
+             * `import` escrito a mano si llegaba, y esa es toda la diferencia:
+             * el mismo programa compilaba o no segun si alguien habia escrito
+             * una linea que no hace falta.
+             *
+             * Se veia solo con la cache FRIA, que es lo que lo hacia tan raro:
+             * en caliente el modulo llega por otro camino y el proveedor
+             * aparece. */
+            req.is_plain = true;
+            if (ns_to_modname != nullptr) {
+                auto it = ns_to_modname->find(ns);
+                if (it != ns_to_modname->end() && !it->second.empty())
+                    /* El nombre ENTERO.  Esto decia `.front()`, y el mapa
+                     * devuelve una cadena, no una lista: eso es su primer
+                     * CARACTER, y asignar un `char` a un `std::string` compila
+                     * sin rechistar. O sea que el modulo `alloc` se registraba
+                     * con el nombre `a`, y una funcion del usuario llamada asi
+                     * chocaba con el -- solo ese nombre, lo que hacia el fallo
+                     * desconcertante --. */
+                    req.module_name = it->second;
+            }
+            /* Y el nombre local es el del MoDULO ya resuelto, como en el
+             * escrito. Dejarlo en el namespace puntuado lo registraba bajo un
+             * nombre que despues nadie busca. */
+            req.local_name = req.module_name;
+            out.push_back(std::move(req));
         }
-        /* Y el nombre local es el del MoDULO ya resuelto, como en el escrito.
-         * Dejarlo en el namespace puntuado lo registraba bajo un nombre que
-         * despues nadie busca. */
-        req.local_name = req.module_name;
-        out.push_back(std::move(req));
-      }
     }
     return out;
 }
@@ -2000,8 +2005,9 @@ compute_module_levels_(const std::vector<ProjectModuleWork> &work,
         const auto &pm = work[i];
         if (!pm.ast) continue;
         int max_dep_level = -1;
-        auto imports = collect_imports_(*pm.ast, &ns_to_modname, &auto_imports,
-                                       auto_import_owner_dir, pm.canonical_path);
+        auto imports =
+            collect_imports_(*pm.ast, &ns_to_modname, &auto_imports,
+                             auto_import_owner_dir, pm.canonical_path);
         for (const auto &req : imports) {
             // Resolver el dep por NAMESPACE COMPLETO (by_ns) cuando el import
             // es por-namespace: `by_name` colisiona cuando dos modulos
@@ -3173,8 +3179,9 @@ CompileResult compile_vx_project(
          * nadie aunque los modulos se compilen en paralelo. */
         if (is_root && pm.ast) {
             std::vector<uint64_t> dep_hashes;
-            auto imps = collect_imports_(*pm.ast, &ns_to_modname, &auto_imports,
-                                       auto_import_owner_dir, pm.canonical_path);
+            auto imps =
+                collect_imports_(*pm.ast, &ns_to_modname, &auto_imports,
+                                 auto_import_owner_dir, pm.canonical_path);
             for (const auto &req : imps) {
                 auto itd = by_name.find(req.module_name);
                 if (itd != by_name.end())
@@ -3187,8 +3194,9 @@ CompileResult compile_vx_project(
         bool cas_key_ok = false;
         if (cas && !is_root && pm.ast) {
             std::vector<uint64_t> dep_hashes;
-            auto imps = collect_imports_(*pm.ast, &ns_to_modname, &auto_imports,
-                                       auto_import_owner_dir, pm.canonical_path);
+            auto imps =
+                collect_imports_(*pm.ast, &ns_to_modname, &auto_imports,
+                                 auto_import_owner_dir, pm.canonical_path);
             for (const auto &req : imps) {
                 auto itd = by_name.find(req.module_name);
                 if (itd != by_name.end())
@@ -3333,8 +3341,9 @@ CompileResult compile_vx_project(
                         como_importa;
                     std::vector<ImportRequest> imps_val;
                     if (pm.ast) {
-                        imps_val = collect_imports_(*pm.ast, &ns_to_modname, &auto_imports,
-                                       auto_import_owner_dir, pm.canonical_path);
+                        imps_val = collect_imports_(
+                            *pm.ast, &ns_to_modname, &auto_imports,
+                            auto_import_owner_dir, pm.canonical_path);
                         for (const auto &r : imps_val)
                             como_importa.emplace(r.module_name, &r);
                     }
@@ -3634,8 +3643,9 @@ CompileResult compile_vx_project(
         //   - `import "x" only A, B;`   -> inyecta A, B directos en scope.
         //   - `import "x" [as alias];`  -> registra namespace para `x.A` o
         //                                   `alias.A` ( M.7).
-        auto imports = collect_imports_(*pm.ast, &ns_to_modname, &auto_imports,
-                                       auto_import_owner_dir, pm.canonical_path);
+        auto imports =
+            collect_imports_(*pm.ast, &ns_to_modname, &auto_imports,
+                             auto_import_owner_dir, pm.canonical_path);
 
         // LANG.fix-3: pre-importar las .vxi de los deps TRANSITIVOS
         // antes de procesar los imports explicitos.  Si main tiene
@@ -4710,9 +4720,9 @@ CompileResult compile_vx_project(
         const auto &root_pm = work.back();
         const auto &root_refs = root_pm.tc ? root_pm.tc->referenced_names()
                                            : std::unordered_set<std::string>{};
-        auto root_imports = collect_imports_(*root_pm.ast, &ns_to_modname, &auto_imports,
-                                            auto_import_owner_dir,
-                                            root_pm.canonical_path);
+        auto root_imports =
+            collect_imports_(*root_pm.ast, &ns_to_modname, &auto_imports,
+                             auto_import_owner_dir, root_pm.canonical_path);
         for (const auto &req : root_imports) {
             if (req.is_plain) continue;           // namespace -> nunca shake
             if (req.is_public_reexport) continue; // re-export consume el dep
@@ -5516,7 +5526,22 @@ CompileResult compile_vx_project(
         vx_report_bounds(merged, res.diagnostics, root_path, fact_base,
                          opts.violations_are_errors ? DiagLevel::ERR
                                                     : DiagLevel::WARN);
+        /* Aprovechando la MISMA base: lo que este necesita -- def-use,
+         * points-to, escape -- ya esta ahi o se pedira por la misma puerta.
+         * Construir una propia rehace el escape del modulo entero. */
+        vx_report_fn_addr_crossing(merged, fact_base);
     }
+    /* Y de que memoria es el destino de cada llamada indirecta.  Aqui, sobre
+     * `merged` ya optimizado, por lo mismo que el informe de limites: es el
+     * codigo que de verdad se va a emitir.
+     *
+     * En ESTE camino y no en el de fichero suelto: todo programa pasa por
+     * aqui -- basta que el manifiesto declare algo auto-importable, y lo
+     * declara siempre --, asi que una comprobacion que solo viva en el otro no
+     * corre nunca.  Ya hay una asi: la del desbordamiento entero. */
+    vx_report_callind_memory(merged, res.diagnostics, root_path,
+                             opts.violations_are_errors ? DiagLevel::ERR
+                                                        : DiagLevel::WARN);
     /* La exclusividad de los prestamos NO se comprueba aqui: se hizo ANTES de
      * optimizar, que es donde todavia existen las llamadas que la demuestran.
      * Ver el comentario de alli. */
@@ -5927,27 +5952,20 @@ CompileResult compile_vx_project(
              * cuenta -- el `new`, la liberacion de RAII --.  Ver la nota en
              * `compiler.cpp`, que hace lo mismo para el fichero suelto. */
             switch (fd->provides_builtin) {
-            case Builtin::Malloc:
-                res.aot_alloc_sym = fd->name;
-                break;
-            case Builtin::Free:
-                res.aot_free_sym = fd->name;
-                break;
-            case Builtin::Panic:
-                res.aot_panic_sym = fd->name;
-                break;
-            default:
-                break;
+            case Builtin::Malloc: res.aot_alloc_sym = fd->name; break;
+            case Builtin::Free: res.aot_free_sym = fd->name; break;
+            case Builtin::Panic: res.aot_panic_sym = fd->name; break;
+            default: break;
             }
         }
     }
     /* Y si quien provee es una PLANTILLA, manda su INSTANCIA.
      *
      * El bucle de arriba apunta el nombre de la declaracion, que para una
-     * plantilla es el que NO existe como simbolo -- lo emiten sus instancias --,
-     * asi que el enlazado acababa pidiendo `...__vx_free` a secas.  El
-     * comprobador ya creo la instancia que trabaja en BYTES, porque reservar sin
-     * escribir `malloc` es lo normal: un `new` lo hace. */
+     * plantilla es el que NO existe como simbolo -- lo emiten sus instancias
+     * --, asi que el enlazado acababa pidiendo `...__vx_free` a secas.  El
+     * comprobador ya creo la instancia que trabaja en BYTES, porque reservar
+     * sin escribir `malloc` es lo normal: un `new` lo hace. */
     if (!root_alloc_sym.empty()) res.aot_alloc_sym = root_alloc_sym;
     if (!root_free_sym.empty()) res.aot_free_sym = root_free_sym;
     /* El del PROGRAMA manda sobre el de la biblioteca, tambien para la maquina:
@@ -6831,6 +6849,142 @@ void vx_report_bounds(const ir::IrModule &mod, Diagnostics &diags,
         diags.note(loc,
                    vx::diag::format("VX3005", {std::to_string(v.off + v.width),
                                                std::to_string(v.limite)}));
+    }
+}
+
+/**
+ * @brief De donde saca el informe de direcciones sus tres entradas.
+ *
+ * Con NOMBRE y no capturado en una lambda: quien contesta sale en el perfil, y
+ * aqui contestar cuesta -- detras de cada una hay un analisis del modulo.
+ */
+struct FnAddrReportCtx {
+    analysis::asa::FactBase *base = nullptr;
+    const std::unordered_map<std::string, analysis::EscapeInfo> *by_name =
+        nullptr;
+    /// Lo que se contesta de una funcion que no esta en el mapa: nada escapa.
+    analysis::EscapeInfo none;
+};
+
+/// Def-use de @p fn, por la base.
+static const analysis::IrFacts &fn_addr_facts_of(void *ctx,
+                                                 const ir::IrFunction &fn) {
+    auto *c = static_cast<FnAddrReportCtx *>(ctx);
+    return c->base->structure(fn, analysis::asa::kStagePostOpt);
+}
+
+/// Points-to de @p fn, por la base.
+static const analysis::PointsTo &
+fn_addr_points_to_of(void *ctx, const ir::IrFunction &fn) {
+    auto *c = static_cast<FnAddrReportCtx *>(ctx);
+    return c->base->memory(fn, analysis::asa::kStagePostOpt);
+}
+
+/// Escape de @p fn, del cierre de modulo que la base ya hizo.
+static const analysis::EscapeInfo &fn_addr_escape_of(void *ctx,
+                                                     const ir::IrFunction &fn) {
+    auto *c = static_cast<FnAddrReportCtx *>(ctx);
+    const auto it = c->by_name->find(fn.name);
+    return it == c->by_name->end() ? c->none : it->second;
+}
+
+void vx_report_fn_addr_crossing(const ir::IrModule &mod,
+                                analysis::asa::FactBase &base) {
+    /* Detras de su interruptor: hoy solo MIDE.  Antes de cambiar como se
+     * emite una direccion de funcion hay que saber si el fallo ocurre de
+     * verdad y cuanto hay de cada clase -- decidirlo sin el numero es
+     * decidirlo a ciegas. */
+    if (!util::flag_on(util::FlagId::FnAddrReport)) return;
+
+    FnAddrReportCtx ctx;
+    ctx.base = &base;
+    ctx.by_name = &base.escape(mod);
+
+    analysis::FnAddrInputs in;
+    in.facts = &fn_addr_facts_of;
+    in.escape = &fn_addr_escape_of;
+    in.points_to = &fn_addr_points_to_of;
+    in.ctx = &ctx;
+    const analysis::FnAddrEscapeModule report =
+        analysis::compute_fn_addr_escape_module(mod, in);
+
+    /* Cuantas hay y cuantas CRUZAN.  La diferencia es lo que se puede
+     * abaratar, que es el numero que decide si emitir la nativa por defecto
+     * sale a cuenta. */
+    size_t crossing = 0;
+    size_t seen = 0;
+    size_t by_reason[6] = {0, 0, 0, 0, 0, 0};
+    for (const analysis::FnAddrEscapeOfFunction &entry : report.by_function) {
+        /* El total lo trae el propio analisis: volver a contarlo aqui seria
+         * recorrer el modulo entero otra vez y, peor, volver a decidir cuales
+         * son de funcion -- que es internar un nombre por instruccion. */
+        seen += entry.escape.fn_addr_count;
+        for (const analysis::FnAddrSite &site : entry.escape.sites) {
+            ++crossing;
+            const size_t idx = static_cast<size_t>(site.crossing);
+            if (idx < 6) ++by_reason[idx];
+        }
+    }
+    /* El texto sale del CATALOGO, aunque esto sea una medicion y no un
+     * diagnostico: que lo lea una persona es lo que decide que tenga que estar
+     * en su idioma.  Escribirlo aqui seria dejar castellano clavado en el
+     * compilador. */
+    std::fprintf(stderr, "%s\n",
+                 vx::diag::format("VX2134", {std::to_string(seen),
+                                             std::to_string(crossing),
+                                             std::to_string(by_reason[1]),
+                                             std::to_string(by_reason[2]),
+                                             std::to_string(by_reason[3]),
+                                             std::to_string(by_reason[4]),
+                                             std::to_string(by_reason[5])})
+                     .c_str());
+}
+
+void vx_report_callind_memory(const ir::IrModule &mod, Diagnostics &diags,
+                              const std::string &file, DiagLevel level) {
+    /* Detras de su interruptor mientras se mide.  La regla es la acordada --
+     * donde no se pueda deducir de que memoria es una direccion, error -- pero
+     * encenderla sin saber a cuantos sitios alcanza seria decidir a ciegas. */
+    if (!util::flag_on(util::FlagId::CallindStrict)) return;
+    /* UNA base para todo el modulo: su memoizacion vale mientras viva, asi
+     * que crearla por funcion no cachearia nada.  DESPUES de optimizar, que
+     * es cuando esto corre: lo que se le reprocha al usuario tiene que ser lo
+     * que de verdad queda, no lo que el optimizador iba a resolver. */
+    analysis::asa::FactBase base(analysis::asa::kStagePostOpt);
+    for (const ir::IrFunction &fn : mod.functions) {
+        for (const ir::CallTargetSite &s :
+             ir::ir_callind_target_memory(fn, base)) {
+            if (s.memory != ir::CallTargetMemory::Unknown) continue;
+            SourceLoc loc;
+            loc.line = s.line;
+            loc.set_file(file);
+            diags.diag(loc, level, "VX2128", {});
+            /* EN QUE funcion.  La stdlib va FUSIONADA en el modulo, asi que
+             * sin esto un sitio suyo se lee como si estuviera en el fichero
+             * del usuario, y encima con una linea que alli no existe.  Es la
+             * misma cautela que ya tomo el informe de limites. */
+            if (!fn.name.empty())
+                diags.note(loc, vx::diag::format("VX3006", {fn.name}));
+            /* Y POR QUE no se supo, que no es un adorno: lo que llega por un
+             * parametro no lo puede saber nunca quien lo recibe -- solo quien
+             * lo pasa --, mientras que lo que viene de memoria si se deduce
+             * mirando quien escribe ahi.  Se arreglan de forma OPUESTA, asi
+             * que un mensaje que no los separe manda al sitio equivocado.
+             *
+             * Un codigo por motivo, y el texto del CATALOGO: el analisis
+             * devuelve un dato, nunca una frase. */
+            const char *why_code = nullptr;
+            switch (s.why) {
+            case ir::CallTargetUnknown::Parameter: why_code = "VX2129"; break;
+            case ir::CallTargetUnknown::FromMemory: why_code = "VX2130"; break;
+            case ir::CallTargetUnknown::Computed: why_code = "VX2131"; break;
+            case ir::CallTargetUnknown::Disagree: why_code = "VX2132"; break;
+            case ir::CallTargetUnknown::TooDeep: why_code = "VX2133"; break;
+            case ir::CallTargetUnknown::None: break;
+            }
+            if (why_code != nullptr)
+                diags.note(loc, vx::diag::format(why_code, {}));
+        }
     }
 }
 

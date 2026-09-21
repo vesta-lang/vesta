@@ -89,8 +89,8 @@ struct FlatDecl {
     std::string qname; ///< nombre cualificado con el namespace.
     uint8_t kind;
     uint32_t offset;
-    bool is_public;         ///< @c public (importable desde otro modulo).
-    std::string recv_head;  ///< cabeza del 1er parametro; vacia si no aplica.
+    bool is_public;        ///< @c public (importable desde otro modulo).
+    std::string recv_head; ///< cabeza del 1er parametro; vacia si no aplica.
 };
 
 /**
@@ -110,8 +110,8 @@ std::string written_head(const ast::TypeNode *t) {
     case ast::NodeKind::NamedTypeNode:
         return static_cast<const ast::NamedTypeNode *>(t)->name;
     case ast::NodeKind::PrimitiveTypeNode:
-        return std::string(
-            primitive_name(static_cast<const ast::PrimitiveTypeNode *>(t)->prim));
+        return std::string(primitive_name(
+            static_cast<const ast::PrimitiveTypeNode *>(t)->prim));
     case ast::NodeKind::PointerTypeNode: return "ptr";
     case ast::NodeKind::ArrayTypeNode: return "array";
     case ast::NodeKind::FunctionTypeNode: return "fn";

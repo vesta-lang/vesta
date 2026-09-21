@@ -150,81 +150,20 @@ const char *level_claim_code(ir::IrParamClaim c, uint32_t level, bool denied) {
     return nullptr;
 }
 
-/// Que se sabe de un par de parametros mirando TODOS los sitios de llamada.
-enum class PairVerdict {
-    Disjoint, ///< en todas las llamadas visibles se demuestra que no coinciden.
-    Overlaps, ///< en alguna se demuestra que SI, y esa se puede senyalar.
-    Unknown,  ///< en alguna no se pudo decidir, o hay llamadas que no se ven.
-};
-
-/**
- * @brief Que se sabe del par de parametros (@p pa, @p pb) mirando las llamadas.
+/* Aqui vivia `PairVerdict` + `pair_from_call_sites`: una SEGUNDA version de lo
+ * que se sabe de un par de parametros mirando los sitios de llamada.  Se quito
+ * el 2026-09-21 y estaba MUERTA -- nadie la llamaba --: el conocimiento se
+ * subio en su dia a `FactBase::param_aliasing`, y desde entonces este productor
+ * PREGUNTA (`aliasing.of(...)`) en vez de calcularlo, que es lo correcto porque
+ * la comprobacion de prestamos necesita lo mismo y dos productores del mismo
+ * hecho es lo que el primer invariante del ASA prohibe.
  *
- * La pregunta "estas dos regiones coinciden?" no se responde dentro de la
- * funcion -- ahi sus parametros son dos NOMBRES --, pero en la llamada se ven
- * los ARGUMENTOS, y ahi casi siempre se sabe: dos posiciones de la misma
- * reserva con desplazamientos conocidos, o dos reservas distintas.
- *
- * Pedirle al programador que lo declare sin haber mirado esto es derrotista: se
- * le pide una palabra para algo que el compilador tiene delante.
- *
- * Se miran SIEMPRE, sea la funcion publica o no.  Son dos preguntas distintas y
- * confundirlas tira conocimiento:
- *
- *   "se pisan estos dos ARGUMENTOS en esta llamada?" -> se responde en casi
- *      cualquier funcion, porque el llamante esta delante;
- *   "puedo suponerlo dentro del CUERPO?"             -> eso si exige TODAS las
- *      llamadas, y de una publica no se tienen.
- *
- * Aqui se contesta la primera.  Quien use el veredicto para el cuerpo mira
- * ademas @c is_public; quien lo use para avisar no lo necesita: una llamada que
- * se solapa es un dato del programa, no una limitacion.
- *
- * @param p     Produccion, para pedir el points-to de cada llamante.
- * @param sites Llamadas a esa funcion, del indice.
- * @param pa    Indice del primer parametro.
- * @param pb    Indice del segundo.
- * @param site Sale con la LINEA de la llamada que decide, si la hay.
- *             Una linea y no un ancla: la llamada esta en OTRA funcion --
- *             la que llama --, y un ancla se resuelve contra la funcion del
- *             sujeto, que aqui es la llamada.  Es el caso para el que existe
- *             @c Anchor::Kind::Line.
- * @return El veredicto.
- */
-PairVerdict pair_from_call_sites(Production &p,
-                                 const std::vector<ModuleWalk::Site> &sites,
-                                 size_t pa, size_t pb, uint32_t &site) {
-    site = 0;
-    if (sites.empty()) {
-        /* Nadie la llama.  No se afirma nada: un hecho sobre codigo que no se
-         * usa no ayuda y ensucia el recuento. */
-        return PairVerdict::Unknown;
-    }
-    for (const ModuleWalk::Site &cs : sites) {
-        const ir::IrInstr &in = *cs.instr;
-        if (pa >= in.operands.size() || pb >= in.operands.size())
-            return PairVerdict::Unknown;
-        /* El points-to del LLAMANTE.  La base lo cachea por funcion, asi que
-         * pedirlo por llamada no lo recalcula. */
-        const PointsTo &pt = p.base.memory(*cs.fn);
-        const effects::AbstractLoc la = loc_of(pt, in.operands[pa], 0);
-        const effects::AbstractLoc lb = loc_of(pt, in.operands[pb], 0);
-        /* Una posicion sin raiz concreta no demuestra nada en ninguno de los
-         * dos sentidos. */
-        if (!la.concrete() || !lb.concrete()) {
-            site = in.source_line;
-            return PairVerdict::Unknown;
-        }
-        if (effects::may_alias(la, lb)) {
-            /* Se solapan de verdad: NO es una limitacion del analisis, es un
-             * dato del programa, y es lo que hay que decir en vez de pedir una
-             * declaracion. */
-            site = in.source_line;
-            return PairVerdict::Overlaps;
-        }
-    }
-    return PairVerdict::Disjoint;
-}
+ * Se anota en vez de borrarse en silencio porque el codigo muerto de esa forma
+ * no es inofensivo: seguia preguntando por `may_alias` -- el oraculo de la
+ * OPTIMIZACIoN, donde una promesa declarada cuenta -- para decidir un
+ * `Overlaps`, o sea usando una respuesta permisiva para ACUSAR.  Es el mismo
+ * fallo que `param_aliasing.cpp` ya tiene documentado y corregido en su
+ * gemela, y quien lo hubiera vuelto a enchufar lo habria reintroducido. */
 
 /**
  * @brief Cuenta los parametros que son punteros y no prometen exclusividad.

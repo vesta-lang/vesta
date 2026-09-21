@@ -638,7 +638,8 @@ bool Lowering::try_lower_string_builtins(ast::CallExpr *e, Builtin b,
                     const uint64_t idx =
                         out_mod_->intern_static_data(std::move(data));
                     r.ptr = fn_->new_value(ir::IrType::PTR);
-                    fn_->values[r.ptr].is_host_ptr = true;
+                    fn_->values[r.ptr].memory =
+                        ir::MemorySpace::HostByConstruction;
                     ir::IrInstr sa{};
                     sa.op = ir::IrOp::STR_LIT_ADDR;
                     sa.type = ir::IrType::PTR;

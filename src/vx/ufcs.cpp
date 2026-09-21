@@ -185,7 +185,8 @@ void Index::note_name_in_head(const std::string *head, const std::string *n) {
         e.ns_prefix = util::intern_name(n->substr(0, sep + 2));
         /* El origen se guarda como el usuario lo ESCRIBE -- con puntos --,
          * porque es lo que sale por `scoped_method_origin` y por el editor: un
-         * namespace anidado devuelto como `geo__sub` no se podria ni teclear. */
+         * namespace anidado devuelto como `geo__sub` no se podria ni teclear.
+         */
         std::string dotted = n->substr(0, sep);
         size_t at = 0;
         while ((at = dotted.find("__", at)) != std::string::npos) {

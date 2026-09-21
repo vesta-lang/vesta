@@ -102,7 +102,7 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
             }
             ir::IrValueId base = lower_expr(vd->init.get());
             if (base == ir::IR_NO_VALUE) return;
-            fn_->values[base].is_host_ptr = true;
+            fn_->values[base].memory = ir::MemorySpace::HostByConstruction;
             bind(vd->name, base);
             return;
         }
@@ -222,7 +222,7 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
          * lo recibe) emite accesos de host, asi que dejarlo en la pila de la
          * VM mata el proceso en cuanto se recorre. */
         al.host_alloca = true;
-        fn_->values[addr].is_host_ptr = true;
+        fn_->values[addr].memory = ir::MemorySpace::HostByConstruction;
         emit(current_block_, std::move(al));
         const ir::IrType ir_elem = ir_type_from_primitive(elem_t.kind);
         for (size_t i = 0; i < il->elements.size(); ++i) {
@@ -693,7 +693,7 @@ bool Lowering::try_lower_struct_init_list(ast::VarDeclStmt *vd,
     al.imm = (uint64_t)lay.size_bytes;
     // Host SIEMPRE: ver el comentario extenso de la rama sin init-list.
     al.host_alloca = true;
-    fn_->values[addr].is_host_ptr = true;
+    fn_->values[addr].memory = ir::MemorySpace::HostByConstruction;
     al.source_line = vd->loc.line;
     emit(current_block_, std::move(al));
     // Seguridad: zero-inicializar TODO el struct antes de escribir los
@@ -927,7 +927,7 @@ bool Lowering::try_lower_struct_var(ast::VarDeclStmt *vd,
             eal.host_alloca = true;
             eal.source_line = vd->loc.line;
             emit(current_block_, std::move(eal));
-            fn_->values[eaddr].is_host_ptr = true;
+            fn_->values[eaddr].memory = ir::MemorySpace::HostByConstruction;
             // La variable es un value-type: se bindea a un SLOT ESTABLE
             // (@c eaddr, ALLOCA en VM stack) y el inicializador se COPIA
             // qword-by-qword al slot -- MISMO modelo que un struct
@@ -944,7 +944,7 @@ bool Lowering::try_lower_struct_var(ast::VarDeclStmt *vd,
                 const ir::IrValueId init_addr = lower_expr(vd->init.get());
                 if (init_addr != ir::IR_NO_VALUE) {
                     emit_enum_copy(eaddr, init_addr,
-                                   fn_->values[init_addr].is_host_ptr,
+                                   fn_->values[init_addr].is_host_ptr(),
                                    elay.size_bytes, vd->loc.line);
                 }
             }
@@ -992,7 +992,8 @@ bool Lowering::try_lower_struct_var(ast::VarDeclStmt *vd,
     ins.host_alloca = true;
     const bool struct_is_host = ins.host_alloca;
     emit(current_block_, std::move(ins));
-    if (struct_is_host) fn_->values[addr].is_host_ptr = true;
+    if (struct_is_host)
+        fn_->values[addr].memory = ir::MemorySpace::HostByConstruction;
     bind(vd->name, addr);
     // Seguridad + RAII: zero-inicializar SIEMPRE el buffer del struct.  Un
     // struct local en pila NO se zeroea solo (a diferencia de un objeto
@@ -1038,7 +1039,7 @@ bool Lowering::try_lower_struct_var(ast::VarDeclStmt *vd,
             // Heredar is_host_ptr del source para los LOADs.  Si
             // el src viene de read_borrow / ptr_of (unique), es
             // host_ptr; si viene de un struct stack ALLOCA es VM.
-            const bool src_is_host = fn_->values[v_src].is_host_ptr;
+            const bool src_is_host = fn_->values[v_src].is_host_ptr();
             // Copia qword-by-qword (size_bytes redondeado a 8).
             const uint64_t qwords = (lay.size_bytes + 7) / 8;
             for (uint64_t qi = 0; qi < qwords; ++qi) {
@@ -1047,7 +1048,7 @@ bool Lowering::try_lower_struct_var(ast::VarDeclStmt *vd,
                     ir::IrType::I64, static_cast<int64_t>(off), vd->loc.line);
                 // src + off
                 const ir::IrValueId v_src_at = fn_->new_value(ir::IrType::PTR);
-                fn_->values[v_src_at].is_host_ptr = src_is_host;
+                fn_->values[v_src_at].set_host(src_is_host);
                 {
                     ir::IrInstr ad{};
                     ad.op = ir::IrOp::ADD;
@@ -1073,8 +1074,7 @@ bool Lowering::try_lower_struct_var(ast::VarDeclStmt *vd,
                 // `mov` sobre una direccion host -> el struct se quedaba a
                 // ceros (y su copy-hook/dtor operaban sobre basura).
                 const ir::IrValueId v_dst_at = fn_->new_value(ir::IrType::PTR);
-                fn_->values[v_dst_at].is_host_ptr =
-                    fn_->values[addr].is_host_ptr;
+                fn_->values[v_dst_at].memory = fn_->values[addr].memory;
                 {
                     ir::IrInstr ad{};
                     ad.op = ir::IrOp::ADD;
@@ -1215,7 +1215,7 @@ bool Lowering::try_lower_array_var(ast::VarDeclStmt *vd, const Type &sem_type) {
             al.source_line = vd->loc.line;
             /* Buffer HOST: ver la nota de las otras rutas de array local. */
             al.host_alloca = true;
-            fn_->values[addr].is_host_ptr = true;
+            fn_->values[addr].memory = ir::MemorySpace::HostByConstruction;
             emit(current_block_, std::move(al));
         }
         // STORE byte-a-byte del string.
@@ -1285,7 +1285,7 @@ bool Lowering::try_lower_array_var(ast::VarDeclStmt *vd, const Type &sem_type) {
          * proceso, y solo se notaba al RECORRERLO con indice variable: con
          * indices constantes el optimizador resolvia los accesos antes. */
         al.host_alloca = true;
-        fn_->values[addr].is_host_ptr = true;
+        fn_->values[addr].memory = ir::MemorySpace::HostByConstruction;
         emit(current_block_, std::move(al));
         // STORE de cada elemento.
         const ir::IrType ir_elem = ir_type_from_primitive(elem_t.kind);
@@ -1364,7 +1364,7 @@ bool Lowering::try_lower_array_var(ast::VarDeclStmt *vd, const Type &sem_type) {
         // direccion VM.  Un array VM explicito se nombra con `VirtualPtr<T>`.
         ins.host_alloca = true;
         emit(current_block_, std::move(ins));
-        fn_->values[addr].is_host_ptr = true;
+        fn_->values[addr].memory = ir::MemorySpace::HostByConstruction;
         bind(vd->name, addr);
         // Zero-inicializar SIEMPRE el buffer del array local (mismo motivo que
         // los structs, ~L4415): un array en pila NO se zeroea solo.  El interp
@@ -1532,7 +1532,9 @@ bool Lowering::try_lower_var_init(ast::VarDeclStmt *vd, const Type &sem_type,
                     // Nuevo slot de 24 bytes para `b` (host stack en native).
                     const ir::IrValueId v_slot =
                         fn_->new_value(ir::IrType::PTR);
-                    if (native_poo_) fn_->values[v_slot].is_host_ptr = true;
+                    if (native_poo_)
+                        fn_->values[v_slot].memory =
+                            ir::MemorySpace::HostByConstruction;
                     {
                         ir::IrInstr al{};
                         al.op = ir::IrOp::ALLOCA;
@@ -1684,7 +1686,7 @@ bool Lowering::try_lower_address_taken_var(ast::VarDeclStmt *vd,
         // address-takean desde el codigo del usuario, asi que no se ven
         // afectados.  `VirtualPtr<T>` sigue siendo la via para memoria VM.
         ai.host_alloca = true;
-        fn_->values[addr].is_host_ptr = true;
+        fn_->values[addr].memory = ir::MemorySpace::HostByConstruction;
         ai.source_line = vd->loc.line;
         emit(current_block_, std::move(ai));
         bind(vd->name, addr);

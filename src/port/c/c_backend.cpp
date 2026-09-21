@@ -2248,7 +2248,7 @@ void CBackend::emit_prelude(EmitContext &ctx, const ir::IrModule &mod) {
                 ir::IrValueId vid = fn.params[i];
                 if (vid < fn.values.size()) {
                     const auto &v = fn.values[vid];
-                    ctx.out << type_for(v.type, v.is_host_ptr);
+                    ctx.out << type_for(v.type, v.is_host_ptr());
                 } else {
                     ctx.out << "int64_t";
                 }
@@ -2541,14 +2541,14 @@ void CBackend::emit_fn_signature(EmitContext &ctx, const ir::IrFunction &fn) {
                     ctx.out << "v" << vid;
                     continue;
                 }
-                std::string t = type_for(v.type, v.is_host_ptr);
+                std::string t = type_for(v.type, v.is_host_ptr());
                 ctx.out << t << " ";
                 // @c __restrict__ en TODOS los pointer params: en Vesta
                 // los parametros no aliasing por convencion del lenguaje
                 // (sin & address-of cross-param), asi habilitamos
                 // vectorizacion automatica de GCC.
                 if (opts_.emit_compiler_hints &&
-                    (v.is_host_ptr || v.type == ir::IrType::PTR)) {
+                    (v.is_host_ptr() || v.type == ir::IrType::PTR)) {
                     ctx.out << "VX_RESTRICT ";
                 }
                 ctx.out << "v" << vid;
@@ -2598,7 +2598,8 @@ void CBackend::emit_local_decl(EmitContext &ctx, ir::IrValueId id,
     if (it != concrete_type_.end() && lookup_class(it->second)) {
         ctx.out << it->second << " *v" << id << ";";
     } else {
-        ctx.out << type_for(value.type, value.is_host_ptr) << " v" << id << ";";
+        ctx.out << type_for(value.type, value.is_host_ptr()) << " v" << id
+                << ";";
     }
     if (opts_.emit_comments && !value.name.empty()) {
         ctx.out << "  /* " << value.name << " */";

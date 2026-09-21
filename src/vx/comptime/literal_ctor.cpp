@@ -117,7 +117,7 @@ ir::IrValueId Lowering::try_lower_comptime_ctor_call(ast::CallExpr *e,
         al.host_alloca = true;
         al.source_line = e->loc.line;
         emit(current_block_, std::move(al));
-        fn_->values[v_buf].is_host_ptr = true;
+        fn_->values[v_buf].memory = ir::MemorySpace::HostByConstruction;
 
         std::vector<ir::IrValueId> operands;
         operands.reserve(e->args.size() + 1);

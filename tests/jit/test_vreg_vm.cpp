@@ -656,7 +656,7 @@ static void test_vm_smartptr_free_extern() {
     fn.name = "spf1";
     fn.ret_type = ir::IrType::VOID;
     ir::IrValueId ptr = fn.new_value(ir::IrType::PTR);
-    fn.values[ptr].is_host_ptr = true;
+    fn.values[ptr].set_host_by_construction(true);
     fn.params = {ptr};
     ir::IrBlockId bb = fn.new_block("e");
     {
@@ -710,7 +710,7 @@ static void test_vm_smartptr_free_vesta() {
     fn.name = "spf2";
     fn.ret_type = ir::IrType::VOID;
     ir::IrValueId ptr = fn.new_value(ir::IrType::PTR);
-    fn.values[ptr].is_host_ptr = true;
+    fn.values[ptr].set_host_by_construction(true);
     fn.params = {ptr};
     ir::IrBlockId bb = fn.new_block("e");
     {
@@ -1136,7 +1136,8 @@ static void test_vm_gc_stackmap() {
     ir::IrValueId x = fn.new_value(I64), r = fn.new_value(I64),
                   sum = fn.new_value(I64);
     fn.values[thisp].is_gc_object = true;
-    fn.values[thisp].is_host_ptr = true; // -> StackmapGcKind::HOSTPTR
+    fn.values[thisp].set_host_by_construction(
+        true); // -> StackmapGcKind::HOSTPTR
     fn.params = {thisp, x};
     ir::IrBlockId bb = fn.new_block("e");
     {
@@ -1209,7 +1210,7 @@ static void test_vm_load_store() {
     ir::IrValueId ptr = fn.new_value(ir::IrType::PTR);
     ir::IrValueId v = fn.new_value(I64), c = fn.new_value(I64),
                   w = fn.new_value(I64);
-    fn.values[ptr].is_host_ptr = true;
+    fn.values[ptr].set_host_by_construction(true);
     fn.params = {ptr};
     ir::IrBlockId bb = fn.new_block("e");
     {
@@ -1254,7 +1255,7 @@ static void test_vm_alloca() {
     ir::IrValueId p = fn.new_value(ir::IrType::PTR);
     ir::IrValueId v = fn.new_value(I64), c = fn.new_value(I64),
                   r = fn.new_value(I64);
-    fn.values[p].is_host_ptr = true; // alloca host -> host_ptr
+    fn.values[p].set_host_by_construction(true); // alloca host -> host_ptr
     fn.params = {x};
     ir::IrBlockId bb = fn.new_block("e");
     {
@@ -1309,7 +1310,7 @@ static void test_vm_raw_free_host_alloca() {
     ir::IrValueId p = fn.new_value(ir::IrType::PTR);
     ir::IrValueId v = fn.new_value(I64), c = fn.new_value(I64),
                   r = fn.new_value(I64);
-    fn.values[p].is_host_ptr = true;
+    fn.values[p].set_host_by_construction(true);
     fn.params = {x};
     ir::IrBlockId bb = fn.new_block("e");
     {
@@ -1542,7 +1543,8 @@ static uint64_t run_gc_deref(ProcGc &px, uint32_t handle) {
     fn.ret_type = ir::IrType::I64;
     ir::IrValueId h = fn.new_value(ir::IrType::I64);
     ir::IrValueId r = fn.new_value(ir::IrType::I64);
-    fn.values[r].is_host_ptr = true;  // resultado: host_ptr a objeto GC
+    fn.values[r].set_host_by_construction(
+        true);                        // resultado: host_ptr a objeto GC
     fn.values[r].is_gc_object = true; // -> spill+stackmap si cruza el call
     fn.params = {h};
     ir::IrBlockId bb = fn.new_block("e");

@@ -130,8 +130,7 @@ void Lowering::emit_struct_init_fields(ir::IrValueId base_addr,
             // naturaleza (host / VM) se hereda.  Sin esto, un struct en host
             // inicializado con una init-list anidada escribia sus campos con
             // `mov` (VM) sobre una direccion host -> basura.
-            fn_->values[v_addr].is_host_ptr =
-                fn_->values[base_addr].is_host_ptr;
+            fn_->values[v_addr].memory = fn_->values[base_addr].memory;
             ir::IrInstr ad{};
             ad.op = ir::IrOp::ADD;
             ad.type = ir::IrType::I64;
@@ -240,7 +239,8 @@ void Lowering::emit_struct_method_on_host_field(ir::IrValueId field_addr,
         const ir::IrValueId v_off =
             emit_const(ir::IrType::I64, static_cast<int64_t>(qi * 8), line);
         const ir::IrValueId src_at = fn_->new_value(ir::IrType::PTR);
-        fn_->values[src_at].is_host_ptr = true; // campo en payload host
+        fn_->values[src_at].memory =
+            ir::MemorySpace::HostByConstruction; // campo en payload host
         {
             ir::IrInstr ad{};
             ad.op = ir::IrOp::ADD;
@@ -290,16 +290,16 @@ ir::IrValueId Lowering::emit_struct_arg_copy_clone(
     // la leia como basura, y su `__clone__` / `~dtor` operaban sobre esa
     // basura.
     const ir::IrValueId copy = stack_alloc_buf(sz, line, true);
-    fn_->values[copy].is_host_ptr = true;
+    fn_->values[copy].memory = ir::MemorySpace::HostByConstruction;
     // memcpy v_src -> copy (respetando host-ness de origen y destino).
-    const bool src_is_host = fn_->values[v_src].is_host_ptr;
-    const bool dst_is_host = fn_->values[copy].is_host_ptr;
+    const bool src_is_host = fn_->values[v_src].is_host_ptr();
+    const bool dst_is_host = fn_->values[copy].is_host_ptr();
     const uint64_t qwords = (sz + 7) / 8;
     for (uint64_t qi = 0; qi < qwords; ++qi) {
         const ir::IrValueId v_off =
             emit_const(ir::IrType::I64, static_cast<int64_t>(qi * 8), line);
         const ir::IrValueId src_at = fn_->new_value(ir::IrType::PTR);
-        fn_->values[src_at].is_host_ptr = src_is_host;
+        fn_->values[src_at].set_host(src_is_host);
         {
             ir::IrInstr ad{};
             ad.op = ir::IrOp::ADD;
@@ -312,7 +312,7 @@ ir::IrValueId Lowering::emit_struct_arg_copy_clone(
         const ir::IrValueId word =
             emit_load_typed(src_at, ir::IrType::I64, line);
         const ir::IrValueId dst_at = fn_->new_value(ir::IrType::PTR);
-        fn_->values[dst_at].is_host_ptr = dst_is_host;
+        fn_->values[dst_at].set_host(dst_is_host);
         {
             ir::IrInstr ad{};
             ad.op = ir::IrOp::ADD;
@@ -407,7 +407,7 @@ ir::IrValueId Lowering::lower_struct_method_call(ast::CallExpr *e) {
         al.host_alloca = msi.host_buffer;
         al.source_line = e->loc.line;
         emit(current_block_, std::move(al));
-        fn_->values[v_retbuf].is_host_ptr = msi.host_buffer;
+        fn_->values[v_retbuf].set_host_by_construction(msi.host_buffer);
     }
 
     const ir::IrType ret_ir_decl =
@@ -796,12 +796,13 @@ void Lowering::lower_struct_methods(ast::StructDecl *sd, ir::IrModule &out) {
             // su propia naturaleza (su vista ES un puntero a memoria ajena):
             // habilita ademas `self.translate(rva)` /
             // `parent<T>().translate(rva)`.
-            fn.values[this_vid].is_host_ptr = true;
+            fn.values[this_vid].memory = ir::MemorySpace::HostByConstruction;
             // NS.6-ext: extension sobre una CLASE -> `this` es un objeto GC
             // (host_ptr al payload, refrescable tras GC), no un buffer
             // VM-stack.
             if (ext_this_is_class_) {
-                fn.values[this_vid].is_host_ptr = true;
+                fn.values[this_vid].memory =
+                    ir::MemorySpace::HostByConstruction;
                 fn.values[this_vid].is_gc_object = true;
             }
             fn.params.push_back(this_vid);
@@ -813,7 +814,8 @@ void Lowering::lower_struct_methods(ast::StructDecl *sd, ir::IrModule &out) {
         if (method_sret) {
             v_method_retbuf = fn.new_value(ir::IrType::PTR, "%__retbuf");
             fn.values[v_method_retbuf].is_param = true;
-            fn.values[v_method_retbuf].is_host_ptr = msi.host_buffer;
+            fn.values[v_method_retbuf].set_host_by_construction(
+                msi.host_buffer);
             fn.params.push_back(v_method_retbuf);
         }
 
@@ -917,14 +919,14 @@ void Lowering::lower_struct_methods(ast::StructDecl *sd, ir::IrModule &out) {
                     // emit_free_unique_field).
                     if (f.type.kind == PrimitiveKind::SHARED_PTR) {
                         const bool container_host =
-                            fn_->values[this_dtor].is_host_ptr;
+                            fn_->values[this_dtor].is_host_ptr();
                         ir::IrValueId saddr = this_dtor;
                         if (f.offset != 0) {
                             const ir::IrValueId off = emit_const(
                                 ir::IrType::I64, static_cast<int64_t>(f.offset),
                                 m->loc.line);
                             saddr = fn_->new_value(ir::IrType::PTR);
-                            fn_->values[saddr].is_host_ptr = container_host;
+                            fn_->values[saddr].set_host(container_host);
                             ir::IrInstr ad{};
                             ad.op = ir::IrOp::ADD;
                             ad.type = ir::IrType::I64;

@@ -171,6 +171,7 @@
 #include "analysis/effects/effect_analysis.h" // el motor de efectos, compartido
 #include "analysis/effects/param_aliasing.h"  // que le llega a cada parametro
 #include "analysis/escape/escape.h"           // que sobrevive a la funcion
+#include "analysis/memory/address_space.h"
 #include "analysis/memory/points_to.h"
 
 #include <cstddef>
@@ -203,6 +204,16 @@ struct ModuleWalk;
 extern const char *const kProducerStructure;
 extern const char *const kProducerRanges;
 extern const char *const kProducerMemory;
+/**
+ * @brief DE QUE memoria es una direccion: del anfitrion o de la maquina.
+ *
+ * Productor PROPIO y no un caso de @ref kProducerMemory, aunque se apoye en
+ * el: aquel contesta a QUE puede referirse un puntero y este en QUE ESPACIO
+ * vive, que son dos proposiciones distintas.  Compartir nombre haria que el
+ * volcado mintiera sobre quien lo dijo, y @c Support::depends_on -- que
+ * compara punteros de literal -- no podria distinguir una de otra.
+ */
+extern const char *const kProducerAddressSpace;
 
 /// Que efectos tiene cada funcion del modulo -- que memoria toca, si puede
 /// fallar, si puede lanzar --, cerrado sobre el grafo de llamadas.  Lo pedian
@@ -228,6 +239,25 @@ extern const char *const kProducerAsmFlow;
 /// afirman DOS sitios: el dominio, mirando el codigo, y el pase que lo reduce,
 /// que lo dice justo antes de que el bucle deje de existir.
 extern const char *const kProducerBulkMemory;
+/**
+ * @brief DE QUIEN es el codigo al que salta una llamada: nuestro o de fuera.
+ *
+ * No es un detalle de un pase: es una propiedad del programa, y la quieren
+ * tres consumidores distintos.  El PERFILADO, para atribuir tiempo sin
+ * deducirlo por rangos de direccion.  La DEPURACION, para decir de quien es un
+ * marco de la traza.  Y el OPTIMIZADOR, porque a codigo ajeno no se le puede
+ * mirar el cuerpo -- ni inlinar, ni derivarle efectos --, que hoy cada uno
+ * redescubre por su cuenta.
+ *
+ * Es barato y exacto porque Vesta es un mundo SEMI-CERRADO: todos los modulos
+ * son nuestros y lo ajeno entra por un unico sitio, la frontera FFI.  No es
+ * como en otros lenguajes, donde habria que suponer.
+ *
+ * Va sellado @c kIsaVelb a proposito: en nativo la distincion NO SIGNIFICA
+ * NADA -- alli todo es codigo real y las dos formas de llamar colapsan en la
+ * misma instruccion --.  Es el mismo eje que ya usan los efectos por backend.
+ */
+extern const char *const kProducerCodeOrigin;
 /// Que operaciones NO puede compilar un backend, y por que.  El analisis lo
 /// hace `aot_analyze` desde hace tiempo -- clasifica cada op del intermedio
 /// contra un objetivo nativo -- y lo consumia UN solo sitio, el editor.  Aqui
@@ -433,6 +463,22 @@ class FactBase {
      */
     const PointsTo &memory(const ir::IrFunction &fn,
                            const char *stage = nullptr);
+
+    /**
+     * @brief DE QUE memoria es cada direccion de @p fn -- del anfitrion o de
+     *        la maquina --, incluso cuando ha pasado por memoria.
+     *
+     * Pregunta DISTINTA de @ref memory: aquella dice a que puede referirse un
+     * puntero, esta en que espacio vive.  Se apoya en aquella y no la
+     * reimplementa: dos direcciones son el mismo sitio cuando resuelven al
+     * mismo @c AbstractLoc, y eso ya lo contesta points-to.
+     *
+     * @param fn    Funcion IR a consultar.
+     * @param stage En que momento se pregunta.
+     * @return El espacio de cada valor, cacheado mientras viva la base.
+     */
+    const AddressSpaces &address_spaces(const ir::IrFunction &fn,
+                                        const char *stage = nullptr);
 
     /**
      * @brief Forma del CFG de @p fn: bucles, cabeceras y profundidad.
@@ -790,6 +836,8 @@ class FactBase {
 
     /// Idem para el points-to.
     PointsTo memory_from_store_(const ir::IrFunction &fn, const char *stage);
+    AddressSpaces address_spaces_from_store_(const ir::IrFunction &fn,
+                                             const char *stage);
 };
 
 /**

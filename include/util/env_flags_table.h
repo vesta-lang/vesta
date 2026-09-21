@@ -65,6 +65,44 @@ VESTA_ENV_FLAG(NoSpecDevirt, "VESTA_NO_SPEC_DEVIRT", Emitted, Optimizer, Bool,
                Any)
 VESTA_ENV_FLAG(NoLocalSkip, "VESTA_NO_LOCAL_SKIP", Emitted, Optimizer, Bool,
                Any)
+/* Apaga el pase que convierte una llamada indirecta a una direccion del
+   anfitrion en la llamada nativa que le corresponde.  Con el apagado el
+   programa vuelve a lo de antes -- CALLIND, que devuelve CERO --, asi que
+   sirve para comparar A/B sin reconstruir, que es lo unico que distingue un
+   rojo mio de uno que ya estaba. */
+VESTA_ENV_FLAG(NoCallindNative, "VESTA_NO_CALLIND_NATIVE", Emitted, Optimizer,
+               Bool, Any)
+/* Vuelve a rechazar para el inline multi-bloque a cualquier callee que
+   RESERVE memoria.  Era lo que hacia antes, y no porque reservar estorbe: una
+   reserva de pila dentro de un bucle hacia crecer la pila, y en vez de izarla
+   al bloque de entrada se rechazaba al que reservara.  El interruptor esta
+   para medir A/B que desbloquea quitarlo. */
+VESTA_ENV_FLAG(NoInlineWithAlloca, "VESTA_NO_INLINE_WITH_ALLOCA", Emitted,
+               Optimizer, Bool, Any)
+/* Apaga el camino POR MEMORIA de la devirtualizacion de punteros a funcion:
+   un `cfn` guardado una sola vez y leido de vuelta deja de hacerse llamada
+   directa.  Interruptor propio para poder medir SOLO ese camino: el resto de
+   la devirtualizacion -- la que va por SSA -- sigue encendida, asi que un A/B
+   con esto dice lo que aporta mirar a traves de memoria y nada mas. */
+VESTA_ENV_FLAG(NoDevirtThroughMemory, "VESTA_NO_DEVIRT_THROUGH_MEMORY", Emitted,
+               Optimizer, Bool, Any)
+/* Apaga la regla de la FRONTERA: que lo que devuelve una `extern` vive en la
+   memoria del anfitrion.  Interruptor propio y no compartido con el de arriba
+   porque son dos cosas -- la que produce el hecho y la que lo consume -- y
+   mezclarlas en un solo interruptor haria que un A/B no dijera CUAL de las
+   dos. */
+VESTA_ENV_FLAG(NoExternHostRet, "VESTA_NO_EXTERN_HOST_RET", Emitted, Codegen,
+               Bool, Any)
+/* Exige saber de que memoria es el destino de CADA llamada indirecta, y da
+   error donde no se pueda deducir en vez de suponer.  Detras de un
+   interruptor mientras se mide cuanto codigo tendria que declararlo: encender
+   una regla nueva sin saber a cuantos sitios alcanza es decidir a ciegas. */
+VESTA_ENV_FLAG(CallindStrict, "VESTA_CALLIND_STRICT", Emitted, Codegen, Bool,
+               Any)
+/* Mide cuantas direcciones de funcion nuestras CRUZAN a codigo real y por
+   donde.  Es el numero que decide si emitir la nativa por defecto sale a
+   cuenta; sin el, cambiar como se emite una direccion es decidir a ciegas. */
+VESTA_ENV_FLAG(FnAddrReport, "VESTA_FNADDR_REPORT", Emitted, Codegen, Bool, Any)
 VESTA_ENV_FLAG(ModuleInitChunk, "VESTA_MODULE_INIT_CHUNK", Emitted, Optimizer,
                Int, Any)
 VESTA_ENV_FLAG(TreeShake, "VX_TREE_SHAKE", Emitted, Optimizer, Bool, Any)

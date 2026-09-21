@@ -464,6 +464,10 @@ void register_definite_store_producer();
  */
 void register_bulk_memory_producer();
 
+/// Registra el dominio que dice DE QUIEN es el codigo al que salta una
+/// llamada.  @see kProducerCodeOrigin
+void register_code_origin_producer();
+
 /// Da de alta el dominio que dice que operaciones no caben en un backend.
 void register_backend_producer();
 

@@ -34,7 +34,7 @@ ir::IrValueId load_slot(ir::IrFunction &fn, ir::IrBlockId block,
     ld.operands = {slot};
     ld.source_line = line;
     fn.append(block, std::move(ld));
-    if (host) fn.values[v].is_host_ptr = true;
+    if (host) fn.values[v].memory = ir::MemorySpace::HostByConstruction;
     return v;
 }
 

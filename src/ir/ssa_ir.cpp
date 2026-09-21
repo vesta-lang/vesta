@@ -673,7 +673,7 @@ void print_instr(std::ostream &o, const IrFunction &fn, const IrInstr &ins) {
          * lo decia.  Hubo que deducirlo instruccion a instruccion mas de una
          * vez. */
         if (ins.dst < static_cast<IrValueId>(fn.values.size()) &&
-            fn.values[ins.dst].is_host_ptr)
+            fn.values[ins.dst].is_host_ptr())
             o << "@host";
         o << " = ";
     }
@@ -2336,6 +2336,21 @@ const IrClass *new_helper_class(const IrModule &mod, const std::string &sym) {
                         return &c;
         }
     return nullptr;
+}
+
+} // namespace ir
+
+namespace ir {
+
+const char *memory_space_name(MemorySpace m) {
+    switch (m) {
+    case MemorySpace::NotHost: return "not-host";
+    case MemorySpace::HostByConstruction: return "host-by-construction";
+    case MemorySpace::HostByType: return "host-by-type";
+    case MemorySpace::HostByInference: return "host-by-inference";
+    case MemorySpace::Unknown: return "unknown";
+    }
+    return "not-host";
 }
 
 } // namespace ir

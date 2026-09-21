@@ -113,6 +113,41 @@ bool must_overlap(const AbstractLoc &a, const AbstractLoc &b) {
     return a.off < b.off + wb && b.off < a.off + wa;
 }
 
+bool must_not_overlap(const AbstractLoc &a, const AbstractLoc &b) {
+    using K = AbstractLoc::Kind;
+    /* Nada no toca nada.  Es lo unico que se demuestra sin mirar al otro. */
+    if (a.kind == K::None || b.kind == K::None) return true;
+    /* TOP es "cualquier sitio", y la clase generica "cualquiera de esta
+     * clase": de ninguno de los dos se puede demostrar que no toque algo. */
+    if (a.kind == K::Unknown || b.kind == K::Unknown) return false;
+    if (a.id == LOC_GENERIC || b.id == LOC_GENERIC) return false;
+    /* Clases distintas: la pila no es el monton ni los globales.  Es del
+     * modelo, igual que en @ref may_alias. */
+    if (a.kind != b.kind) return true;
+
+    if (a.id != b.id) {
+        /* Raices distintas dentro de la misma clase.  Dos reservas o dos
+         * huecos del marco son dos objetos: demostrado.
+         *
+         * Pero la raiz de un PARaMETRO es su posicion -- un nombre --, y nada
+         * impide que quien llama pase la misma direccion dos veces.  Ahi no se
+         * demuestra nada, y AQUi ES DONDE SE CORTA: @ref may_alias, en este
+         * mismo punto, acepta la disyuncion cuando las dos posiciones declaran
+         * su direccion.  Eso vale para decidir si se reordena -- un contrato
+         * esta para eso -- y no vale para comprobar el contrato, que es lo que
+         * pregunta quien llama aqui.  Con las dos preguntas en la misma
+         * funcion, la comprobacion se apoyaba en lo que iba a comprobar. */
+        return a.kind != K::ArgDerived;
+    }
+
+    /* MISMA raiz concreta: se demuestra la disyuncion solo si los dos rangos
+     * son conocidos y no se cortan.  Un ancho sin conocer es "de aqui en
+     * adelante no se sabe", asi que no se puede afirmar que acabe antes de
+     * donde empieza el otro. */
+    if (a.width <= 0 || b.width <= 0) return false;
+    return !(a.off < b.off + b.width && b.off < a.off + a.width);
+}
+
 // --------------------------------------------------------------------------
 // LocSet
 // --------------------------------------------------------------------------

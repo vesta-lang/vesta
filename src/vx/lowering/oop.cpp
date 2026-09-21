@@ -148,7 +148,7 @@ void Lowering::lower_class_methods(ast::ClassDecl *cd, ir::IrModule &out) {
             fn.values[this_vid].is_param = true;
             // fix - this es siempre un host_ptr a un objeto GC; debe
             // ser refrescado tras cualquier CALL que pueda disparar GC.
-            fn.values[this_vid].is_host_ptr = true;
+            fn.values[this_vid].memory = ir::MemorySpace::HostByConstruction;
             fn.values[this_vid].is_gc_object = true;
             fn.params.push_back(this_vid);
             bindings.emplace_back("this", this_vid);
@@ -168,7 +168,8 @@ void Lowering::lower_class_methods(ast::ClassDecl *cd, ir::IrModule &out) {
             // -> el Result llega siempre en ceros al caller.  Caso
             // observado: file_io.FileReader.read_all retornaba con
             // tag=0, error=0 aunque el archivo se hubiera leido OK.
-            fn.values[v_method_retbuf].is_host_ptr = msi.host_buffer;
+            fn.values[v_method_retbuf].set_host_by_construction(
+                msi.host_buffer);
             fn.params.push_back(v_method_retbuf);
         }
 
@@ -430,7 +431,8 @@ void Lowering::lower_class_methods(ast::ClassDecl *cd, ir::IrModule &out) {
                     // IrOp::GC_DEREF_HOST.
                     const ir::IrValueId field_val =
                         fn_->new_value(ir::IrType::I64);
-                    fn_->values[field_val].is_host_ptr = true;
+                    fn_->values[field_val].memory =
+                        ir::MemorySpace::HostByConstruction;
                     fn_->values[field_val].is_gc_object = true;
                     ir::IrInstr deref{};
                     deref.op = ir::IrOp::GC_DEREF_HOST;
@@ -975,7 +977,7 @@ void Lowering::generate_new_helpers(ir::IrModule &out) {
              * Sin proveedor queda el `calloc` de la convencion C, que es lo que
              * resuelve el enlazador contra la libc. */
             const ir::IrValueId v_obj = nf.new_value(ir::IrType::PTR);
-            nf.values[v_obj].is_host_ptr = true;
+            nf.values[v_obj].memory = ir::MemorySpace::HostByConstruction;
             {
                 const std::string &alloc_sym = tc_.raw_alloc_symbol();
                 ir::IrInstr ca{};
@@ -997,7 +999,7 @@ void Lowering::generate_new_helpers(ir::IrModule &out) {
             // obj[0] (STORE &vtable, obj) -> el dispatch virtual la lee.
             if (needs_vtable && vtable_idx != UINT64_MAX) {
                 ir::IrValueId v_vt = nf.new_value(ir::IrType::PTR);
-                nf.values[v_vt].is_host_ptr = true;
+                nf.values[v_vt].memory = ir::MemorySpace::HostByConstruction;
                 {
                     ir::IrInstr sa{};
                     sa.op = ir::IrOp::STR_LIT_ADDR;
@@ -1071,7 +1073,7 @@ void Lowering::generate_new_helpers(ir::IrModule &out) {
                 }
                 // %obj = call vx_gc_alloc_ptr(%sz)  (host_ptr al payload)
                 const ir::IrValueId g_obj = gf.new_value(ir::IrType::PTR);
-                gf.values[g_obj].is_host_ptr = true;
+                gf.values[g_obj].memory = ir::MemorySpace::HostByConstruction;
                 gf.values[g_obj].is_gc_object = true;
                 {
                     ir::IrInstr ca{};
@@ -1091,7 +1093,8 @@ void Lowering::generate_new_helpers(ir::IrModule &out) {
                 // para una clase gc (se construyo arriba), con o sin vtable.
                 if (desc_idx != UINT64_MAX) {
                     ir::IrValueId g_db = gf.new_value(ir::IrType::PTR);
-                    gf.values[g_db].is_host_ptr = true;
+                    gf.values[g_db].memory =
+                        ir::MemorySpace::HostByConstruction;
                     {
                         ir::IrInstr sa{};
                         sa.op = ir::IrOp::STR_LIT_ADDR;
@@ -1112,7 +1115,8 @@ void Lowering::generate_new_helpers(ir::IrModule &out) {
                         gf.append(ge, std::move(c));
                     }
                     ir::IrValueId g_vt = gf.new_value(ir::IrType::PTR);
-                    gf.values[g_vt].is_host_ptr = true;
+                    gf.values[g_vt].memory =
+                        ir::MemorySpace::HostByConstruction;
                     {
                         ir::IrInstr ad{};
                         ad.op = ir::IrOp::ADD;
@@ -1261,7 +1265,7 @@ void Lowering::generate_new_helpers(ir::IrModule &out) {
                 }
                 // v_this = GC_DEREF_HOST(v_h): host_ptr al ObjectHeader.
                 const ir::IrValueId v_this = fn.new_value(ir::IrType::PTR);
-                fn.values[v_this].is_host_ptr = true;
+                fn.values[v_this].memory = ir::MemorySpace::HostByConstruction;
                 fn.values[v_this].is_gc_object = true;
                 {
                     ir::IrInstr ra{};
@@ -1481,7 +1485,7 @@ void Lowering::generate_module_init_function(ir::IrModule &out) {
     // son host_ptr nativos (no GC) -> is_host_ptr=true, is_gc_object=false.
     auto emit_find1 = [&](ir::IrOp op, ir::IrValueId buf) -> ir::IrValueId {
         const ir::IrValueId v = fn.new_value(ir::IrType::PTR);
-        fn.values[v].is_host_ptr = true;
+        fn.values[v].memory = ir::MemorySpace::HostByConstruction;
         ir::IrInstr i{};
         i.op = op;
         i.type = ir::IrType::PTR;
@@ -1589,7 +1593,7 @@ void Lowering::generate_module_init_function(ir::IrModule &out) {
         auto reload_cls = [&]() -> ir::IrValueId {
             const ir::IrValueId v_a = emit_strlit(cache_idx);
             const ir::IrValueId v = fn.new_value(ir::IrType::PTR);
-            fn.values[v].is_host_ptr = true;
+            fn.values[v].memory = ir::MemorySpace::HostByConstruction;
             ir::IrInstr ld{};
             ld.op = ir::IrOp::LOAD;
             ld.type = ir::IrType::I64;
@@ -2022,7 +2026,8 @@ ir::IrValueId Lowering::lower_class_method_call(ast::CallExpr *e) {
         // que el metodo escriba con `movh` y quien llama lea con `movh`.
         al.host_alloca = mcsi.host_buffer;
         emit(current_block_, std::move(al));
-        fn_->values[v_method_call_retbuf].is_host_ptr = mcsi.host_buffer;
+        fn_->values[v_method_call_retbuf].set_host_by_construction(
+            mcsi.host_buffer);
     }
     const ir::IrType ret_ir = method_call_sret ? ir::IrType::VOID : ret_ir_decl;
 
@@ -2220,7 +2225,7 @@ ir::IrValueId Lowering::lower_class_method_call(ast::CallExpr *e) {
     // (verificado por ejecucion).  Misma secuencia que CALLVIRT: LOAD
     // vtable; LOAD fn[idx]; CALLIND.
     if (lay.is_interface && native_poo_) {
-        fn_->values[obj].is_host_ptr = true;
+        fn_->values[obj].memory = ir::MemorySpace::HostByConstruction;
         // La ranura sale del tramo reservado a ESTA interfaz, no del indice a
         // secas: el indice a secas cae encima de los metodos de la clase.
         const ir::IrValueId v_fn = emit_vtable_method_ptr(
@@ -2238,14 +2243,14 @@ ir::IrValueId Lowering::lower_class_method_call(ast::CallExpr *e) {
         emit(current_block_, std::move(ci));
         if (dst != ir::IR_NO_VALUE &&
             mtd->return_type.kind == PrimitiveKind::CLASS) {
-            fn_->values[dst].is_host_ptr = true;
+            fn_->values[dst].memory = ir::MemorySpace::HostByConstruction;
             fn_->values[dst].is_gc_object = true;
         }
         return visible_dst;
     }
     if (lay.is_interface) {
         // Marcar obj como host_ptr (instancia GC-derivada).
-        fn_->values[obj].is_host_ptr = true;
+        fn_->values[obj].memory = ir::MemorySpace::HostByConstruction;
 
         // Dispatch de interfaz via ITABLE (en vez de findmethod+callm):
         // construimos un @c ItfCallParams (32 bytes) en stack con el
@@ -2435,7 +2440,7 @@ ir::IrValueId Lowering::lower_class_method_call(ast::CallExpr *e) {
             emit(current_block_, std::move(dc));
             if (dst != ir::IR_NO_VALUE &&
                 mtd->return_type.kind == PrimitiveKind::CLASS) {
-                fn_->values[dst].is_host_ptr = true;
+                fn_->values[dst].memory = ir::MemorySpace::HostByConstruction;
                 fn_->values[dst].is_gc_object = true;
             }
             return visible_dst;
@@ -2462,7 +2467,7 @@ ir::IrValueId Lowering::lower_class_method_call(ast::CallExpr *e) {
             emit(current_block_, std::move(ci));
             if (dst != ir::IR_NO_VALUE &&
                 mtd->return_type.kind == PrimitiveKind::CLASS) {
-                fn_->values[dst].is_host_ptr = true;
+                fn_->values[dst].memory = ir::MemorySpace::HostByConstruction;
                 fn_->values[dst].is_gc_object = true;
             }
             return visible_dst;
@@ -2512,7 +2517,7 @@ ir::IrValueId Lowering::lower_class_method_call(ast::CallExpr *e) {
     // verificacion sin encadenar para evitar el bug latente.
     if (dst != ir::IR_NO_VALUE &&
         mtd->return_type.kind == PrimitiveKind::CLASS) {
-        fn_->values[dst].is_host_ptr = true;
+        fn_->values[dst].memory = ir::MemorySpace::HostByConstruction;
         fn_->values[dst].is_gc_object = true;
     }
     return visible_dst;
@@ -2787,7 +2792,7 @@ bool Lowering::try_lower_static_method_call(ast::CallExpr *e,
             al.host_alloca = ssi.host_buffer;
             al.source_line = e->loc.line;
             emit(current_block_, std::move(al));
-            fn_->values[v_retbuf].is_host_ptr = ssi.host_buffer;
+            fn_->values[v_retbuf].set_host_by_construction(ssi.host_buffer);
         }
         // Bajar args (retbuf primero si SRET).
         std::vector<ir::IrValueId> arg_vals;
@@ -2965,7 +2970,7 @@ ir::IrValueId Lowering::emit_findclass_into(std::vector<ir::IrInstr> &setup,
         setup.push_back(std::move(st));
     }
     const ir::IrValueId vc = fn_->new_value(ir::IrType::PTR);
-    fn_->values[vc].is_host_ptr = true;
+    fn_->values[vc].memory = ir::MemorySpace::HostByConstruction;
     {
         ir::IrInstr fc{};
         fc.op = ir::IrOp::FINDCLASS;

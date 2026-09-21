@@ -919,7 +919,7 @@ bool asm_lift_micro(
         ld.operands = {hueco};
         ld.source_line = line;
         fn.append(block, std::move(ld));
-        if (host) fn.values[v].is_host_ptr = true;
+        if (host) fn.values[v].memory = ir::MemorySpace::HostByConstruction;
         valor_de_hueco.emplace(hueco, v);
         return v;
     };

@@ -236,7 +236,17 @@ class Lowering {
      * monton.
      */
     struct TypeMemory {
-        bool is_host_ptr = false;         ///< Direccion de memoria del host.
+        /// En que memoria, y COMO se supo.  Lo que sale de aqui es
+        /// @c HostByType: lo dice el fuente, no se dedujo ni lo fabrico el
+        /// compilador.  Se lleva la clase entera y no un si/no para que quien
+        /// la aplique no tenga que volver a decidirlo -- y sobre todo para que
+        /// no pueda decidirlo distinto.
+        ir::MemorySpace memory = ir::MemorySpace::NotHost;
+        /// @return true si se puede afirmar que es del anfitrion.
+        bool is_host_ptr() const {
+            return memory != ir::MemorySpace::NotHost &&
+                   memory != ir::MemorySpace::Unknown;
+        }
         bool is_gc_object = false;        ///< Ademas, objeto del recolector.
         bool pointee_is_host_ptr = false; ///< Lo de dentro, tambien (`T**`).
     };
@@ -2922,6 +2932,11 @@ class Lowering {
      */
     ir::IrValueId lower_index_addr(ast::IndexExpr *e);
 
+    /// Lo que ocupa una direccion.  Es el mismo numero que @ref size_of_type
+    /// le da a un puntero, y esta aqui para que los dos sitios no puedan
+    /// decir cosas distintas.
+    static constexpr size_t kPointerBytes = 8;
+
     /**
      * @brief Tamano en bytes del tipo Vesta (consulta layout para STRUCT).
      *
@@ -2929,6 +2944,39 @@ class Lowering {
      *         o struct desconocido).
      */
     size_t size_of_type(const Type &t) const;
+
+    /**
+     * @brief De que memoria es lo que devuelve una funcion `extern`.
+     *
+     * Lo del TIPO (puntero, array, referencia a clase) mas lo que solo sabe
+     * el SITIO: al otro lado de una `extern` corre codigo nativo, que no tiene
+     * memoria de la maquina virtual y por tanto no puede devolver una
+     * direccion suya.  Hace falta porque una direccion tambien viaja como
+     * entero -- `GetProcAddress` devuelve `uintptr` -- y entonces no hay tipo
+     * al que preguntarle.
+     *
+     * Vive aqui, en un solo sitio, porque hay DOS caminos que bajan una
+     * llamada `extern` (la directa y el thunk de `&funcion`) y lo que se
+     * afirma de una nativa no puede depender de por cual se llegue.
+     *
+     * @param fn  Funcion donde vive @p dst (el thunk construye la suya).
+     * @param dst Valor que recibe el retorno; @c IR_NO_VALUE si devuelve void.
+     * @param ret Tipo de retorno DECLARADO en la `extern`.
+     */
+    void mark_extern_return_memory(ir::IrFunction &fn, ir::IrValueId dst,
+                                   const Type &ret) const;
+
+    /**
+     * @brief La ficha del campo del que habla @p e, sea de struct o de clase.
+     *
+     * En un sitio solo: "que campo es este acceso" se contesta igual mire
+     * quien lo mire, y las dos familias guardan la misma ficha
+     * (@c StructFieldInfo).  Escrita por separado en cada consumidor, una de
+     * las copias se queda corta y nadie lo nota.
+     *
+     * @return La ficha, o @c nullptr si no se pudo resolver.
+     */
+    const StructFieldInfo *field_info_of(const ast::FieldAccessExpr *e) const;
 
     /**
      * @brief Bytes del buffer de un `Optional<T>` / `Result<V,E>`.
@@ -2993,6 +3041,54 @@ class Lowering {
      * @return Lo que se anoto al registrarla; todo a cero si no consta.
      */
     SretInfo sret_info_for(const std::string &name) const;
+
+    /**
+     * @struct SretCall
+     * @brief Como queda una llamada cuando lo devuelto no cabe en un registro.
+     *
+     * Las tres cosas que cambian van juntas porque se deciden a la vez: que
+     * tipo lleva la instruccion, cual es su destino, y que ve el resto del
+     * bajado como resultado.  Separarlas es lo que hacia que un sitio
+     * contestara una y se olvidara de otra.
+     */
+    struct SretCall {
+        ir::IrValueId buffer = ir::IR_NO_VALUE;  ///< el hueco, si hace falta
+        ir::IrType call_type = ir::IrType::VOID; ///< tipo de la instruccion
+        ir::IrValueId dst = ir::IR_NO_VALUE;     ///< su destino
+        bool uses_buffer = false;                ///< si se reservo hueco
+
+        /// @brief Lo que el resto del bajado usa: el hueco, o el destino.
+        ir::IrValueId result() const noexcept {
+            return uses_buffer ? buffer : dst;
+        }
+    };
+
+    /**
+     * @brief Prepara una llamada para lo que devuelve, sea como sea.
+     *
+     * Responde DE UNA VEZ todo lo que el retorno decide: si hace falta hueco lo
+     * reserva, y con que tipo y con que destino se emite la instruccion.  El
+     * hueco lo coloca quien llama COMO PRIMER ARGUMENTO -- es el parametro
+     * oculto con que el llamado lo recibe, y si el orden no coincidiera, el
+     * llamado tomaria el primer argumento de verdad por el hueco --.
+     *
+     * Lo usan TODOS los caminos de llamada: por nombre, por un `cfn`, por un
+     * `cfn` guardado en variable y por un lambda.  Que este en un sitio no es
+     * aseo: esta pregunta ya estuvo contestada por separado en cuatro sitios y
+     * chocaron -- y volvio a chocar cuando los caminos indirectos ni siquiera
+     * la hacian, asi que el llamado escribia donde apuntara la ranura --.
+     *
+     * Recibe el @ref SretInfo hecho y no lo deduce, porque de donde sale
+     * depende del camino: por nombre se sabe mas que por el tipo -- si un
+     * puntero inteligente es `unique` o `shared` no esta en el tipo del sitio
+     * de llamada --, asi que quien llama trae la mejor respuesta que tenga.
+     *
+     * @param si   Lo que se sabe del retorno.
+     * @param ret  Tipo devuelto, para cuando NO hace falta hueco.
+     * @param line Linea del fuente.
+     * @return Con que emitir la instruccion y que devolver.
+     */
+    SretCall prepare_sret_call(const SretInfo &si, const Type &ret, int line);
 
     /**
      * @brief Anota en un valor SSA lo que su tipo Vesta dice de su memoria.

@@ -35,6 +35,16 @@
 #include "analysis/facts/loop_trip_count.h"
 #include "ir/ssa_ir.h"
 
+namespace ir {
+/// Un sitio de llamada indirecta ya clasificado.  Adelantado: quien incluya
+/// esto solo lo pasa por referencia, y traerse el optimizador entero haria que
+/// compilar cualquier productor dependiera de el.
+struct CallTargetSite;
+/// Por que no se supo de quien es el codigo.  Adelantado con su tipo
+/// subyacente, que es lo que permite declararlo sin la definicion.
+enum class CallTargetUnknown : uint8_t;
+} // namespace ir
+
 namespace analysis {
 namespace asa {
 
@@ -118,6 +128,54 @@ bool bulk_memory_fact(FactStore &store, const ir::IrFunction &fn,
 bool straight_line_bulk_fact(FactStore &store, const ir::IrFunction &fn,
                              const StraightLineBulkFact &b, const char *stage,
                              Source source, Fact &out);
+
+/**
+ * @brief DE QUIEN es el codigo al que salta una llamada indirecta.
+ *
+ * @note El sitio lo clasifica @c ir::ir_callind_target_memory.  Se declara
+ *       adelantado y no se incluye el optimizador entero: esta cabecera la
+ *       lee todo productor, y arrastrarlo aqui haria que compilar cualquiera
+ *       de ellos dependiera de el.
+ *
+ * Armado aqui, como los demas, porque el hecho lo puede afirmar mas de un
+ * sitio -- el dominio mirando el codigo, y el pase que elige como emitir la
+ * llamada justo antes de emitirla -- y con dos constructores bastaria que uno
+ * se quedara atras para que el mismo salto se describiera distinto segun quien
+ * lo mirara.
+ *
+ * @param store  Almacen, para internar los nombres.
+ * @param fn     Funcion donde esta la llamada.
+ * @param site   Lo que el clasificador contesto de ese sitio.
+ * @param stage  Momento en el que se dice.
+ * @param source De donde sale el conocimiento.
+ * @param out    Sale el hecho armado.
+ * @return false si de ese sitio no se pudo afirmar nada -- entonces lo que
+ *         corresponde es decir POR QUE, no callarse.
+ */
+bool code_origin_fact(FactStore &store, const ir::IrFunction &fn,
+                      const ir::CallTargetSite &site, const char *stage,
+                      Source source, Fact &out);
+
+/**
+ * @brief El caso exacto de un no-saber de este dominio, en vocabulario
+ *        estable.
+ *
+ * Junto al constructor del hecho y no dentro del productor: es la MISMA
+ * vocabulario -- lo que se afirma y lo que se renuncia a afirmar -- y partirlo
+ * en dos ficheros es como acaban dos mitades diciendo cosas distintas.
+ */
+const char *code_origin_unknown_code(ir::CallTargetUnknown why);
+
+/**
+ * @brief De QUE CLASE es ese no-saber, en el vocabulario COMuN del ASA.
+ *
+ * Los casos NO son el mismo, y meterlos en un cajon es lo que ese vocabulario
+ * existe para impedir: es lo que decide la ACCIoN, y las de estos son
+ * opuestas entre si -- lo que llega por un parametro se declara, lo que sale
+ * de memoria se deduce mirando quien escribe, y lo que se corto por
+ * presupuesto no es culpa del programa --.
+ */
+UnknownReason code_origin_unknown_kind(ir::CallTargetUnknown why);
 
 } // namespace asa
 } // namespace analysis

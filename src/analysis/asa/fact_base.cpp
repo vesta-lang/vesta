@@ -35,6 +35,7 @@ namespace asa {
 const char *const kProducerStructure = "asa.structure";
 const char *const kProducerRanges = "asa.ranges";
 const char *const kProducerMemory = "asa.memory";
+const char *const kProducerAddressSpace = "asa.address_space";
 const char *const kProducerEffects = "asa.effects";
 const char *const kProducerEscape = "asa.escape";
 const char *const kProducerLayout = "asa.layout";
@@ -42,6 +43,7 @@ const char *const kProducerAsmFlow = "asa.asm_flow";
 const char *const kProducerBoundary = "asa.boundary";
 const char *const kProducerLoops = "asa.loops";
 const char *const kProducerBulkMemory = "asa.bulk_memory";
+const char *const kProducerCodeOrigin = "asa.code_origin";
 const char *const kProducerBackend = "asa.backend";
 const char *const kProducerOverlays = "asa.overlays";
 const char *const kProducerDemandedBits = "asa.demanded_bits";
@@ -110,6 +112,7 @@ void register_asa_canonical_names() {
         register_canonical_name(kProducerStructure);
         register_canonical_name(kProducerRanges);
         register_canonical_name(kProducerMemory);
+        register_canonical_name(kProducerAddressSpace);
         register_canonical_name(kProducerLayout);
         register_canonical_name(kProducerAsmFlow);
         register_canonical_name(kProducerBoundary);
@@ -121,6 +124,7 @@ void register_asa_canonical_names() {
         register_canonical_name(kProducerParamContracts);
         register_canonical_name(kProducerEffects);
         register_canonical_name(kProducerEscape);
+        register_canonical_name(kProducerCodeOrigin);
         register_canonical_name(kModuleUnit);
         return true;
     }();
@@ -519,6 +523,74 @@ PointsTo FactBase::memory_from_store_(const ir::IrFunction &fn,
     }
     PointsTo computed = compute_points_to(fn, structure(fn, stage));
     analysis_store_->store(k, serialize_points_to(computed));
+    return computed;
+}
+
+/* A quien le pregunta el analisis de espacios por los punteros: A LA BASE, que
+ * es donde ya estan resueltos y cacheados.  Funcion con NOMBRE y contexto,
+ * como el resto de oraculos. */
+namespace {
+struct AddressSpacePtCtx {
+    FactBase *base;
+    const char *stage;
+};
+
+const PointsTo &address_space_points_to(void *ctx, const ir::IrFunction &fn) {
+    AddressSpacePtCtx *c = static_cast<AddressSpacePtCtx *>(ctx);
+    return c->base->memory(fn, c->stage);
+}
+} // namespace
+
+const AddressSpaces &FactBase::address_spaces(const ir::IrFunction &fn,
+                                              const char *stage) {
+    ++queries_;
+    const std::string *key = key_of(fn, stage_or_default(stage));
+    const bool fresh =
+        !manager_.cached_v<AddressSpaceAnalysis>(key, fn.version);
+    if (fresh) {
+        /* Se APOYA en la memoria -- emparejar la escritura con la lectura es
+         * cosa de points-to, y este no lo rehace --, y aquella a su vez en la
+         * estructura: la cadena es transitiva.  Decirlo es lo que permite que
+         * invalidar un eslabon tire de este, en vez de servir una respuesta
+         * calculada sobre otro codigo.
+         *
+         * Y lo que se afirma es PROBADO por construccion: donde no se pudo
+         * probar, la entrada no dice @c Host ni @c Machine -- dice que no se
+         * sabe, con su motivo --, asi que no hay respuestas de media certeza
+         * que sellar aparte. */
+        mark(kProducerAddressSpace, *key, Certainty::Proven, kProducerMemory);
+    }
+    return memoized<AddressSpaceAnalysis, AddressSpaces>(
+        fresh, key, fn.version,
+        [this, &fn, stage]() { return address_spaces_from_store_(fn, stage); });
+}
+
+AddressSpaces FactBase::address_spaces_from_store_(const ir::IrFunction &fn,
+                                                   const char *stage) {
+    AddressSpacePtCtx pt_ctx{this, stage};
+    PointsToOracle oracle;
+    oracle.ask = &address_space_points_to;
+    oracle.ctx = &pt_ctx;
+
+    if (analysis_store_ == nullptr)
+        return compute_address_spaces(fn, structure(fn, stage), oracle);
+
+    const uint64_t k =
+        analysis_store_->key_of(kAddressSpaceAnalysisName, kAddressSpaceFormat,
+                                function_code_key(fn), stage_or_default(stage));
+    std::vector<uint8_t> bytes;
+    if (analysis_store_->load(k, bytes)) {
+        AddressSpaces restored;
+        if (deserialize_address_spaces(bytes.data(), bytes.size(),
+                                       fn.values.size(), restored))
+            return restored;
+        /* Estaba y no se pudo interpretar.  Se DICE -- "no habia" y "habia y
+         * estaba roto" se arreglan distinto -- y se computa. */
+        analysis_store_->note_rejected();
+    }
+    AddressSpaces computed =
+        compute_address_spaces(fn, structure(fn, stage), oracle);
+    analysis_store_->store(k, serialize_address_spaces(computed));
     return computed;
 }
 

@@ -327,7 +327,7 @@ bool Lowering::try_lower_reflect_builtins(ast::CallExpr *e, Builtin b,
         // Convertir handle a host_ptr (igual que __new_<X> antes del
         // ctor).  El resultado es un host_ptr GC-managed.
         const ir::IrValueId v_host = fn_->new_value(ir::IrType::I64);
-        fn_->values[v_host].is_host_ptr = true;
+        fn_->values[v_host].memory = ir::MemorySpace::HostByConstruction;
         fn_->values[v_host].is_gc_object = true;
         {
             // raw_asm-elim 2026-05-28: gcderef + xchg -> IrOp::GC_DEREF_HOST.
@@ -426,7 +426,7 @@ bool Lowering::try_lower_reflect_builtins(ast::CallExpr *e, Builtin b,
         // ya las convirtio a host_ptr en __new_<X>); el flag puede
         // perderse al pasar por una variable local con register-allocation,
         // asi que lo forzamos aqui antes del LOAD.
-        fn_->values[v_obj].is_host_ptr = true;
+        fn_->values[v_obj].memory = ir::MemorySpace::HostByConstruction;
         const ir::IrValueId v_dst =
             emit_load_typed(v_obj, ir::IrType::I64, e->loc.line);
         out_value = v_dst;

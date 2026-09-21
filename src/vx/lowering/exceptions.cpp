@@ -473,7 +473,9 @@ void Lowering::lower_try(ast::TryStmt *s) {
                 const bool exc_is_ptr = !cc.exc_class_name.empty();
                 const ir::IrValueId v_exc = fn_->new_value(
                     exc_is_ptr ? ir::IrType::PTR : ir::IrType::I64);
-                if (exc_is_ptr) fn_->values[v_exc].is_host_ptr = true;
+                if (exc_is_ptr)
+                    fn_->values[v_exc].memory =
+                        ir::MemorySpace::HostByConstruction;
                 ir::IrInstr cg{};
                 cg.op = ir::IrOp::CALL;
                 cg.type = exc_is_ptr ? ir::IrType::PTR : ir::IrType::I64;
@@ -484,8 +486,9 @@ void Lowering::lower_try(ast::TryStmt *s) {
                 bind(cc.var_name, v_exc);
             } else {
                 const ir::IrValueId v_exc = fn_->new_value(ir::IrType::PTR);
-                fn_->values[v_exc].is_host_ptr =
-                    true; // catch recibe FatalError* host
+                // El compilador emite el LANDINGPAD y SABE que el runtime le
+                // entrega un FatalError* del anfitrion: no lo deduce.
+                fn_->values[v_exc].set_host_by_construction(true);
                 ir::IrInstr lp{};
                 lp.op = ir::IrOp::LANDINGPAD;
                 lp.type = ir::IrType::PTR;
@@ -544,7 +547,7 @@ void Lowering::lower_try(ast::TryStmt *s) {
                 it_e->second != ir::IR_NO_VALUE &&
                 it_e->second < fn_->values.size()) {
                 const auto &src_val = fn_->values[it_e->second];
-                fn_->values[v_load].is_host_ptr = src_val.is_host_ptr;
+                fn_->values[v_load].memory = src_val.memory;
                 fn_->values[v_load].is_gc_object = src_val.is_gc_object;
                 fn_->values[v_load].pointee_is_host_ptr =
                     src_val.pointee_is_host_ptr;
@@ -731,7 +734,7 @@ void Lowering::lower_try(ast::TryStmt *s) {
         if (it_e != entry_bindings.end() && it_e->second != ir::IR_NO_VALUE &&
             it_e->second < fn_->values.size()) {
             const auto &src_val = fn_->values[it_e->second];
-            fn_->values[v_load].is_host_ptr = src_val.is_host_ptr;
+            fn_->values[v_load].memory = src_val.memory;
             fn_->values[v_load].is_gc_object = src_val.is_gc_object;
             fn_->values[v_load].pointee_is_host_ptr =
                 src_val.pointee_is_host_ptr;
@@ -1046,7 +1049,7 @@ ir::IrValueId Lowering::lower_try_expr(ast::TryExpr *e) {
             // side (igual que el STORE side abajo).  Sin esto el LOAD del
             // Err a copiar usaba `mov` (VM) en vez de `movh` (host) y leia
             // basura -> error(r) != el valor real (path de error de `?`).
-            fn_->values[v_src_at].is_host_ptr = fn_->values[v_buf].is_host_ptr;
+            fn_->values[v_src_at].memory = fn_->values[v_buf].memory;
             const ir::IrValueId v_tmp =
                 emit_load_typed(v_src_at, ir::IrType::I64, src_line);
             const ir::IrValueId v_off2 =
@@ -1054,8 +1057,7 @@ ir::IrValueId Lowering::lower_try_expr(ast::TryExpr *e) {
             const ir::IrValueId v_dst_at =
                 emit_ptr_add(sret_retbuf_, v_off2, src_line);
             // BugFix sret-cross-mem (2026-06-04): propagar is_host_ptr.
-            fn_->values[v_dst_at].is_host_ptr =
-                fn_->values[sret_retbuf_].is_host_ptr;
+            fn_->values[v_dst_at].memory = fn_->values[sret_retbuf_].memory;
             emit_store_typed(v_dst_at, v_tmp, ir::IrType::I64, src_line);
         }
     }
@@ -1086,7 +1088,7 @@ ir::IrValueId Lowering::lower_try_expr(ast::TryExpr *e) {
     // marca, el LOAD de V emitia `mov` (VM mem) en vez de `movh` (host) y
     // leia 0/basura.  La rama err ya lo propagaba (de ahi que err funcione
     // y ok no).  Aplica al value extraction de la rama ok.
-    fn_->values[v_at8].is_host_ptr = fn_->values[v_buf].is_host_ptr;
+    fn_->values[v_at8].memory = fn_->values[v_buf].memory;
     const ir::IrValueId v_dst = emit_load_typed(v_at8, payload_t, src_line);
     return v_dst;
 }

@@ -191,7 +191,7 @@ void filter_candidates(const ir::IrFunction &fn, std::vector<VidInfo> &info) {
         }
         /* Excluir is_host_ptr: tambien evita complicaciones de
          * GC + safe pra ya que estos VIDs suelen ser cortos. */
-        if (val.is_host_ptr) {
+        if (val.is_host_ptr()) {
             vi.excluded = true;
             continue;
         }

@@ -1727,7 +1727,8 @@ std::string TypeChecker::monomorphize_function(const std::string &template_name,
         }
         written += ">";
         cloned->instance_of = util::intern_name(written);
-        cloned->instance_template = util::intern_name(written_name(template_name));
+        cloned->instance_template =
+            util::intern_name(written_name(template_name));
         cloned->instance_site = loc;
         /* Y QUE tomo cada ranura, que es lo que permite decir la cota que el
          * cuerpo exige en vez de contar el sintoma ya sustituido. */
@@ -2144,8 +2145,8 @@ static void pre_mono_collect_in_expr(TypeChecker &tc, const ast::Expr *e) {
                     c->type_args.empty()
                         ? Type{PrimitiveKind::U8}
                         : tc.resolve_type_node(c->type_args[0].get());
-                const std::string inst = tc.instantiate_provider(
-                    builtin_from_name(cid->name), elem);
+                const std::string inst =
+                    tc.instantiate_provider(builtin_from_name(cid->name), elem);
                 if (!inst.empty()) {
                     auto *mut = const_cast<ast::IdentExpr *>(cid);
                     auto *mc = const_cast<ast::CallExpr *>(c);
@@ -2447,10 +2448,8 @@ static bool is_addr_kind(PrimitiveKind k) noexcept {
     case PrimitiveKind::UNIQUE_PTR:
     case PrimitiveKind::SHARED_PTR:
     case PrimitiveKind::BORROW:
-    case PrimitiveKind::BORROW_MUT:
-        return true;
-    default:
-        return false;
+    case PrimitiveKind::BORROW_MUT: return true;
+    default: return false;
     }
 }
 
@@ -2480,8 +2479,8 @@ static bool same_call_shape(const Type &a, const Type &b) noexcept {
         return is_addr_kind(a.kind) && is_addr_kind(b.kind);
     if (is_integral(a.kind) && is_integral(b.kind))
         return primitive_size_bytes(a.kind) == primitive_size_bytes(b.kind);
-    /* Lo demas -- flotantes, `bool`, `char`, un struct por valor, un Optional --
-     * no se da por intercambiable: su forma depende del tipo exacto. */
+    /* Lo demas -- flotantes, `bool`, `char`, un struct por valor, un Optional
+     * -- no se da por intercambiable: su forma depende del tipo exacto. */
     return a == b;
 }
 
@@ -2651,7 +2650,8 @@ std::string TypeChecker::instantiate_provider(Builtin b, const Type &elem) {
          * su nombre.
          *
          * Sin esto, un proveedor de otro modulo se ignoraba EN SILENCIO: el
-         * programa compilaba, corria y reservaba con el asignador de siempre. */
+         * programa compilaba, corria y reservaba con el asignador de siempre.
+         */
         if (const BuiltinProviderEntry *imp = provider_for(b))
             if (!imp->symbol.empty()) return imp->symbol;
         return std::string(); // nadie lo provee: no se memoiza
@@ -2682,11 +2682,11 @@ std::string TypeChecker::instantiate_provider(Builtin b, const Type &elem) {
      * al enlazador algo que nadie emitio, y el programa acabaria con el
      * asignador de la libc sin una palabra. */
     if (tparams.empty()) {
-        /* Sin variables de tipo, lo que se cablea es su NOMBRE, y entonces tiene
-         * que existir como simbolo: o sea, tener CUERPO.  Si no lo tiene, o si
-         * su `<...>` se quedo sin repartir, lo que se pide al enlazador no lo
-         * ha emitido nadie -- y el programa acaba con el asignador de la libc
-         * sin una palabra --, asi que se DICE. */
+        /* Sin variables de tipo, lo que se cablea es su NOMBRE, y entonces
+         * tiene que existir como simbolo: o sea, tener CUERPO.  Si no lo tiene,
+         * o si su `<...>` se quedo sin repartir, lo que se pide al enlazador no
+         * lo ha emitido nadie -- y el programa acaba con el asignador de la
+         * libc sin una palabra --, asi que se DICE. */
         if (decl->generic_head_unresolved || decl->body == nullptr)
             diags_.diag(decl->loc, DiagLevel::ERR, "VX2102",
                         {std::string(builtin_name(b)), decl->name});
@@ -3254,6 +3254,11 @@ bool TypeChecker::run() {
     }
 
     check_functions();
+    /* De que memoria son las direcciones que guardan los campos ENTEROS.  Va
+     * aqui, despues de los cuerpos, porque la respuesta sale de TODAS las
+     * escrituras del modulo y una lectura puede comprobarse antes que su
+     * escritura. */
+    infer_field_address_spaces_();
     pop_scope();
 
     /* log resumen de hits/misses del path VM-only si el
@@ -3316,6 +3321,248 @@ TypeChecker::function_sig_by_name(const std::string &name) const {
     if (it == sig_by_name_.end()) return nullptr;
     if (it->second >= function_sigs_.size()) return nullptr;
     return &function_sigs_[it->second];
+}
+
+std::string TypeChecker::written_param_list(const FunctionSig &sig,
+                                            bool with_names) const {
+    std::string out;
+    for (size_t i = 0; i < sig.param_types.size(); ++i) {
+        if (i != 0) out += ", ";
+        out += written_type_name(sig.param_types[i]);
+        if (with_names && i < sig.param_names.size() &&
+            !sig.param_names[i].empty()) {
+            out += ' ';
+            out += sig.param_names[i].str();
+        }
+    }
+    return out;
+}
+
+/**
+ * @brief Como se cita una candidata de `&f`: `cfn(i64 min, i64 max) -> i64`.
+ * @param sig        La firma.
+ * @param with_names Con el nombre de cada ranura (ver @c written_param_list).
+ */
+std::string TypeChecker::written_func_ref_sig(const FunctionSig &sig,
+                                              bool with_names) const {
+    return "cfn(" + written_param_list(sig, with_names) + ") -> " +
+           written_type_name(sig.return_type);
+}
+
+/**
+ * @brief Si dos firmas son el MISMO tipo funcion (parametros y retorno).
+ *
+ * Lo que las separe fuera de eso -- como se llaman sus ranuras -- no cuenta
+ * aqui: la pregunta es exactamente la que se hace el desempate por tipo
+ * esperado, "cumplen las dos lo mismo?".
+ */
+static bool same_fn_signature(const FunctionSig &a, const FunctionSig &b) {
+    if (a.param_types.size() != b.param_types.size()) return false;
+    if (!(a.return_type == b.return_type)) return false;
+    for (size_t i = 0; i < a.param_types.size(); ++i)
+        if (!(a.param_types[i] == b.param_types[i])) return false;
+    return true;
+}
+
+/**
+ * @brief La CLAVE de un prestamo que todavia no tiene nombre.
+ *
+ * Un `lend(u)` que no se asigna a nada es un prestamo igual que cualquier
+ * otro, pero el comprobador se indexa por el nombre de quien se lo queda y
+ * aqui no hay ninguno.  Sin clave no se le puede poner ultimo uso, y sin
+ * ultimo uso `advance_stmt` no lo suelta jamas: vivia hasta el final de la
+ * funcion, asi que un `lend_mut` posterior se rechazaba sin que hubiera nada
+ * vivo.
+ *
+ * Su identidad sale de DONDE esta escrito -- un numero, no un nombre --, que
+ * es lo unico que lo distingue de otro igual en la misma sentencia.
+ * DERIVARLA en vez de guardarla es lo que permite que quien lo crea y quien
+ * despues lo adopta la calculen por separado sin ponerse de acuerdo, y sin
+ * ocupar un campo en cada nodo del arbol.
+ *
+ * @param e El nodo que toma el prestamo.
+ */
+static uint32_t anon_borrow_key(const ast::Expr *e) {
+    return e != nullptr ? static_cast<uint32_t>(e->loc.offset) : 0u;
+}
+
+/**
+ * @brief Las ranuras tal y como se escriben en `&f(.min, .max)`: `.min, .max`.
+ *
+ * Una sola, porque los dos diagnosticos del filtro citan la misma cosa: el que
+ * no encuentra lo escrito y el que manda a escribirlo.
+ */
+static std::string written_slot_list(const ParamNames &names) {
+    std::string out;
+    for (size_t i = 0; i < names.size(); ++i) {
+        if (i != 0) out += ", ";
+        out += '.';
+        out += names[i].str();
+    }
+    return out;
+}
+
+bool TypeChecker::report_func_ref_undecided(const ast::Expr *val) {
+    /* El nombre, venga desnudo o con `&` delante: son la misma referencia y
+     * fallan igual. */
+    const ast::Expr *inner = val;
+    if (inner != nullptr && inner->kind == ast::NodeKind::UnaryExpr) {
+        const auto *un = static_cast<const ast::UnaryExpr *>(inner);
+        if (un->op != ast::UnOp::AddrOf) return false;
+        inner = un->operand.get();
+    }
+    if (inner == nullptr || inner->kind != ast::NodeKind::IdentExpr)
+        return false;
+    const auto *id = static_cast<const ast::IdentExpr *>(inner);
+    if (!id->is_func_ref) return false;
+    // Ya se dijo donde estaban las candidatas delante; se da por contestado.
+    if (func_ref_explained_ == id) return true;
+    const auto set = overloads_.find(id->name);
+    if (set == overloads_.end() || set->second.size() < 2) return false;
+
+    util::SmallVector<const FunctionSig *, 4> cands;
+    for (const uint32_t idx : set->second)
+        if (idx < function_sigs_.size()) cands.push_back(&function_sigs_[idx]);
+    if (cands.size() < 2) return false;
+
+    /* Si el tipo esperado PUEDE decidir.  Cuando dos candidatas tienen el
+     * mismo, no puede por definicion -- las dos lo cumplen --, y mandar a
+     * escribirlo seria mandar a hacer lo que ya esta hecho: lo que las separa
+     * son los nombres de sus ranuras, y eso es otro mensaje y otra salida.
+     *
+     * Es una pregunta sobre los TIPOS, asi que se contesta comparando tipos.
+     * Compararlos por como se ESCRIBEN preguntaria otra cosa -- si se ven
+     * igual --, que no es lo mismo y ademas cuesta una cadena por candidata en
+     * un sitio donde no hace falta ninguna. */
+    bool type_decides = true;
+    for (size_t i = 0; i + 1 < cands.size() && type_decides; ++i)
+        for (size_t j = i + 1; j < cands.size() && type_decides; ++j)
+            type_decides = !same_fn_signature(*cands[i], *cands[j]);
+
+    if (type_decides) {
+        diags_.diag(val->loc, DiagLevel::ERR, "VX2121",
+                    {written_name(id->name), std::to_string(cands.size())});
+    } else {
+        /* La forma exacta que hay que escribir, con las ranuras de la primera
+         * candidata: el usuario no tiene que deducirla del resto del mensaje.
+         */
+        diags_.diag(
+            val->loc, DiagLevel::ERR, "VX2125",
+            {written_name(id->name), written_slot_list(cands[0]->param_names)});
+    }
+    /* Y CUALES son.  Sin esto el mensaje niega y no ensenya, que es de lo que
+     * se acusa al de C++ para este mismo caso.  Con los NOMBRES cuando son lo
+     * que las separa: sin ellos se citarian dos veces la misma linea. */
+    for (const FunctionSig *cand : cands)
+        diags_.diag(val->loc, DiagLevel::NOTE, "VX2122",
+                    {written_func_ref_sig(*cand, !type_decides)});
+    return true;
+}
+
+const FunctionSig *TypeChecker::func_ref_overload(ast::IdentExpr *id,
+                                                  const Type &target,
+                                                  const ParamNames *slots) {
+    /* CUAL de las homonimas es `&f`, cuando hay varias.
+     *
+     * En una llamada lo deciden los ARGUMENTOS; en una referencia no hay
+     * ninguno, asi que lo unico que queda es el tipo que el contexto ESPERA --
+     * la variable que se declara, la ranura que se rellena, lo que se
+     * devuelve, el cast --.  Es lo que hacen C++, C#, Java y Swift, cada uno
+     * con su nombre, y ninguno tiene otra cosa que mirar.
+     *
+     * Antes se cogia la que `sig_by_name_` tuviera apuntada, que es la ULTIMA
+     * declarada: intercambiar dos lineas decidia si el programa compilaba.
+     * Ese es justo el criterio que este compilador rechaza en todas partes --
+     * no esta escrito en el fuente --.
+     *
+     * La coincidencia es EXACTA, sin conversiones.  Admitirlas volveria
+     * ambiguo el propio desempate: con `f(i32)` y `f(i64)`, un destino
+     * `cfn(i64) -> void` valdria para las dos.
+     *
+     * Y esto FILTRA, no prefiere: si el tipo esperado no es una funcion o no
+     * casa con ninguna, no se elige a dedo -- se devuelve nulo y quien llama
+     * sigue su camino --.  Preferir dejaria que anyadir una sobrecarga
+     * cambiara en silencio a que cuerpo va un `&f` ya escrito. */
+    /* La marca de la firma contesta primero: una sola candidata es el caso
+     * normal y sale con la consulta que ya hacia falta, sin tocar la tabla de
+     * homonimas.  Esa tabla solo tiene entrada para los nombres REPETIDOS.
+     *
+     * Con ranuras escritas NO se sale por aqui aunque el nombre sea unico: si
+     * no, `&f(.inventada)` pasaria sin decir nada, y una promesa que nadie
+     * comprueba es peor que no escribirla. */
+    const FunctionSig *only = function_sig_by_name(id->name);
+    if (only == nullptr) return nullptr;
+    if (!only->is_overloaded && slots == nullptr) return only;
+
+    /* Las candidatas, en un sitio: con el nombre repetido salen de la tabla de
+     * homonimas, y sin repetir es esa misma una.  Asi las dos capas se
+     * escriben UNA vez en vez de una por cada forma de llegar. */
+    util::SmallVector<const FunctionSig *, 4> cands;
+    if (only->is_overloaded) {
+        const auto set = overloads_.find(id->name);
+        if (set == overloads_.end()) return only;
+        for (const uint32_t idx : set->second)
+            if (idx < function_sigs_.size())
+                cands.push_back(&function_sigs_[idx]);
+    } else {
+        cands.push_back(only);
+    }
+
+    /* CAPA 2, las RANURAS.  Va primero porque es la que puede dejar una sola
+     * candidata, y entonces la referencia ya esta decidida: si ademas no casa
+     * con el destino, eso lo dice la comprobacion de tipos de siempre, con el
+     * tipo de verdad delante en vez de un `void`.
+     *
+     * El orden entre las dos capas no cambia a QUIEN se apunta -- las dos
+     * FILTRAN, y la interseccion es la misma se mire por donde se mire --,
+     * solo lo que se dice cuando no queda ninguna.
+     *
+     * Un nombre es un @c PooledName: comparar la lista entera es comparar
+     * punteros, sin mirar una sola letra. */
+    if (slots != nullptr) {
+        size_t kept = 0;
+        for (size_t i = 0; i < cands.size(); ++i)
+            if (cands[i]->param_names == *slots) cands[kept++] = cands[i];
+        if (kept == 0) {
+            diags_.diag(id->loc, DiagLevel::ERR, "VX2124",
+                        {written_name(id->name), written_slot_list(*slots)});
+            for (const FunctionSig *cand : cands)
+                diags_.diag(id->loc, DiagLevel::NOTE, "VX2122",
+                            {written_func_ref_sig(*cand, /*with_names=*/true)});
+            /* Ya esta explicado: quien vea luego que el valor no encaja no
+             * tiene que volver a contar lo mismo de otra forma. */
+            func_ref_explained_ = id;
+            return nullptr;
+        }
+        cands.resize(kept);
+        if (kept == 1) {
+            id->func_ref_mangled = cands[0]->mangled_label.empty()
+                                       ? id->name
+                                       : cands[0]->mangled_label;
+            return cands[0];
+        }
+    }
+
+    // El retorno de un tipo funcion viaja en `pointee` (ver make_function).
+    if (!target.pointee) return nullptr;
+    const std::vector<Type> &want = target.fn_params();
+
+    const FunctionSig *pick = nullptr;
+    for (const FunctionSig *cand : cands) {
+        // La aridad las separa sin comparar un solo tipo.
+        if (cand->param_types.size() != want.size()) continue;
+        if (!(cand->return_type == *target.pointee)) continue;
+        bool matches = true;
+        for (size_t i = 0; i < want.size() && matches; ++i)
+            matches = cand->param_types[i] == want[i];
+        if (!matches) continue;
+        if (pick != nullptr) return nullptr; // dos iguales: no desempata
+        pick = cand;
+    }
+    if (pick != nullptr)
+        id->func_ref_mangled =
+            pick->mangled_label.empty() ? id->name : pick->mangled_label;
+    return pick;
 }
 
 std::string
@@ -6867,18 +7114,10 @@ void TypeChecker::collect_globals() {
                          * que ir a buscar la otra para ver en que difieren, y
                          * el dato que falta es justo el que el autor escribio.
                          */
-                        auto param_list = [&](const FunctionSig &s) {
-                            std::string out;
-                            for (const Type &pt : s.param_types) {
-                                if (!out.empty()) out += ", ";
-                                out += written_type_name(pt);
-                            }
-                            return out;
-                        };
                         diags_.diag(fn->loc, DiagLevel::ERR, "VX2097",
-                                    {fn->name, bname, param_list(want),
+                                    {fn->name, bname, written_param_list(want),
                                      written_type_name(want.return_type),
-                                     param_list(got),
+                                     written_param_list(got),
                                      written_type_name(got.return_type)});
                     } else {
                         /* Cumple.  Lo primero, a la FIRMA: ahi es donde vive lo
@@ -6943,7 +7182,8 @@ void TypeChecker::collect_globals() {
                      * nombre viejo. */
                     if (!prev_is_forward && register_overload(fn, s.sig_index))
                         continue;
-                    if (!prev_is_forward) report_redefinition(fn->name, fn->loc);
+                    if (!prev_is_forward)
+                        report_redefinition(fn->name, fn->loc);
                 }
             }
         } else if (decl->kind == ast::NodeKind::GlobalVarDecl) {
@@ -9402,8 +9642,12 @@ void TypeChecker::check_var_decl(ast::VarDeclStmt *vd) {
             vd->init->result_type = s.type;
         }
         if (s.type.kind == PrimitiveKind::VOID) {
-            diags_.error(vd->loc, "no se pudo inferir el tipo de '" + vd->name +
-                                      "' (init devuelve void)");
+            /* Si lo que no se pudo inferir es una REFERENCIA a funcion con
+             * varias homonimas, se dice eso y cuales son: el mensaje de abajo
+             * seria cierto -- la referencia sin resolver se tipa `void` -- y
+             * mandaria a mirar un `void` que el usuario no escribio. */
+            if (!report_func_ref_undecided(vd->init.get()))
+                diags_.diag(vd->loc, DiagLevel::ERR, "VX2123", {vd->name});
             return;
         }
     } else {
@@ -9780,33 +10024,47 @@ void TypeChecker::check_var_decl(ast::VarDeclStmt *vd) {
         if (!numeric_const_to_newtype && t.kind != PrimitiveKind::COUNT &&
             !types_assignable(s.type, t) && !class_is_assignable(s.type, t) &&
             !null_to_class && !ptr_upcast) {
-            std::string msg = std::string("tipo del inicializador (") +
-                              written_type_name(t) +
-                              ") incompatible con tipo declarado (" +
-                              written_type_name(s.type) + ")";
-            // La conversion entero<->puntero NUNCA es implicita: si el mismatch
-            // es exactamente ese, sugerir el cast explicito (el usuario debe
-            // indicar la intencion con `(T)expr`).
-            const bool decl_ptr = (s.type.kind == PrimitiveKind::PTR);
-            const bool init_ptr = (t.kind == PrimitiveKind::PTR);
-            const bool decl_int = is_integer_kind(s.type.kind);
-            const bool init_int = is_integer_kind(t.kind);
-            if ((decl_ptr && init_int) || (decl_int && init_ptr))
-                msg +=
-                    "; la conversion entero<->puntero no es implicita, usa un "
-                    "cast explicito: (" +
-                    written_type_name(s.type) + ")expr";
-            diags_.error(vd->loc, msg);
-            /* Y la cadena a numero, que estuvo permitida implicitamente y se
-             * retiro porque lo que salia dependia del modo.  Va como nota
-             * aparte, del catalogo, porque el mensaje de arriba esta escrito
-             * a mano y en un solo idioma. */
-            if (is_numeric(s.type.kind) && t.kind == PrimitiveKind::STRING)
-                diags_.diag(vd->loc, DiagLevel::NOTE, "VX2112",
-                            {written_type_name(s.type)});
-            /* Y si esto pasa DENTRO de una instancia, la cota que el cuerpo
-             * exige, dicha en el vocabulario de quien llamo. */
-            note_instance_requirement(s.type, t, vd->loc);
+            /* Si lo que no encaja es una REFERENCIA a funcion que se quedo sin
+             * decidir, el mensaje util es cual de las homonimas falta por
+             * elegir, no que un `void` no cabe en un `cfn`: ese `void` es como
+             * se tipa la referencia sin resolver, no algo que el usuario
+             * escribiera.  Pasa cuando el tipo esperado vale para VARIAS --
+             * misma firma, distinto nombre de ranura --, que es justo el caso
+             * que las ranuras resuelven. */
+            if (t.kind == PrimitiveKind::VOID &&
+                report_func_ref_undecided(vd->init.get())) {
+                /* Ya se dijo, y mejor.  Se sigue con el resto de la
+                 * declaracion -- el simbolo se declara igual -- para no
+                 * arrastrar un "no existe" detras de cada uso. */
+            } else {
+                std::string msg = std::string("tipo del inicializador (") +
+                                  written_type_name(t) +
+                                  ") incompatible con tipo declarado (" +
+                                  written_type_name(s.type) + ")";
+                // La conversion entero<->puntero NUNCA es implicita: si el
+                // mismatch es exactamente ese, sugerir el cast explicito (el
+                // usuario debe indicar la intencion con `(T)expr`).
+                const bool decl_ptr = (s.type.kind == PrimitiveKind::PTR);
+                const bool init_ptr = (t.kind == PrimitiveKind::PTR);
+                const bool decl_int = is_integer_kind(s.type.kind);
+                const bool init_int = is_integer_kind(t.kind);
+                if ((decl_ptr && init_int) || (decl_int && init_ptr))
+                    msg += "; la conversion entero<->puntero no es implicita, "
+                           "usa un "
+                           "cast explicito: (" +
+                           written_type_name(s.type) + ")expr";
+                diags_.error(vd->loc, msg);
+                /* Y la cadena a numero, que estuvo permitida implicitamente y
+                 * se retiro porque lo que salia dependia del modo.  Va como
+                 * nota aparte, del catalogo, porque el mensaje de arriba esta
+                 * escrito a mano y en un solo idioma. */
+                if (is_numeric(s.type.kind) && t.kind == PrimitiveKind::STRING)
+                    diags_.diag(vd->loc, DiagLevel::NOTE, "VX2112",
+                                {written_type_name(s.type)});
+                /* Y si esto pasa DENTRO de una instancia, la cota que el cuerpo
+                 * exige, dicha en el vocabulario de quien llamo. */
+                note_instance_requirement(s.type, t, vd->loc);
+            }
         }
         // Bug fix 2026-05-23 (LR1): detectar overflow de literales
         // enteros al tipo declarado.  `i32 x = 2147483648;` ahora
@@ -9869,7 +10127,18 @@ void TypeChecker::check_var_decl(ast::VarDeclStmt *vd) {
             }
             if (!owner.empty()) {
                 const bool is_mut = (s.type.kind == PrimitiveKind::BORROW_MUT);
-                borrow_checker_.register_borrow(vd->name, owner, is_mut);
+                /* Si el inicializador fue un `lend`, el prestamo YA existe:
+                 * nacio anonimo unas lineas antes, con su clave y con el
+                 * ultimo uso de un temporal.  Aqui no se toma otro, se le
+                 * pone NOMBRE -- y con el nombre hereda el ultimo uso de
+                 * verdad, el que el pre-pase calculo para la variable.
+                 *
+                 * Registrarlo de nuevo dejaba dos entradas para un solo
+                 * prestamo, y la anonima soltaria al acabar la sentencia el
+                 * lugar que la nombrada todavia necesita. */
+                if (!borrow_checker_.adopt_anon_borrow(
+                        anon_borrow_key(vd->init.get()), vd->name))
+                    borrow_checker_.register_borrow(vd->name, owner, is_mut);
                 // F3 ext - si el init fue un lend()/lend_mut() cuya
                 // fuente era un borrow_mut, marcamos este binding como
                 // reborrow para que su drop restaure el estado
@@ -10042,10 +10311,11 @@ bool TypeChecker::lsp_eval_builtin_scalar(const ast::CallExpr *e,
         }
         return true;
     }
-    if ((nm == "type.is_subtype" || nm == "type.is_same") && e->type_args.size() == 2) {
+    if ((nm == "type.is_subtype" || nm == "type.is_same") &&
+        e->type_args.size() == 2) {
         const Type t2 = type_from_node(e->type_args[1].get());
         *out = (nm == "type.is_subtype" ? comptime_is_subtype(*this, t1, t2)
-                                   : comptime_is_same(*this, t1, t2))
+                                        : comptime_is_same(*this, t1, t2))
                    ? 1
                    : 0;
         return true;
@@ -10240,6 +10510,13 @@ void TypeChecker::check_return(ast::ReturnStmt *s, const Type &fn_return_type) {
                              "'return' con valor en funcion declarada void");
             }
         } else if (t.kind != PrimitiveKind::COUNT && t != fn_return_type) {
+            /* El RETORNO es el cuarto de los cinco contextos que deciden cual
+             * de las homonimas es `&f`: lo que se espera lo dice la firma de
+             * quien devuelve.  Mismo sitio que los otros cuatro. */
+            if (fn_return_type.kind == PrimitiveKind::FUNCTION &&
+                t.kind == PrimitiveKind::VOID)
+                t = maybe_promote_func_ref(s->value.get(), fn_return_type, t);
+            const bool func_ref_ok = t == fn_return_type;
             // Aceptar conversiones numericas, asignabilidad de clases
             // (subtypes / interfaces) y compatibilidad de Optional/Result
             // builtins (igual que en check_var_decl).
@@ -10265,7 +10542,8 @@ void TypeChecker::check_return(ast::ReturnStmt *s, const Type &fn_return_type) {
                 s->value->kind == ast::NodeKind::StringLitExpr &&
                 !static_cast<ast::StringLitExpr *>(s->value.get())
                      ->is_interpolated();
-            if (!numeric_ok && !class_ok && !null_ok && !str_lit_ok) {
+            if (!numeric_ok && !class_ok && !null_ok && !str_lit_ok &&
+                !func_ref_ok) {
                 diags_.error(s->loc,
                              std::string("tipo del valor de retorno (") +
                                  written_type_name(t) +
@@ -10705,6 +10983,15 @@ Type TypeChecker::check_expr(ast::Expr *e) {
                 if (abi.size() > t.fn_params().size())
                     abi.resize(t.fn_params().size());
                 t.fn_mut().param_abi_regs = std::move(abi);
+            }
+            /* El cast es el QUINTO contexto que decide cual de las homonimas
+             * es `&f`, y el unico que el usuario escribe a proposito para eso
+             * -- es la escapatoria cuando el destino natural no desempata --.
+             * Se resuelve con el mismo sitio que la declaracion, el parametro
+             * y el retorno, para que no haya una segunda regla. */
+            if (t.kind == PrimitiveKind::FUNCTION &&
+                to.kind == PrimitiveKind::VOID) {
+                to = maybe_promote_func_ref(ce->operand.get(), t, to);
             }
             // Function pointer: `(u64) foo` / `(fn(...)->R) foo` -- foo es una
             // funcion (check_ident la marca is_func_ref y devuelve void).  El
@@ -12580,28 +12867,18 @@ bool TypeChecker::arg_fits_param(ast::Expr *arg, const Type &tp, Type &ta) {
 
     /* El NOMBRE de una funcion del modulo, donde se espera una funcion, se
      * convierte en un valor-funcion (direccion + entorno vacio).  El nodo se
-     * marca con ese tipo para que la bajada emita el par de ocho mas ocho. */
-    if (tp.kind == PrimitiveKind::FUNCTION && ta.kind == PrimitiveKind::VOID &&
-        arg->kind == ast::NodeKind::IdentExpr) {
-        auto *id_arg = static_cast<ast::IdentExpr *>(arg);
-        const Symbol *s_arg = lookup(id_arg->name);
-        if (s_arg && s_arg->kind == SymbolKind::Function) {
-            const FunctionSig &arg_sig = function_sigs_[s_arg->sig_index];
-            Type fnv =
-                Type::make_function(arg_sig.param_types, arg_sig.return_type);
-            /* Un puntero a codigo crudo (ocho bytes) y un lambda (direccion mas
-             * entorno) NO son el mismo tipo: se respeta el del parametro. */
-            fnv.fn_is_raw = tp.fn_is_raw;
-            /* La direccion viaja con la funcion tambien por aqui: el nombre
-             * desnudo tiene que valer lo mismo que `&nombre`, o el mismo
-             * argumento pasaria por una via y no por la otra. */
-            fnv.fn_mut().param_dirs = arg_sig.param_dirs;
-            fnv.fn_param_by_ref_mask = arg_sig.param_by_ref_mask;
-            if (types_assignable(tp, fnv)) {
-                ta = fnv;
-                id_arg->result_type = fnv;
-            }
-        }
+     * marca con ese tipo para que la bajada emita el par de ocho mas ocho.
+     *
+     * La RANURA es el tercero de los cinco contextos que deciden cual de las
+     * homonimas es, y se resuelve donde los otros cuatro: antes tenia su propia
+     * copia de esta conversion, y la suya tomaba la firma que el SIMBOLO
+     * tuviera apuntada -- o sea, una de las homonimas al azar -- mientras que
+     * la de al lado ya miraba el destino.  Dos copias de la misma regla que
+     * contestaban distinto. */
+    if (tp.kind == PrimitiveKind::FUNCTION && ta.kind == PrimitiveKind::VOID) {
+        const Type fnv = maybe_promote_func_ref(arg, tp, ta);
+        if (fnv.kind == PrimitiveKind::FUNCTION && types_assignable(tp, fnv))
+            ta = fnv;
     }
 
     if (numeric_const_fits_newtype(tp, ta, arg)) {
@@ -12689,6 +12966,31 @@ std::string TypeChecker::written_name(const std::string &mangled) const {
      * `Caja_Caja_i64` salga como `Caja<Caja<i64>>` y no a medio deshacer.  La
      * recursion la acota la propia construccion: un argumento es siempre una
      * instanciacion mas corta que la que lo contiene. */
+    /* El generico va PRIMERO, y el orden importa: los dos ejes -- el namespace
+     * y la instanciacion -- se acumulan en el mismo nombre, no se excluyen.
+     * Un `Caja<i64>` declarado dentro de `app` se guarda `app__Caja_i64`, y
+     * deshaciendo antes el namespace se devolvia `app.Caja_i64`: medio nombre
+     * traducido y medio no, con la parte sin traducir siendo justo la que no
+     * existe en el fichero del usuario.
+     *
+     * Asi no hay que combinar nada: la plantilla vuelve a pasar por aqui y es
+     * ella la que deshace su namespace. */
+    if (const MonomorphInfo *mi = monomorph_info(mangled)) {
+        /* La recursion la acota la construccion -- una plantilla es siempre
+         * mas corta que su instancia --, pero se comprueba igual: si una
+         * entrada se apuntara a si misma, esto no daria un nombre raro, se
+         * quedaria dando vueltas al escribir un mensaje. */
+        if (!mi->template_name.empty() && mi->template_name != mangled) {
+            std::string s = written_name(mi->template_name);
+            s += '<';
+            for (size_t i = 0; i < mi->type_args.size(); ++i) {
+                if (i != 0) s += ", ";
+                s += written_name(mi->type_args[i]);
+            }
+            s += '>';
+            return s;
+        }
+    }
     /* Un nombre IMPORTADO no esta en esa tabla -- guarda lo que ESTE modulo
      * declaro --, asi que el aplanado de otro modulo se quedaba sin deshacer y
      * el mensaje citaba `geo__Punto` de un tipo que el usuario escribe
@@ -12699,8 +13001,7 @@ std::string TypeChecker::written_name(const std::string &mangled) const {
      * del usuario que lleve `__` en su nombre no se parte por la mitad. */
     {
         const size_t sep = mangled.rfind("__");
-        if (sep != std::string::npos && sep > 0 &&
-            sep + 2 < mangled.size()) {
+        if (sep != std::string::npos && sep > 0 && sep + 2 < mangled.size()) {
             std::string ns = mangled.substr(0, sep);
             for (size_t at = ns.find("__"); at != std::string::npos;
                  at = ns.find("__", at + 1))
@@ -12708,18 +13009,6 @@ std::string TypeChecker::written_name(const std::string &mangled) const {
             if (ns_idx_by_local_name_.count(ns) != 0 ||
                 ns_idx_by_local_name_.count(mangled.substr(0, sep)) != 0)
                 return ns + "." + mangled.substr(sep + 2);
-        }
-    }
-    if (const MonomorphInfo *mi = monomorph_info(mangled)) {
-        if (!mi->template_name.empty()) {
-            std::string s = written_name(mi->template_name);
-            s += '<';
-            for (size_t i = 0; i < mi->type_args.size(); ++i) {
-                if (i != 0) s += ", ";
-                s += written_name(mi->type_args[i]);
-            }
-            s += '>';
-            return s;
         }
     }
     return mangled;
@@ -13644,6 +13933,153 @@ Type TypeChecker::check_binary(ast::BinaryExpr *e) {
     return Type{};
 }
 
+/**
+ * @brief Digo hasta el nombre cualificado que hay bajo un `&`.
+ *
+ * Con el filtro de ranuras (`&Punto.area(.p)`) el nombre va dentro de una
+ * llamada sin argumentos; sin el es el operando mismo.  Los dos ejes se
+ * componen, asi que quien mira el nombre lo pide por aqui y no vuelve a
+ * distinguir los dos casos.
+ *
+ * @param operand El operando del `&`.
+ * @return La ranura donde vive el nombre, o nulo si no hay una cualificada.
+ */
+static std::unique_ptr<ast::Expr> *
+qualified_ref_slot(std::unique_ptr<ast::Expr> &operand) {
+    if (!operand) return nullptr;
+    std::unique_ptr<ast::Expr> *slot = &operand;
+    if ((*slot)->kind == ast::NodeKind::CallExpr) {
+        auto *call = static_cast<ast::CallExpr *>(slot->get());
+        if (!call->args.empty() || call->arg_names.empty() || !call->callee)
+            return nullptr;
+        slot = &call->callee;
+    }
+    if ((*slot)->kind != ast::NodeKind::FieldAccessExpr) return nullptr;
+    return slot;
+}
+
+void TypeChecker::rewrite_ns_qualified_func_ref(
+    std::unique_ptr<ast::Expr> &operand) {
+    std::unique_ptr<ast::Expr> *slot = qualified_ref_slot(operand);
+    if (slot == nullptr) return;
+    auto *fa = static_cast<ast::FieldAccessExpr *>(slot->get());
+    if (!fa->base) return;
+
+    /* El camino del namespace, que puede tener varios segmentos
+     * (`org.geo.suma`).  Mismo desdoble que la llamada cualificada. */
+    std::string ns_path;
+    if (fa->base->kind == ast::NodeKind::IdentExpr) {
+        ns_path = static_cast<ast::IdentExpr *>(fa->base.get())->name;
+    } else if (fa->base->kind == ast::NodeKind::FieldAccessExpr) {
+        if (!collect_dotted_path(fa->base.get(), ns_path)) return;
+    } else {
+        return;
+    }
+
+    /* Que ES un namespace lo contesta la tabla de importados -- que cubre la
+     * forma corta y el alias -- o el propio simbolo.  Si no es ninguna cosa,
+     * `geo` sera un valor y esto no va por aqui. */
+    uint32_t ns_idx = UINT32_MAX;
+    auto by_local = ns_idx_by_local_name_.find(ns_path);
+    if (by_local != ns_idx_by_local_name_.end()) {
+        ns_idx = by_local->second;
+    } else {
+        const Symbol *s = lookup(ns_path);
+        if (s == nullptr || s->kind != SymbolKind::Namespace) return;
+        ns_idx = s->ns_index;
+    }
+    if (ns_idx >= imported_namespaces_.size()) return;
+    const auto &ns = imported_namespaces_[ns_idx];
+    const auto sym = ns.by_name.find(fa->field_name);
+    if (sym == ns.by_name.end()) return;
+    const std::string &mangled = ns.symbols[sym->second].mangled_label;
+    if (mangled.empty()) return;
+
+    /* Y el cambio: el nombre APLANADO en el sitio del cualificado.  Las
+     * homonimas de un namespace comparten aplanado, asi que la tabla de
+     * sobrecargas las encuentra todas y el desempate es el de siempre. */
+    referenced_names_.insert(ns_path);
+    auto id = std::make_unique<ast::IdentExpr>();
+    id->name = mangled;
+    id->loc = fa->loc;
+    *slot = std::move(id);
+}
+
+bool TypeChecker::rewrite_type_qualified_func_ref(
+    std::unique_ptr<ast::Expr> &operand) {
+    std::unique_ptr<ast::Expr> *slot = qualified_ref_slot(operand);
+    if (slot == nullptr) return false;
+    auto *fa = static_cast<ast::FieldAccessExpr *>(slot->get());
+    if (!fa->base || !base_denotes_type(fa->base.get())) return false;
+
+    /* El NOMBRE del tipo.  A secas viene en el identificador; CUALIFICADO
+     * (`geo.Punto`) hay que preguntarselo al tipo de la base. */
+    std::string tname;
+    if (fa->base->kind == ast::NodeKind::IdentExpr) {
+        tname = static_cast<ast::IdentExpr *>(fa->base.get())->name;
+    } else {
+        const Type bt = check_expr(fa->base.get());
+        fa->base->result_type = bt;
+        if (bt.kind != PrimitiveKind::STRUCT && bt.kind != PrimitiveKind::CLASS)
+            return false;
+        tname = bt.struct_name.str();
+    }
+    if (tname.empty()) return false;
+
+    /* El receptor, que es lo que el indice usa de clave.  De paso dice si el
+     * tipo existe: si no esta en ninguno de los dos mapas, esto no es
+     * `Tipo.algo` y no hay nada que reescribir. */
+    Type recv;
+    const std::vector<ClassMethodInfo> *methods = nullptr;
+    auto cls = class_layouts_.find(tname);
+    if (cls != class_layouts_.end()) {
+        recv.kind = PrimitiveKind::CLASS;
+        methods = &cls->second.methods;
+    } else {
+        auto str = struct_layouts_.find(tname);
+        if (str == struct_layouts_.end()) return false;
+        recv.kind = PrimitiveKind::STRUCT;
+        methods = &str->second.methods;
+    }
+    recv.struct_name = tname;
+
+    bool has_method = false;
+    for (const auto &m : *methods)
+        if (m.name == fa->field_name && !m.is_constructor && !m.is_destructor &&
+            !m.is_static) {
+            has_method = true;
+            break;
+        }
+
+    /* Y la LIBRE alcanzable por ese receptor, que es la misma pregunta que se
+     * hace `p.area()`: la contesta el mismo indice, con la misma clave.  Por
+     * eso `&Punto.area` no anyade mecanismo -- solo deja tomar la direccion
+     * de lo que la introspeccion ya enumera junto a los metodos --. */
+    const std::string *chosen = nullptr;
+    const ufcs::Candidates *free_fns = ufcs_.find(
+        ufcs_key_type(recv), fa->field_name, current_ns_prefix_, &chosen);
+    const bool has_free = free_fns != nullptr && !free_fns->empty() &&
+                          chosen != nullptr && !chosen->empty();
+
+    if (has_method && has_free) {
+        /* Las dos cosas se llaman igual para ese receptor.  Es la misma
+         * situacion que `p.f()` denuncia, y aqui tampoco se elige a dedo. */
+        diags_.diag(fa->loc, DiagLevel::ERR, "VX2126",
+                    {fa->field_name, written_name(tname)});
+        return true;
+    }
+    if (!has_free) return false; // el metodo sigue por su camino
+
+    /* El nombre APLANADO en el sitio del cualificado, y de aqui en adelante
+     * es la misma referencia que `&area`: mismo desempate por tipo esperado,
+     * mismo filtro por ranura, mismo mensaje cuando nada decide. */
+    auto id = std::make_unique<ast::IdentExpr>();
+    id->name = *chosen;
+    id->loc = fa->loc;
+    *slot = std::move(id);
+    return false;
+}
+
 Type TypeChecker::check_unary(ast::UnaryExpr *e) {
     // Idempotencia: check_assign hace un "peek" del RHS antes del check real,
     // asi que check_unary puede invocarse DOS veces sobre el mismo nodo.  Si ya
@@ -13653,6 +14089,26 @@ Type TypeChecker::check_unary(ast::UnaryExpr *e) {
     // la encontraria y caeria al AddrOf generico -> VirtualPtr<void>).
     if (e->op == ast::UnOp::AddrOf && e->desugared_bound_method) {
         return e->result_type;
+    }
+    /* `&geo.suma`: la direccion de una funcion libre cuyo nombre esta
+     * CUALIFICADO por su namespace.
+     *
+     * No se resuelve aqui: se reescribe el operando al nombre APLANADO y se
+     * deja seguir.  Asi la referencia cualificada y la desnuda son, de este
+     * punto en adelante, la misma cosa -- el mismo desempate por tipo
+     * esperado, el mismo filtro por ranura, el mismo mensaje cuando nada
+     * decide --, y no hay dos caminos que se separen a la primera.
+     *
+     * Antes no llegaba a ningun sitio: el nombre cualificado no es una
+     * variable ni un metodo ligado, asi que caia al `&` generico y salia un
+     * `fn() -> void*` que el usuario no habia escrito. */
+    if (e->op == ast::UnOp::AddrOf && e->operand) {
+        rewrite_ns_qualified_func_ref(e->operand);
+        /* Y `&Punto.area`: la libre ALCANZABLE por ese receptor, que es lo
+         * que `p.area()` encuentra.  Se pregunta despues del namespace y
+         * antes del metodo, y no le roba nada al metodo: cuando hay metodo y
+         * libre con el mismo nombre no elige, lo denuncia. */
+        if (rewrite_type_qualified_func_ref(e->operand)) return Type{};
     }
     // &var.metodo -> PUNTERO A METODO LIGADO (Fase 2).  Cuando `var` es una
     // VARIABLE de tipo CLASE o STRUCT y `metodo` es un metodo (no un campo),
@@ -13884,6 +14340,25 @@ Type TypeChecker::check_unary(ast::UnaryExpr *e) {
             }
         }
     }
+    /* `&f(.min, .max)`: las ranuras que dicen a cual de las homonimas se
+     * apunta.  Se ve ANTES de comprobar el operando porque no es una llamada
+     * -- no hay valores que dar -- y el camino de las llamadas se quejaria de
+     * que le faltan argumentos.  Aqui solo se deja el nombre marcado como
+     * referencia sin resolver, igual que un `&f` sobrecargado a secas: quien
+     * la resuelve, con el tipo esperado y con estas ranuras delante, es
+     * @c maybe_promote_func_ref, y asi las dos grafias no pueden divergir. */
+    if (e->op == ast::UnOp::AddrOf && e->operand &&
+        e->operand->kind == ast::NodeKind::CallExpr) {
+        auto *call = static_cast<ast::CallExpr *>(e->operand.get());
+        if (call->args.empty() && !call->arg_names.empty() && call->callee &&
+            call->callee->kind == ast::NodeKind::IdentExpr) {
+            auto *fid = static_cast<ast::IdentExpr *>(call->callee.get());
+            if (function_sig_by_name(fid->name) != nullptr) {
+                fid->is_func_ref = true;
+                return Type{};
+            }
+        }
+    }
     const Type t = check_expr(e->operand.get());
     switch (e->op) {
     case ast::UnOp::Neg: {
@@ -14047,6 +14522,27 @@ Type TypeChecker::check_unary(ast::UnaryExpr *e) {
             const bool shadowed_var = vs && vs->kind == SymbolKind::Variable;
             if (!shadowed_var) {
                 if (const FunctionSig *fsig = function_sig_by_name(fid->name)) {
+                    /* Con VARIAS homonimas, aqui NO se elige.
+                     *
+                     * No hay argumentos que mirar -- eso es lo que separa una
+                     * referencia de una llamada --, asi que quien decide es el
+                     * tipo que el contexto ESPERA, y ese no se conoce hasta
+                     * mas arriba.  Se deja marcada como referencia sin
+                     * resolver, igual que el nombre DESNUDO (`f` sin `&`), y
+                     * la resuelve el mismo sitio: asi las dos grafias no
+                     * pueden divergir.
+                     *
+                     * Antes se cogia la que `sig_by_name_` tuviera apuntada,
+                     * que es la ULTIMA declarada, y entonces intercambiar dos
+                     * lineas decidia si el programa compilaba.
+                     *
+                     * Se pregunta por la marca de la FIRMA, que ya esta ahi
+                     * para esto: una referencia a un nombre sin sobrecargar --
+                     * que son casi todas -- no paga ni una consulta mas. */
+                    if (fsig->is_overloaded) {
+                        fid->is_func_ref = true;
+                        return Type{};
+                    }
                     fid->is_func_ref = true;
                     fid->func_ref_mangled = fsig->mangled_label.empty()
                                                 ? fid->name
@@ -14308,22 +14804,72 @@ void TypeChecker::propagate_fn_type_to_lambda(ast::LambdaExpr *lam,
 
 Type TypeChecker::maybe_promote_func_ref(ast::Expr *val, const Type &target,
                                          const Type &fallback) {
-    // Solo aplica si el destino es un tipo funcion y el valor es un nombre
-    // desnudo de funcion (sin `&`).  check_ident ya marco is_func_ref y
-    // func_ref_mangled; aqui le damos un result_type concreto (cfn o lambda
-    // segun el destino) para que types_assignable lo acepte y el lowering
-    // emita LABEL_ADDR (+ slot si lambda) -- ver lower_ident.
+    // Solo aplica si el destino es un tipo funcion y el valor es un nombre de
+    // funcion.  check_ident ya marco is_func_ref y func_ref_mangled; aqui le
+    // damos un result_type concreto (cfn o lambda segun el destino) para que
+    // types_assignable lo acepte y el lowering emita LABEL_ADDR (+ slot si
+    // lambda) -- ver lower_ident.
     if (!val || target.kind != PrimitiveKind::FUNCTION) return fallback;
-    if (val->kind != ast::NodeKind::IdentExpr) return fallback;
-    auto *id = static_cast<ast::IdentExpr *>(val);
+    /* El nombre DESNUDO (`f`) y el que lleva `&` delante son la misma cosa
+     * para esto, asi que los resuelve el mismo sitio.  `&f` solo llega hasta
+     * aqui sin tipo cuando el nombre esta SOBRECARGADO -- con una sola
+     * candidata ya se resolvio donde se vio el `&`, que no necesita contexto
+     * --, y ahi el `&` no cambia nada: lo que decide es el tipo esperado. */
+    ast::Expr *inner = val;
+    ast::UnaryExpr *addr_of = nullptr;
+    if (inner->kind == ast::NodeKind::UnaryExpr) {
+        auto *un = static_cast<ast::UnaryExpr *>(inner);
+        if (un->op != ast::UnOp::AddrOf || !un->operand) return fallback;
+        inner = un->operand.get();
+        addr_of = un;
+    }
+    /* Y las RANURAS, si se escribieron: `&f(.min, .max)` llega como una
+     * llamada SIN argumentos -- nombres a secas no son valores --, que es la
+     * unica forma en que el parser produce esa combinacion.  Ver
+     * @c ast::CallExpr::arg_names. */
+    ast::CallExpr *filter = nullptr;
+    if (inner->kind == ast::NodeKind::CallExpr) {
+        auto *call = static_cast<ast::CallExpr *>(inner);
+        /* Solo bajo `&`: sin el no hay nodo donde dejar el nombre al quitar la
+         * llamada, y sobre todo no significa nada -- nombrar ranuras es decir
+         * a que se apunta, y sin `&` no se apunta a nada.  Lo dice
+         * @c check_call, que lo ve antes. */
+        if (addr_of == nullptr) return fallback;
+        if (!call->args.empty() || call->arg_names.empty() || !call->callee)
+            return fallback;
+        filter = call;
+        inner = call->callee.get();
+    }
+    if (inner->kind != ast::NodeKind::IdentExpr) return fallback;
+    auto *id = static_cast<ast::IdentExpr *>(inner);
     if (!id->is_func_ref) return fallback;
     // No promocionar si el nombre esta sombreado por una variable local.
     const Symbol *vs = lookup(id->name);
     if (vs && vs->kind == SymbolKind::Variable) return fallback;
-    const FunctionSig *fsig = function_sig_by_name(id->name);
+    const FunctionSig *fsig =
+        func_ref_overload(id, target, filter ? &filter->arg_names : nullptr);
+    /* Con el filtro consumido, el nodo de la llamada sobra: se deja el nombre
+     * en su sitio y de aqui abajo -- comprobacion y bajado -- todo ve la forma
+     * de siempre, `&f`.  Tambien cuando NO se eligio: ya se dijo por que, y
+     * dejar el nodo haria que una segunda visita lo repitiera. */
+    if (filter != nullptr && addr_of != nullptr)
+        addr_of->operand = std::move(filter->callee);
     if (!fsig) return fallback;
+    const bool is_addr_of = addr_of != nullptr;
     Type ft = Type::make_function(fsig->param_types, fsig->return_type);
-    ft.fn_is_raw = target.fn_is_raw; // cfn o lambda segun el destino
+    /* El destino decide CUAL de las homonimas, no QUE ES lo que sale.
+     *
+     * Un `&f` es una direccion de codigo -- ocho bytes --, y un lambda son
+     * dieciseis: direccion mas entorno.  Dejar que el destino impusiera el
+     * segundo hacia que `fn(i64) -> i64 e = &doble;` compilara y el proceso
+     * muriera al llamarlo, porque la llamada busca un entorno que no esta.
+     * Ahora sale lo que `&` produce y el desajuste lo dice la comprobacion de
+     * tipos.
+     *
+     * El nombre DESNUDO si toma el del destino: ahi no hay `&`, y promoverlo a
+     * lambda con el entorno vacio es lo que ya hacia y lo que permite pasar
+     * una funcion donde se espera una. */
+    ft.fn_is_raw = is_addr_of ? true : target.fn_is_raw;
     // La ABI custom viaja con el TIPO: `&funcion` hereda los abi_regs de la
     // firma de la funcion.  types_assignable (via operator==) exige que el tipo
     // destino declare la MISMA ABI -> asignar &f_abiA a un cfn-de-abiB (o a un
@@ -14465,6 +15011,130 @@ bool TypeChecker::try_fuse_rmw_assign(ast::AssignExpr *e) {
     return true;
 }
 
+namespace {
+
+/**
+ * @brief Si en @p t cabe una direccion, y por tanto el tipo no la describe.
+ *
+ * Un puntero YA dice de que memoria es (@c Type::is_virtual); un entero del
+ * ancho de una direccion puede llevar una sin decir nada, y es de esos de los
+ * que hay que averiguarlo.  Uno mas estrecho no puede llevarla.
+ */
+bool integer_holds_address(const Type &t) {
+    return t.kind == PrimitiveKind::I64 || t.kind == PrimitiveKind::U64;
+}
+
+/**
+ * @brief Si @p t es un puntero a memoria del anfitrion.
+ *
+ * `VirtualPtr<T>` es de la maquina y no cuenta.
+ */
+bool type_is_host_pointer(const Type &t) {
+    return (t.kind == PrimitiveKind::PTR || t.kind == PrimitiveKind::ARRAY) &&
+           !t.is_virtual;
+}
+
+/**
+ * @brief Si @p e es el cero, que no aporta ni veta.
+ *
+ * `nullptr` es cero, y el cero vale como direccion vacia en las DOS memorias.
+ * Tratarlo como veto haria que un campo con su valor por defecto a `nullptr`
+ * -- que es lo normal -- no se pudiera saber nunca.
+ */
+bool expr_is_zero(const ast::Expr *e) {
+    if (e == nullptr) return false;
+    if (e->kind == ast::NodeKind::IntLitExpr)
+        return static_cast<const ast::IntLitExpr *>(e)->value == 0;
+    if (e->kind == ast::NodeKind::IdentExpr)
+        return static_cast<const ast::IdentExpr *>(e)->name == "nullptr";
+    return false;
+}
+
+} // namespace
+
+void TypeChecker::note_field_address_space_(ast::AssignExpr *e) {
+    if (e == nullptr || e->op != ast::AssignOp::Assign) return;
+    if (!e->target || e->target->kind != ast::NodeKind::FieldAccessExpr) return;
+    auto *fa = static_cast<ast::FieldAccessExpr *>(e->target.get());
+    if (!fa->base || fa->field_name.empty() || !e->value) return;
+    /* Solo donde el TIPO no puede contestar: un campo entero del ancho de una
+     * direccion.  De un puntero ya lo dice su tipo. */
+    if (!integer_holds_address(e->target->result_type)) return;
+    const Type &bt = fa->base->result_type;
+    if (bt.kind != PrimitiveKind::STRUCT && bt.kind != PrimitiveKind::CLASS)
+        return;
+    if (bt.struct_name.empty()) return;
+
+    /* Que dice ESTA escritura.  El cero no dice nada -- vale en las dos
+     * memorias --; una direccion del anfitrion la afirma; cualquier otra cosa
+     * la VETA, porque el veredicto no es haber encontrado una buena, es no
+     * haberse dejado ninguna mala. */
+    FieldAddressSpace says = FieldAddressSpace::Mixed;
+    const ast::Expr *rhs = e->value.get();
+    if (expr_is_zero(rhs)) {
+        return; // ni afirma ni veta: no se anota
+    } else if (type_is_host_pointer(rhs->result_type)) {
+        says = FieldAddressSpace::Host;
+    } else if (rhs->kind == ast::NodeKind::CallExpr) {
+        /* LA FRONTERA: al otro lado de una `extern` corre codigo nativo, que
+         * no tiene memoria de la maquina y por tanto no puede devolver una
+         * direccion suya.  Es la MISMA regla que marca el valor en el bajado;
+         * aqui se aplica al campo donde ese valor se guarda. */
+        auto *call = static_cast<const ast::CallExpr *>(rhs);
+        if (call->callee && call->callee->kind == ast::NodeKind::IdentExpr) {
+            const auto *id =
+                static_cast<const ast::IdentExpr *>(call->callee.get());
+            const FunctionSig *sig = function_sig_by_name(id->name);
+            if (sig != nullptr && !sig->extern_lib.empty() &&
+                (integer_holds_address(sig->return_type) ||
+                 type_is_host_pointer(sig->return_type)))
+                says = FieldAddressSpace::Host;
+        }
+    }
+
+    /* Los nombres INTERNADOS: la entrada no copia cadenas y comparar dos
+     * nombres es comparar dos punteros. */
+    const std::string *owner = util::intern_name(bt.struct_name);
+    const std::string *field = util::intern_name(fa->field_name);
+    for (FieldSpaceEvidence &ev : field_space_evidence_) {
+        if (ev.owner != owner || ev.field != field) continue;
+        // El veto es PEGAJOSO: una sola escritura que no se pueda afirmar
+        // basta para que del campo no se pueda decir nada.
+        if (says == FieldAddressSpace::Mixed ||
+            ev.verdict == FieldAddressSpace::Mixed)
+            ev.verdict = FieldAddressSpace::Mixed;
+        else
+            ev.verdict = says;
+        return;
+    }
+    FieldSpaceEvidence ev;
+    ev.owner = owner;
+    ev.field = field;
+    ev.verdict = says;
+    field_space_evidence_.push_back(ev);
+}
+
+void TypeChecker::infer_field_address_spaces_() {
+    for (const FieldSpaceEvidence &ev : field_space_evidence_) {
+        if (ev.verdict != FieldAddressSpace::Host) continue;
+        if (ev.owner == nullptr || ev.field == nullptr) continue;
+        auto its = struct_layouts_.find(*ev.owner);
+        std::vector<StructFieldInfo> *fields = nullptr;
+        if (its != struct_layouts_.end()) {
+            fields = &its->second.fields;
+        } else {
+            auto itc = class_layouts_.find(*ev.owner);
+            if (itc == class_layouts_.end()) continue;
+            fields = &itc->second.fields;
+        }
+        for (StructFieldInfo &f : *fields) {
+            if (f.name != *ev.field) continue;
+            f.address_space = FieldAddressSpace::Host;
+            break;
+        }
+    }
+}
+
 Type TypeChecker::check_assign(ast::AssignExpr *e) {
     // const-correctness A: check_assign_impl devuelve el tipo del LVALUE (el
     // nivel correcto: campo, pointee de `*p`, elemento de `a[i]`, o la var).
@@ -14477,6 +15147,14 @@ Type TypeChecker::check_assign(ast::AssignExpr *e) {
                      "no se puede escribir a un lvalue 'const' (el tipo de "
                      "destino es de solo lectura)");
     }
+    /* Y de paso, de que memoria es lo que se acaba de guardar, si el destino
+     * es un campo ENTERO que lleva una direccion.  Se anota aqui y no en un
+     * recorrido aparte del arbol por una razon de CORRECCION, no de comodidad:
+     * lo que decide el veredicto no es encontrar una escritura buena, es no
+     * haberse dejado ninguna mala.  Un recorrido propio que se olvide de un
+     * nodo pierde un VETO y marca como del anfitrion algo que no lo es; por
+     * aqui pasan todas por construccion, que es quien da esa garantia. */
+    note_field_address_space_(e);
     return t;
 }
 
@@ -14932,10 +15610,11 @@ Type TypeChecker::check_assign_impl(ast::AssignExpr *e) {
                     !types_assignable(ft_static, tv)) {
                     diags_.error(
                         e->loc,
-                        std::string("tipo del valor (") + written_type_name(tv) +
+                        std::string("tipo del valor (") +
+                            written_type_name(tv) +
                             ") incompatible con tipo del static field '" +
-                            fa->field_name + "' (" + written_type_name(ft_static) +
-                            ")");
+                            fa->field_name + "' (" +
+                            written_type_name(ft_static) + ")");
                 }
                 return ft_static;
             }
@@ -15448,6 +16127,14 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
         diags_.error(e->loc, "callee nulo en llamada");
         for (auto &a : e->args)
             (void)check_expr(a.get());
+        return Type{};
+    }
+    /* Ranuras a secas y ningun argumento es el filtro de `&f(.min, .max)`, y
+     * bajo el `&` no llega hasta aqui: @c check_unary lo desvia antes.  Si
+     * llega, es que se escribio SIN `&`, donde no significa nada -- nombrar
+     * ranuras es decir a que se apunta, y ahi no se apunta a nada. */
+    if (e->args.empty() && !e->arg_names.empty()) {
+        diags_.diag(e->loc, DiagLevel::ERR, "VXP096", {});
         return Type{};
     }
 
@@ -16504,8 +17191,19 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
                 return Type{};
             }
             const StructLayout &slay = it_s->second;
+            /* Con HUECO, el miembro no se queda la llamada.
+             *
+             * El hueco dice que el receptor va a OTRA ranura, asi que el
+             * `this` tendria que salir de la lista de argumentos -- y
+             * entonces esto ya no es la llamada a un metodo, es la forma
+             * libre del miembro, que es como el punto lo deja al reescribir.
+             * Sin esta salida, `c.mezcla(2, _)` se resolvia como metodo y el
+             * `_` seguia su viaje como un nombre cualquiera: el error hablaba
+             * de una variable `_` sin declarar. */
             const ClassMethodInfo *smtd =
-                find_instance_method(slay.methods, fa->field_name);
+                e->has_receiver_hole
+                    ? nullptr
+                    : find_instance_method(slay.methods, fa->field_name);
             if (!smtd) {
                 /* Antes de darlo por inexistente: una funcion LIBRE que tome
                  * este receptor es la misma llamada escrita del otro modo. */
@@ -16553,6 +17251,7 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
              * este receptor esta en un namespace importado solo por su nombre,
              * se dice donde esta y como traerla. */
             if (!report_ufcs_cast_hint(bt, fa->field_name, e->loc) &&
+                !report_ufcs_lend_hint(bt, fa->field_name, e->loc) &&
                 !report_ufcs_ns_hint(bt, fa->base.get(), fa->field_name,
                                      e->loc) &&
                 !report_ufcs_import_hint(bt, fa->base.get(), fa->field_name,
@@ -16695,7 +17394,8 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
     // F4: `parent<T>()` dentro de un resolver `@offset { }` -> la vista RAIZ,
     // de tipo overlay T.  Marca que el resolver usa parent (para enhebrar
     // `root`).
-    if (id->name == "type.parent" && e->type_args.size() == 1 && e->args.empty()) {
+    if (id->name == "type.parent" && e->type_args.size() == 1 &&
+        e->args.empty()) {
         const Type t = type_from_node(e->type_args[0].get());
         if (t.kind != PrimitiveKind::STRUCT) {
             diags_.error(e->loc, "parent<T>(): T debe ser un tipo @overlay");
@@ -16715,7 +17415,8 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
     // de la vista v (max(fin de campo) - base), con los datos de la instancia
     // (counts dinamicos, resolvers).  Cubre escalares + arrays de stride con
     // count; NO cubre arrays sin count ni @element (documentado).
-    if (id->name == "overlay.extent" && e->type_args.empty() && e->args.size() == 1) {
+    if (id->name == "overlay.extent" && e->type_args.empty() &&
+        e->args.size() == 1) {
         const Type vt = check_expr(e->args[0].get());
         if (vt.kind == PrimitiveKind::STRUCT) {
             auto it = struct_layouts_.find(vt.struct_name);
@@ -16865,9 +17566,9 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
         }
         check_expr(e->args[0].get());
         /* Si alguien lo IMPLEMENTA, la llamada ya se reescribio a su instancia
-         * en `pre_mono` -- tiene que ser alli, antes de recoger los globales --,
-         * asi que si el flujo llega aqui es que no hay proveedor y lo atiende
-         * el bajado. */
+         * en `pre_mono` -- tiene que ser alli, antes de recoger los globales
+         * --, asi que si el flujo llega aqui es que no hay proveedor y lo
+         * atiende el bajado. */
         Type res = Type::make_ptr(type_from_node(e->type_args[0].get()));
         /* La memoria viene del ANFITRION, como la de `malloc` sin tipo: de que
          * memoria es una direccion no lo decide el tipo apuntado. */
@@ -17075,7 +17776,8 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
         /* Resolver el tipo del campo en T. */
         Type ftype = comptime_field_type(*this, t, fname);
         if (ftype.kind == PrimitiveKind::COUNT && !fname.empty()) {
-            diags_.error(e->loc, id->name + ": el tipo '" + written_type_name(t) +
+            diags_.error(e->loc, id->name + ": el tipo '" +
+                                     written_type_name(t) +
                                      "' no tiene campo '" + fname + "'");
         }
         /* field_set: tercer arg debe ser asignable al tipo del campo. */
@@ -17083,11 +17785,11 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
             const Type vt = check_expr(e->args[2].get());
             if (ftype.kind != PrimitiveKind::COUNT &&
                 !types_assignable(ftype, vt)) {
-                diags_.error(e->args[2]->loc,
-                             "field_set: el valor de tipo '" +
-                                 written_type_name(vt) +
-                                 "' no es asignable al campo '" + fname +
-                                 "' de tipo '" + written_type_name(ftype) + "'");
+                diags_.error(
+                    e->args[2]->loc,
+                    "field_set: el valor de tipo '" + written_type_name(vt) +
+                        "' no es asignable al campo '" + fname + "' de tipo '" +
+                        written_type_name(ftype) + "'");
             }
         }
         /* Tipo de retorno. */
@@ -17193,14 +17895,14 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
     {
         const std::string &nm = id->name;
         const bool one_targ_no_args =
-            nm == "field.count" || nm == "method.count" || nm == "type.is_class" ||
-            nm == "type.is_struct" || nm == "type.is_primitive" || nm == "type.is_enum" ||
-            nm == "type.is_newtype" || nm == "type.is_opaque" || nm == "type.underlying" ||
-            nm == "scoped.method.count";
-        const bool one_targ_str_arg = nm == "field.offset" || nm == "field.has" ||
-                                      nm == "method.has" ||
-                                      nm == "field.type" ||
-                                      nm == "scoped.method.has";
+            nm == "field.count" || nm == "method.count" ||
+            nm == "type.is_class" || nm == "type.is_struct" ||
+            nm == "type.is_primitive" || nm == "type.is_enum" ||
+            nm == "type.is_newtype" || nm == "type.is_opaque" ||
+            nm == "type.underlying" || nm == "scoped.method.count";
+        const bool one_targ_str_arg =
+            nm == "field.offset" || nm == "field.has" || nm == "method.has" ||
+            nm == "field.type" || nm == "scoped.method.has";
         const bool one_targ_int_arg =
             (nm == "field.name" || nm == "field.type_at" ||
              nm == "method.name" || nm == "method.result" ||
@@ -17210,7 +17912,8 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
          * cual de sus parametros.  Es la unica de la familia con dos, porque
          * es la unica que pregunta DENTRO de una firma. */
         const bool one_targ_two_int_args = (nm == "scoped.method.param");
-        const bool two_targ_no_args = nm == "type.is_subtype" || nm == "type.is_same";
+        const bool two_targ_no_args =
+            nm == "type.is_subtype" || nm == "type.is_same";
 
         if ((one_targ_no_args || one_targ_str_arg || one_targ_int_arg ||
              one_targ_two_int_args || two_targ_no_args) &&
@@ -17225,7 +17928,7 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
             }
             /* Aridad de runtime args. */
             const size_t expected_args =
-                one_targ_two_int_args ? 2
+                one_targ_two_int_args                    ? 2
                 : (one_targ_str_arg || one_targ_int_arg) ? 1
                                                          : 0;
             if (e->args.size() != expected_args) {
@@ -17577,7 +18280,8 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
             if (nm == "comptime.str.concat" || nm == "comptime.str.eq" ||
                 nm == "comptime.str.len" || nm == "comptime.ord") {
                 need_str = true;
-            } else if ((nm == "comptime.str.substr" || nm == "comptime.str.repeat") &&
+            } else if ((nm == "comptime.str.substr" ||
+                        nm == "comptime.str.repeat") &&
                        i == 0) {
                 need_str = true;
             }
@@ -19045,10 +19749,24 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
         if (source_is_mut_borrow) {
             (void)borrow_checker_.suspend_for_reborrow(owner_id->name);
         }
-        (void)borrow_checker_.on_lend(
-            root_owner,
-            /*borrower_name=*/"", // VarDecl lo registra correctamente
-            e->loc, is_mut);
+        /* El prestamo nace SIN NOMBRE y con clave propia.
+         *
+         * Antes se registraba bajo la cadena vacia, con el comentario de que
+         * ya lo bautizaria el `VarDecl` -- y cuando no habia ninguno, porque
+         * el `lend` se pasaba derecho a una llamada, se quedaba sin clave: sin
+         * clave no hay ultimo uso y sin ultimo uso `advance_stmt` no lo suelta
+         * nunca, asi que vivia hasta el RET y un `lend_mut` posterior chocaba
+         * contra el.
+         *
+         * El ultimo uso de un temporal es la sentencia donde esta escrito, por
+         * definicion, asi que se le pone esa y lo suelta la misma maquinaria
+         * de siempre.  Si resulta que si lo adopta un nombre, `check_var_decl`
+         * lo RENOMBRA y hereda el ultimo uso de verdad.
+         *
+         * Y sin texto con que citarlo: no lo tiene, y el catalogo ya sabe
+         * decirlo por su sitio (VX2029). */
+        (void)borrow_checker_.on_lend_anon(root_owner, anon_borrow_key(e),
+                                           e->loc, is_mut, current_stmt_idx_);
         // F3 ext - marcar el binding pendiente como reborrow.  El
         // nombre real del reborrower se establece en check_var_decl;
         // alli leemos @c borrow_owner_source y comparamos con la
@@ -19104,11 +19822,11 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
                                               written_type_name(bt) + "'");
         }
         if (bt.pointee && !types_assignable(*bt.pointee, vt)) {
-            diags_.error(e->args[1]->loc,
-                         "write_borrow: tipo del valor (" + written_type_name(vt) +
-                             ") incompatible con el tipo del borrow (" +
-                             written_type_name(bt.pointee ? *bt.pointee : Type{}) +
-                             ")");
+            diags_.error(
+                e->args[1]->loc,
+                "write_borrow: tipo del valor (" + written_type_name(vt) +
+                    ") incompatible con el tipo del borrow (" +
+                    written_type_name(bt.pointee ? *bt.pointee : Type{}) + ")");
         }
         const Type rt{PrimitiveKind::VOID};
         e->result_type = rt;

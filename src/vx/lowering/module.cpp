@@ -1059,6 +1059,10 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
     fn.section_order = fd->attr_order;
     //  NR: @Naked -- el codegen suprime prologo/epilogo/ret.
     fn.is_naked = fd->is_naked;
+    /* @Inline: que el umbral del inliner no la deje fuera.  Antes esto se
+     * quedaba en el parser -- lo miraban los metodos y nadie mas --, asi que
+     * en una funcion libre la anotacion no hacia nada y no lo decia. */
+    fn.wants_inline = fd->is_inline;
     fn.no_idiom = fd->is_no_idiom;
 
     /* Hasta donde llega lo que se puede afirmar de ella.  De una funcion
@@ -1093,9 +1097,15 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
     const bool sret_enum =
         sem_ret.kind == PrimitiveKind::STRUCT &&
         elays_check.find(sem_ret.struct_name) != elays_check.end();
-    // (gap O): SRET para funciones que retornan FUNCTION.  El
-    // slot del function value tiene 16 bytes (fn_addr + env_addr).
-    const bool sret_function = (sem_ret.kind == PrimitiveKind::FUNCTION);
+    /* SRET para las que devuelven un LAMBDA: su ranura son 16 bytes, la
+     * direccion de la funcion y la de su entorno.
+     *
+     * Un `cfn` no: es una direccion y vuelve por registro (ver
+     * @ref Lowering::sret_info).  La otra cara de esta marca es el modo "env
+     * en monton" de mas abajo, y un `cfn` tampoco lo necesita -- no tiene
+     * entorno que sobreviva al RET --. */
+    const bool sret_function =
+        sem_ret.kind == PrimitiveKind::FUNCTION && !sem_ret.fn_is_raw;
     // Smart pointers: SRET de 8 bytes para `unique<T>` / `shared<T>`.
     const bool sret_smartptr = (sem_ret.kind == PrimitiveKind::UNIQUE_PTR ||
                                 sem_ret.kind == PrimitiveKind::SHARED_PTR);
@@ -1198,7 +1208,7 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
         // El retbuf de un agregado vive en host, como el propio agregado
         // (ver lower_var_decl): el `return` copia ahi con `movh`.
         if (sret_i.host_buffer) {
-            fn.values[v_retbuf].is_host_ptr = true;
+            fn.values[v_retbuf].memory = ir::MemorySpace::HostByConstruction;
         }
         fn.params.push_back(v_retbuf);
         push_abi(""); // retbuf SRET: ABI estandar (primer arg-reg)
@@ -1449,7 +1459,7 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
         ai.dst = addr;
         ai.imm = static_cast<uint64_t>(bytes < 8 ? 8 : bytes);
         ai.host_alloca = true;
-        fn.values[addr].is_host_ptr = true;
+        fn.values[addr].memory = ir::MemorySpace::HostByConstruction;
         ai.source_line = fd->loc.line;
         fn.append(current_block_, std::move(ai));
         const bool is_vec =
@@ -2631,7 +2641,7 @@ void Lowering::emit_startup_wiring(ir::IrModule &out_module) {
             // %addr = &tls_var (STR_LIT_ADDR del slot; is_tls lo deriva el
             // driver desde SD_FLAG_TLS -> acceso por thread pointer).
             const ir::IrValueId v_addr = ti.new_value(ir::IrType::PTR);
-            ti.values[v_addr].is_host_ptr = true;
+            ti.values[v_addr].memory = ir::MemorySpace::HostByConstruction;
             {
                 ir::IrInstr a{};
                 a.op = ir::IrOp::STR_LIT_ADDR;
@@ -2729,7 +2739,7 @@ void Lowering::emit_startup_wiring(ir::IrModule &out_module) {
         }
         // %start = section_start(".vxgc_smap")  (PTR)
         const ir::IrValueId v_start = gi.new_value(ir::IrType::PTR);
-        gi.values[v_start].is_host_ptr = true;
+        gi.values[v_start].memory = ir::MemorySpace::HostByConstruction;
         {
             ir::IrInstr r{};
             r.op = ir::IrOp::SECTION_REF;
@@ -2863,7 +2873,7 @@ bool Lowering::emit_main_args_prologue(const ast::FunctionDecl *fd) {
         emit_ir_binop(ir::IrOp::MUL, v_n1, v_ocho, ir::IrType::I64, ln);
 
     ir::IrValueId v_buf = fn_->new_value(ir::IrType::PTR);
-    fn_->values[v_buf].is_host_ptr = true;
+    fn_->values[v_buf].memory = ir::MemorySpace::HostByConstruction;
     {
         ir::IrInstr al{};
         al.op = ir::IrOp::RAW_ALLOC;
@@ -2898,7 +2908,7 @@ bool Lowering::emit_main_args_prologue(const ast::FunctionDecl *fd) {
         emit_ir_binop(ir::IrOp::MUL, v_i2, v_ocho, ir::IrType::I64, ln);
     ir::IrValueId v_addr =
         emit_ir_binop(ir::IrOp::ADD, v_buf, v_off, ir::IrType::PTR, ln);
-    fn_->values[v_addr].is_host_ptr = true;
+    fn_->values[v_addr].memory = ir::MemorySpace::HostByConstruction;
     emit_store_i64(v_addr, v_h, ln);
     emit_store_i64(
         v_i_slot,

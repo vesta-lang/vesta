@@ -91,8 +91,7 @@ bool Lowering::try_lower_introspect_builtins(ast::CallExpr *e, Builtin b,
           b == Builtin::Offsetof || b == Builtin::Parent ||
           b == Builtin::HasScopedMethod || b == Builtin::ScopedMethodArity ||
           b == Builtin::ScopedMethodCount || b == Builtin::ScopedMethodEach ||
-          b == Builtin::ScopedMethodName ||
-          b == Builtin::ScopedMethodOrigin ||
+          b == Builtin::ScopedMethodName || b == Builtin::ScopedMethodOrigin ||
           b == Builtin::Sizeof || b == Builtin::StaticAssert ||
           b == Builtin::TypeId || b == Builtin::TypeInfoAlign ||
           b == Builtin::TypeInfoFieldCount || b == Builtin::TypeInfoFieldName ||
@@ -279,7 +278,7 @@ bool Lowering::try_lower_introspect_builtins(ast::CallExpr *e, Builtin b,
         const ir::IrType dst_ir = ir_type_from_primitive(dst_t.kind);
         const ir::IrValueId v_dst = fn_->new_value(dst_ir);
         // Reinterpretar bits no cambia a que memoria apunta un puntero.
-        fn_->values[v_dst].is_host_ptr = fn_->values[v_src].is_host_ptr;
+        fn_->values[v_dst].memory = fn_->values[v_src].memory;
         ir::IrInstr bc{};
         bc.op = ir::IrOp::BITCAST;
         bc.type = dst_ir;
@@ -638,9 +637,9 @@ bool Lowering::try_lower_introspect_builtins(ast::CallExpr *e, Builtin b,
                 out_value = emit_const(ir::IrType::U32, v, src_line);
                 return true;
             }
-            /* La familia `scoped.method.*`: no que metodos TIENE el tipo, sino que se
-             * le puede llamar DESDE AQUI.  La lista la produce el comprobador
-             * una vez; aqui solo se lee la entrada que se pidio. */
+            /* La familia `scoped.method.*`: no que metodos TIENE el tipo, sino
+             * que se le puede llamar DESDE AQUI.  La lista la produce el
+             * comprobador una vez; aqui solo se lee la entrada que se pidio. */
             if (b == Builtin::ScopedMethodCount ||
                 b == Builtin::HasScopedMethod ||
                 b == Builtin::ScopedMethodName ||
@@ -649,10 +648,9 @@ bool Lowering::try_lower_introspect_builtins(ast::CallExpr *e, Builtin b,
                 std::vector<ScopedMethod> reach;
                 tc_.collect_scoped_methods(t1, site_ns_prefix(), reach);
                 if (b == Builtin::ScopedMethodCount) {
-                    out_value =
-                        emit_const(ir::IrType::U32,
-                                   static_cast<uint64_t>(reach.size()),
-                                   src_line);
+                    out_value = emit_const(ir::IrType::U32,
+                                           static_cast<uint64_t>(reach.size()),
+                                           src_line);
                     return true;
                 }
                 if (b == Builtin::HasScopedMethod) {
@@ -680,8 +678,7 @@ bool Lowering::try_lower_introspect_builtins(ast::CallExpr *e, Builtin b,
                                     : emit_strmake_for(std::string());
                     return true;
                 }
-                const ScopedMethod &sm =
-                    reach[static_cast<size_t>(ilit_arg)];
+                const ScopedMethod &sm = reach[static_cast<size_t>(ilit_arg)];
                 if (b == Builtin::ScopedMethodArity) {
                     out_value = emit_const(ir::IrType::U32,
                                            scoped_arity(tc_, sm), src_line);
@@ -894,7 +891,8 @@ bool Lowering::try_lower_field_access_by_name(ast::CallExpr *e, Builtin b,
                 emit(current_block_, std::move(c));
             }
             addr = fn_->new_value(ir::IrType::PTR);
-            fn_->values[addr].is_host_ptr = t_is_class;
+            // Lo decide el TIPO: el objeto de una clase vive en el anfitrion.
+            fn_->values[addr].set_host_by_type(t_is_class);
             ir::IrInstr ad{};
             ad.op = ir::IrOp::ADD;
             ad.type = ir::IrType::I64;
@@ -912,7 +910,7 @@ bool Lowering::try_lower_field_access_by_name(ast::CallExpr *e, Builtin b,
             /* Propagar is_host_ptr para campos PTR no virtuales (mismo
              * tratamiento que lower_class_field_load). */
             if (ftype.kind == PrimitiveKind::PTR && !ftype.is_virtual) {
-                fn_->values[dst].is_host_ptr = true;
+                fn_->values[dst].memory = ir::MemorySpace::HostByConstruction;
             }
             /* Campo CLASS: el slot guarda un GcHandle, no un host_ptr.
              * Hacemos gcderef para obtener host_ptr fresco post-GC. */
@@ -920,7 +918,8 @@ bool Lowering::try_lower_field_access_by_name(ast::CallExpr *e, Builtin b,
                 // raw_asm-elim 2026-05-28: gcderef + xchg ->
                 // IrOp::GC_DEREF_HOST.
                 ir::IrValueId v_host = fn_->new_value(ir::IrType::I64);
-                fn_->values[v_host].is_host_ptr = true;
+                fn_->values[v_host].memory =
+                    ir::MemorySpace::HostByConstruction;
                 fn_->values[v_host].is_gc_object = true;
                 ir::IrInstr deref{};
                 deref.op = ir::IrOp::GC_DEREF_HOST;
@@ -1044,8 +1043,7 @@ bool Lowering::try_lower_for_each_member(ast::CallExpr *e, Builtin b,
             ir::IrValueId v_name = emit_string_value(
                 sm.name == nullptr ? std::string() : *sm.name, e->loc.line);
             ir::IrValueId v_origin = emit_string_value(
-                sm.origin == nullptr ? std::string() : *sm.origin,
-                e->loc.line);
+                sm.origin == nullptr ? std::string() : *sm.origin, e->loc.line);
             ir::IrInstr cl{};
             cl.op = ir::IrOp::CALLCLOSURE;
             cl.type = ir::IrType::VOID;

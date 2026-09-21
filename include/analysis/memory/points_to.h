@@ -234,6 +234,33 @@ PointsTo compute_points_to(const ir::IrFunction &fn, const IrFacts &facts,
                            const RangeFacts *rangos = nullptr,
                            LoopsOracle loops = {});
 
+/**
+ * @brief A QUIEN preguntar por el points-to de una funcion.
+ *
+ * El mismo trato que @ref LoopsOracle, y por la misma razon: perezoso Y
+ * cacheado, que son las dos a la vez.  Quien lo consulta pregunta SOLO cuando
+ * de verdad tiene que emparejar dos direcciones -- una funcion que no llega a
+ * necesitarlo no paga la tabla -- y quien contesta lo hace desde el gestor, que
+ * no la recalcula mientras la version de la funcion no cambie.
+ *
+ * Esta tabla es mas cara que los bucles, asi que la pereza importa MAS aqui: la
+ * medida que hay al lado (`asm_of` en el optimizador) enseña que hasta PEDIR lo
+ * vacio cuesta -- cerrojo, busqueda y reservas --, y son 10,35 s de CPU para no
+ * devolver nada.  Quien use este oraculo comprueba antes si la funcion puede
+ * necesitarlo.
+ *
+ * Puntero a funcion con contexto, no virtual ni `std::function`: quien contesta
+ * tiene NOMBRE y sale en el perfil.
+ */
+struct PointsToOracle {
+    /// Contesta por @p fn.  Nulo = no hay a quien preguntar.
+    const PointsTo &(*ask)(void *ctx, const ir::IrFunction &fn) = nullptr;
+    /// De quien lo instalo; se le devuelve tal cual.
+    void *ctx = nullptr;
+    /// @return true si hay a quien preguntar.
+    bool valid() const { return ask != nullptr; }
+};
+
 // ===========================================================================
 //  Guardarla y recuperarla entre compilaciones
 // ===========================================================================
@@ -300,6 +327,37 @@ effects::AbstractLoc loc_of(const PointsTo &pt, ir::IrValueId ptr,
  */
 ir::IrValueId single_value_of_slot(const ir::IrFunction &fn,
                                    ir::IrValueId slot);
+
+/**
+ * @brief Lo mismo, pero emparejando la direccion POR POINTS-TO.
+ *
+ * @ref single_value_of_slot compara el hueco por IDENTIDAD de valor SSA: solo
+ * ve la escritura si quien escribe usa literalmente el mismo valor que quien
+ * lee.  Con eso se pierde el caso normal -- el puntero se guarda, se mueve y
+ * se vuelve a leer, asi que el valor que llega al `load` NO es el mismo que
+ * el del `store` aunque apunten al mismo sitio --.
+ *
+ * Aqui la igualdad la decide points-to: dos direcciones son el mismo hueco
+ * cuando resuelven al MISMO @c AbstractLoc.  Se exige que el desplazamiento
+ * este PROBADO en los dos lados; con uno sin probar no se afirma nada, porque
+ * "en algun sitio de este objeto" no identifica una ranura.
+ *
+ * Lo que desbloquea: un puntero a funcion guardado una sola vez y leido de
+ * vuelta -- un @c unique<cfn>, un campo, una tabla con indice constante -- se
+ * puede convertir en llamada DIRECTA, que ademas es inlinable.  Sin esto se
+ * quedaba en indirecta teniendo el destino escrito al lado.
+ *
+ * @param fn    Funcion a mirar.
+ * @param pt    Su tabla points-to.
+ * @param ptrs  Las direcciones por las que se pregunta.
+ * @param width Ancho del acceso, en bytes.
+ * @return Para cada una, el valor guardado, o @c ir::IR_NO_VALUE si no hay
+ *         exactamente una escritura identificable.
+ */
+std::vector<ir::IrValueId> single_values_at(const ir::IrFunction &fn,
+                                            const PointsTo &pt,
+                                            ir::IrValueList ptrs,
+                                            int32_t width);
 
 /**
  * @brief Lo mismo para VARIOS huecos, con un solo recorrido de la funcion.

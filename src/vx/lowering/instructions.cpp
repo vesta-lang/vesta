@@ -146,7 +146,8 @@ void Lowering::emit_gc_set_finalizer(ir::IrValueId v_box, uint32_t kind,
 
 ir::IrValueId Lowering::emit_findmethod(ir::IrValueId v_params, uint32_t line) {
     const ir::IrValueId v = fn_->new_value(ir::IrType::PTR);
-    fn_->values[v].is_host_ptr = true; // MethodInfo* host
+    fn_->values[v].memory =
+        ir::MemorySpace::HostByConstruction; // MethodInfo* host
     ir::IrInstr ins{};
     ins.op = ir::IrOp::FINDMETHOD;
     ins.type = ir::IrType::PTR;
@@ -160,7 +161,7 @@ ir::IrValueId Lowering::emit_findmethod(ir::IrValueId v_params, uint32_t line) {
 
 ir::IrValueId Lowering::emit_findfield(ir::IrValueId v_params, uint32_t line) {
     const ir::IrValueId v = fn_->new_value(ir::IrType::PTR);
-    fn_->values[v].is_host_ptr = true;
+    fn_->values[v].memory = ir::MemorySpace::HostByConstruction;
     ir::IrInstr ins{};
     ins.op = ir::IrOp::FINDFIELD;
     ins.type = ir::IrType::PTR;
@@ -174,7 +175,7 @@ ir::IrValueId Lowering::emit_findfield(ir::IrValueId v_params, uint32_t line) {
 
 ir::IrValueId Lowering::emit_gc_allocp(ir::IrValueId v_size, uint32_t line) {
     const ir::IrValueId v = fn_->new_value(ir::IrType::PTR);
-    fn_->values[v].is_host_ptr = true;
+    fn_->values[v].memory = ir::MemorySpace::HostByConstruction;
     ir::IrInstr ins{};
     if (native_poo_) {
         // AOT: usar el GC nativo (libvesta_gc) -> CALL vx_gc_alloc_ptr(size),
@@ -197,7 +198,7 @@ ir::IrValueId Lowering::emit_gc_allocp(ir::IrValueId v_size, uint32_t line) {
 
 ir::IrValueId Lowering::emit_gc_promote(ir::IrValueId v_src, uint32_t line) {
     const ir::IrValueId v = fn_->new_value(ir::IrType::PTR);
-    fn_->values[v].is_host_ptr = true;
+    fn_->values[v].memory = ir::MemorySpace::HostByConstruction;
     ir::IrInstr ins{};
     ins.op = ir::IrOp::GC_PROMOTE;
     ins.type = ir::IrType::PTR;
@@ -211,7 +212,7 @@ ir::IrValueId Lowering::emit_gc_promote(ir::IrValueId v_src, uint32_t line) {
 
 ir::IrValueId Lowering::emit_gc_demote(ir::IrValueId v_src, uint32_t line) {
     const ir::IrValueId v = fn_->new_value(ir::IrType::PTR);
-    fn_->values[v].is_host_ptr = true;
+    fn_->values[v].memory = ir::MemorySpace::HostByConstruction;
     ir::IrInstr ins{};
     ins.op = ir::IrOp::GC_DEMOTE;
     ins.type = ir::IrType::PTR;
@@ -414,7 +415,8 @@ ir::IrValueId Lowering::emit_getargc(uint32_t line) {
 
 ir::IrValueId Lowering::emit_getarg(ir::IrValueId v_idx, uint32_t line) {
     const ir::IrValueId v = fn_->new_value(ir::IrType::PTR);
-    fn_->values[v].is_host_ptr = true; // host_ptr al string del arg
+    fn_->values[v].memory =
+        ir::MemorySpace::HostByConstruction; // host_ptr al string del arg
     ir::IrInstr ins{};
     ins.op = ir::IrOp::GETARG;
     ins.type = ir::IrType::PTR;
@@ -440,7 +442,7 @@ void Lowering::emit_fulfill_hlt(ir::IrValueId v_fut, ir::IrValueId v_val,
 
 ir::IrValueId Lowering::emit_findclass(ir::IrValueId v_params, uint32_t line) {
     const ir::IrValueId v = fn_->new_value(ir::IrType::PTR);
-    fn_->values[v].is_host_ptr = true;
+    fn_->values[v].memory = ir::MemorySpace::HostByConstruction;
     ir::IrInstr ins{};
     ins.op = ir::IrOp::FINDCLASS;
     ins.type = ir::IrType::PTR;
@@ -454,7 +456,7 @@ ir::IrValueId Lowering::emit_findclass(ir::IrValueId v_params, uint32_t line) {
 
 ir::IrValueId Lowering::emit_defclass(ir::IrValueId v_params, uint32_t line) {
     const ir::IrValueId v = fn_->new_value(ir::IrType::PTR);
-    fn_->values[v].is_host_ptr = true;
+    fn_->values[v].memory = ir::MemorySpace::HostByConstruction;
     ir::IrInstr ins{};
     ins.op = ir::IrOp::DEFCLASS;
     ins.type = ir::IrType::PTR;

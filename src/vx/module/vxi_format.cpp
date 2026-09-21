@@ -1270,9 +1270,8 @@ static bool parse_payload_function(const uint8_t *data, size_t size,
         uint32_t pb_off = 0, pb_len = 0;
         if (!read_u32(data, size, off, pb_off)) return false;
         if (!read_u32(data, size, off, pb_len)) return false;
-        if (pb_len > 0 &&
-            !read_name(data, size, pb_off, pb_len, pool_start,
-                       out.provides_builtin))
+        if (pb_len > 0 && !read_name(data, size, pb_off, pb_len, pool_start,
+                                     out.provides_builtin))
             return false;
     }
     return true;

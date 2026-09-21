@@ -342,14 +342,15 @@ std::string Lowering::generate_spawn_helper(ast::BlockStmt *body,
         ir::IrValueId cap_ptr =
             child_fn.new_value(ir::IrType::PTR, "%__cap_ptr");
         child_fn.values[cap_ptr].is_param = true;
-        child_fn.values[cap_ptr].is_host_ptr = true;
+        child_fn.values[cap_ptr].memory = ir::MemorySpace::HostByConstruction;
         child_fn.params.push_back(cap_ptr);
         for (size_t i = 0; i < captures.size(); ++i) {
             // addr = cap_ptr + i*8  (mantiene is_host_ptr).
             ir::IrValueId addr = cap_ptr;
             if (i != 0) {
                 addr = child_fn.new_value(ir::IrType::PTR);
-                child_fn.values[addr].is_host_ptr = true;
+                child_fn.values[addr].memory =
+                    ir::MemorySpace::HostByConstruction;
                 ir::IrValueId off = emit_const(
                     ir::IrType::I64, static_cast<int64_t>(i * 8), loc.line);
                 ir::IrInstr ad{};
@@ -368,8 +369,10 @@ std::string Lowering::generate_spawn_helper(ast::BlockStmt *body,
                     parent.parent_fn()->values.size()) {
                 const auto &src_val =
                     parent.parent_fn()->values[spawn_captured_ssa_values_[i]];
-                if (src_val.is_host_ptr)
-                    child_fn.values[val].is_host_ptr = true;
+                // El valor del hijo ES el del padre cruzando la frontera del
+                // spawn: se conserva su procedencia, no se reclasifica.
+                if (src_val.is_host_ptr())
+                    child_fn.values[val].memory = src_val.memory;
                 if (src_val.is_gc_object)
                     child_fn.values[val].is_gc_object = true;
             }
@@ -402,7 +405,8 @@ std::string Lowering::generate_spawn_helper(ast::BlockStmt *body,
                     parent.parent_fn()->values.size()) {
                 const auto &src_val =
                     parent.parent_fn()->values[spawn_captured_ssa_values_[i]];
-                if (src_val.is_host_ptr) child_fn.values[v].is_host_ptr = true;
+                if (src_val.is_host_ptr())
+                    child_fn.values[v].memory = src_val.memory;
                 if (src_val.is_gc_object)
                     child_fn.values[v].is_gc_object = true;
             }
@@ -584,7 +588,7 @@ ir::IrValueId Lowering::lower_spawn_expr(ast::SpawnExpr *e) {
                 emit_const(ir::IrType::I64,
                            static_cast<int64_t>(caps.size() * 8), e->loc.line);
             ir::IrValueId cap_ptr = fn_->new_value(ir::IrType::PTR);
-            fn_->values[cap_ptr].is_host_ptr = true;
+            fn_->values[cap_ptr].memory = ir::MemorySpace::HostByConstruction;
             ir::IrInstr al{};
             al.op = ir::IrOp::RAW_ALLOC;
             al.type = ir::IrType::PTR;
@@ -596,7 +600,8 @@ ir::IrValueId Lowering::lower_spawn_expr(ast::SpawnExpr *e) {
                 ir::IrValueId addr = cap_ptr;
                 if (i != 0) {
                     addr = fn_->new_value(ir::IrType::PTR);
-                    fn_->values[addr].is_host_ptr = true;
+                    fn_->values[addr].memory =
+                        ir::MemorySpace::HostByConstruction;
                     ir::IrValueId off =
                         emit_const(ir::IrType::I64, static_cast<int64_t>(i * 8),
                                    e->loc.line);
@@ -917,7 +922,7 @@ void Lowering::lower_async_function(ast::FunctionDecl *fd, ir::IrModule &out) {
                 ad.operands = {v_buf, off};
                 ad.source_line = fd->loc.line;
                 emit(current_block_, std::move(ad));
-                fn_->values[slot].is_host_ptr = true;
+                fn_->values[slot].memory = ir::MemorySpace::HostByConstruction;
             }
             ir::IrInstr st{};
             st.op = ir::IrOp::STORE;

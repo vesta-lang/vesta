@@ -183,7 +183,7 @@ ir::IrValueId Lowering::materialize_comptime_struct(const ComptimeEvalResult &r,
     const uint64_t buf_bytes =
         (static_cast<uint64_t>(lay.size_bytes) + 7ULL) & ~7ULL;
     const ir::IrValueId v_buf = stack_alloc_buf(buf_bytes, line, true);
-    fn_->values[v_buf].is_host_ptr = true;
+    fn_->values[v_buf].memory = ir::MemorySpace::HostByConstruction;
     fill_comptime_struct_into(v_buf, r, lay, line);
     return v_buf;
 }
@@ -202,8 +202,7 @@ void Lowering::fill_comptime_struct_into(ir::IrValueId base_addr,
             const ir::IrValueId v_off =
                 emit_const(ir::IrType::I64, (uint64_t)fi.offset, line);
             v_addr = fn_->new_value(ir::IrType::PTR);
-            fn_->values[v_addr].is_host_ptr =
-                fn_->values[base_addr].is_host_ptr;
+            fn_->values[v_addr].memory = fn_->values[base_addr].memory;
             ir::IrInstr ad{};
             ad.op = ir::IrOp::ADD;
             ad.type = ir::IrType::I64;
@@ -270,7 +269,8 @@ void Lowering::lower_static_local(ast::VarDeclStmt *vd, const Type &sem_type) {
 
     auto emit_addr = [&](uint64_t s) -> ir::IrValueId {
         ir::IrValueId a = emit_str_lit_addr(s, ln);
-        fn_->values[a].is_host_ptr = true; // gdata vive en memoria host
+        fn_->values[a].memory =
+            ir::MemorySpace::HostByConstruction; // gdata vive en memoria host
         return a;
     };
 
@@ -322,14 +322,14 @@ void Lowering::lower_static_local(ast::VarDeclStmt *vd, const Type &sem_type) {
                                         ? ir::IR_NO_VALUE
                                         : lower_expr(vd->init.get());
         if (v_src != ir::IR_NO_VALUE) {
-            const bool src_is_host = fn_->values[v_src].is_host_ptr;
+            const bool src_is_host = fn_->values[v_src].is_host_ptr();
             const uint64_t qwords =
                 (static_cast<uint64_t>(agg_lay->size_bytes) + 7) / 8;
             for (uint64_t qi = 0; qi < qwords; ++qi) {
                 const ir::IrValueId v_off = emit_const(
                     ir::IrType::I64, static_cast<int64_t>(qi * 8), ln);
                 const ir::IrValueId v_s = fn_->new_value(ir::IrType::PTR);
-                fn_->values[v_s].is_host_ptr = src_is_host;
+                fn_->values[v_s].set_host(src_is_host);
                 {
                     ir::IrInstr ad{};
                     ad.op = ir::IrOp::ADD;
@@ -342,7 +342,8 @@ void Lowering::lower_static_local(ast::VarDeclStmt *vd, const Type &sem_type) {
                 const ir::IrValueId v_w =
                     emit_load_typed(v_s, ir::IrType::I64, ln);
                 const ir::IrValueId v_d = fn_->new_value(ir::IrType::PTR);
-                fn_->values[v_d].is_host_ptr = true; // gdata = memoria host
+                fn_->values[v_d].memory =
+                    ir::MemorySpace::HostByConstruction; // gdata = memoria host
                 {
                     ir::IrInstr ad{};
                     ad.op = ir::IrOp::ADD;
@@ -519,7 +520,7 @@ ir::IrValueId Lowering::lower_enum_constructor(
         al.host_alloca = true;
         al.source_line = loc.line;
         emit(current_block_, std::move(al));
-        fn_->values[addr].is_host_ptr = true;
+        fn_->values[addr].memory = ir::MemorySpace::HostByConstruction;
     }
 
     // 2. STORE i64 tag en offset 0 (= addr).
@@ -551,7 +552,7 @@ ir::IrValueId Lowering::lower_enum_constructor(
         // is_host_ptr-en-add): el STORE del payload usa la naturaleza del
         // buffer.  No-op hoy (el buffer del constructor es VM stack) pero
         // unifica el patron con Some/Ok/value/error/unwrap.
-        fn_->values[addr_i].is_host_ptr = fn_->values[addr].is_host_ptr;
+        fn_->values[addr_i].memory = fn_->values[addr].memory;
 
         emit_store_typed(addr_i, v, ir::IrType::I64, loc.line);
     }
@@ -646,7 +647,7 @@ bool Lowering::materialize_comptime_bytes(const std::vector<uint8_t> &bytes,
             emit_const(ir::IrType::I64, off, source_line);
         const ir::IrValueId v_addr = emit_ir_binop(
             ir::IrOp::ADD, v_dst, v_off, ir::IrType::PTR, source_line);
-        fn_->values[v_addr].is_host_ptr = fn_->values[v_dst].is_host_ptr;
+        fn_->values[v_addr].memory = fn_->values[v_dst].memory;
 
         emit_store_typed(v_addr, v_val, wt, source_line);
     }
@@ -831,8 +832,7 @@ std::string macro_body_unsupported_reason_expr(const TypeChecker &tc,
              * El resto de virtual fns (static_assert, comptime_compile) sin
              * simbolo bytecode siguen forzando AST/VM-eval del call site. */
             static const std::unordered_set<std::string> FOLDABLE_TYPE_META = {
-                "type.by_name.size", "type.by_name.align",
-                "type.by_name.kind"};
+                "type.by_name.size", "type.by_name.align", "type.by_name.kind"};
             if (ffi::lookup_virtual_fn("vesta_comptime", id->name) &&
                 !(FOLDABLE_TYPE_META.count(id->name) && ce->args.size() == 1 &&
                   ce->args[0] &&

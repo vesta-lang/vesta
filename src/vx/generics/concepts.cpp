@@ -317,8 +317,8 @@ void TypeChecker::note_instance_requirement(const Type &target,
          * no habla de `T` y atribuirselo seria adivinar. */
         if (!(b.second == value)) continue;
         diags_.diag(loc, DiagLevel::NOTE, "VX2113",
-                    {*inst->instance_template, *b.first,
-                     type_to_string(target), type_to_string(value)});
+                    {*inst->instance_template, *b.first, type_to_string(target),
+                     type_to_string(value)});
         return;
     }
 }

@@ -397,8 +397,7 @@ static bool name_tail_is(const std::string &name,
  */
 static bool claim_override_slot(CompileResult &res, const SourceLoc &loc,
                                 const char *annotation,
-                                const std::string &fn_name,
-                                std::string &slot) {
+                                const std::string &fn_name, std::string &slot) {
     if (slot.empty()) {
         slot = fn_name;
         return true;
@@ -443,8 +442,9 @@ bool collect_string_sync_overrides(const ast::ModuleNode &mod,
     if (res.sync_enter_override.empty() != res.sync_exit_override.empty()) {
         res.ok = false;
         res.diagnostics.diag(mod_loc, DiagLevel::ERR, "VX2119",
-                             {res.sync_enter_override.empty() ? "monitor_enter"
-                                                              : "monitor_exit"});
+                             {res.sync_enter_override.empty()
+                                  ? "monitor_enter"
+                                  : "monitor_exit"});
         return false;
     }
     return true;
@@ -1067,19 +1067,13 @@ CompileResult compile_vx_source(const std::string &source,
              *
              * El rol sale del NOMBRE.  Antes se deducia del tipo de retorno
              * -- devuelve puntero luego reserva, devuelve void luego libera --,
-             * que ademas de adivinar obligaba a que las dos se llamaran igual. */
+             * que ademas de adivinar obligaba a que las dos se llamaran igual.
+             */
             switch (fd->provides_builtin) {
-            case Builtin::Malloc:
-                res.aot_alloc_sym = fd->name;
-                break;
-            case Builtin::Free:
-                res.aot_free_sym = fd->name;
-                break;
-            case Builtin::Panic:
-                res.aot_panic_sym = fd->name;
-                break;
-            default:
-                break;
+            case Builtin::Malloc: res.aot_alloc_sym = fd->name; break;
+            case Builtin::Free: res.aot_free_sym = fd->name; break;
+            case Builtin::Panic: res.aot_panic_sym = fd->name; break;
+            default: break;
             }
         }
     }
@@ -1092,11 +1086,11 @@ CompileResult compile_vx_source(const std::string &source,
      * La instancia MANDA sobre lo que el bucle de arriba apunto: ese toma el
      * nombre de la declaracion, que para una plantilla es el que NO existe como
      * simbolo -- y ponerlo solo cuando el otro estuviera vacio dejaba ganar
-     * justo al que no vale, asi que el enlazado pedia `...__vx_free` a secas. */
+     * justo al que no vale, asi que el enlazado pedia `...__vx_free` a secas.
+     */
     if (!tc.raw_alloc_symbol().empty())
         res.aot_alloc_sym = tc.raw_alloc_symbol();
-    if (!tc.raw_free_symbol().empty())
-        res.aot_free_sym = tc.raw_free_symbol();
+    if (!tc.raw_free_symbol().empty()) res.aot_free_sym = tc.raw_free_symbol();
 
     /* : set @c has_lowerable_macros si el lowering emitio
      * al menos una IrFunction marcada @c is_macro_compiled.  Esto

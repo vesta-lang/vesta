@@ -77,8 +77,8 @@ const std::vector<std::string> &all_builtin_names();
  * Todo son punteros a `.rodata`: la tabla no reserva memoria al arrancar.
  */
 struct BuiltinDocView {
-    const char *name = nullptr;      ///< Nombre del builtin.
-    const char *sig = nullptr;       ///< Firma; igual en todos los idiomas.
+    const char *name = nullptr;       ///< Nombre del builtin.
+    const char *sig = nullptr;        ///< Firma; igual en todos los idiomas.
     const char *const *doc = nullptr; ///< La explicacion, una por idioma.
     int doc_count = 0;                ///< Cuantos idiomas trae @c doc.
 };

@@ -249,7 +249,7 @@ bool Lowering::try_lower_concurrent_builtins(ast::CallExpr *e, Builtin b,
         }
         const ir::IrValueId v_size = lower_expr(e->args[0].get());
         const ir::IrValueId v_ptr = fn_->new_value(ir::IrType::PTR);
-        fn_->values[v_ptr].is_host_ptr = true;
+        fn_->values[v_ptr].memory = ir::MemorySpace::HostByConstruction;
         // Reuse @c alloc opcode (RAW_ALLOC IR op).  La memoria que
         // retorna es host_ptr, identico en todos los procesos (mismo
         // address space del OS).  Para promocion al SharedHeap real

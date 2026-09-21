@@ -180,7 +180,9 @@ inline ir::IrType mem_ty(int w, bool is_load) {
 inline ir::IrValueId emit_load(ir::IrFunction &fn, ir::IrBlockId blk,
                                ir::IrValueId addr, int w, bool host,
                                uint32_t line) {
-    if (host) fn.values[addr].is_host_ptr = true; // el emitter mira el operando
+    if (host)
+        fn.values[addr].memory =
+            ir::MemorySpace::HostByConstruction; // el emitter mira el operando
     const ir::IrValueId d = fn.new_value(ir::IrType::I64);
     ir::IrInstr in{};
     in.op = ir::IrOp::LOAD;
@@ -189,8 +191,9 @@ inline ir::IrValueId emit_load(ir::IrFunction &fn, ir::IrBlockId blk,
     in.operands = {addr};
     in.source_line = line;
     fn.append(blk, std::move(in));
-    fn.values[d].is_host_ptr =
-        false; // el valor cargado es un entero, no un ptr
+    // El valor cargado es un entero, no una direccion: no vive en ninguna
+    // memoria, asi que no hay nada que afirmar de el.
+    fn.values[d].memory = ir::MemorySpace::NotHost;
     return d;
 }
 
@@ -198,7 +201,7 @@ inline ir::IrValueId emit_load(ir::IrFunction &fn, ir::IrBlockId blk,
 /// emit_load.
 inline void emit_store(ir::IrFunction &fn, ir::IrBlockId blk, ir::IrValueId val,
                        ir::IrValueId addr, int w, bool host, uint32_t line) {
-    if (host) fn.values[addr].is_host_ptr = true;
+    if (host) fn.values[addr].memory = ir::MemorySpace::HostByConstruction;
     ir::IrInstr in{};
     in.op = ir::IrOp::STORE;
     in.type = mem_ty(w, /*is_load=*/false);
@@ -234,7 +237,7 @@ inline void cfg_flush_block(LiftCtx &c) {
         auto b = c.bound.find(r);
         auto v = c.cur.find(r);
         if (b != c.bound.end() && v != c.cur.end()) {
-            const bool host = c.fn.values[b->second.slot].is_host_ptr;
+            const bool host = c.fn.values[b->second.slot].is_host_ptr();
             emit_store(c.fn, c.block, v->second, b->second.slot,
                        b->second.width_bits, host, c.line);
         }

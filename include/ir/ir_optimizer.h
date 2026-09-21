@@ -85,6 +85,9 @@ namespace asa {
 /// Donde un pase DEJA lo que descubre (analysis/asa/fact_store.h).  Declarado
 /// y no incluido: el optimizador no necesita conocer el almacen para pasarlo.
 class FactStore;
+/// La puerta UNICA a los hechos (analysis/asa/fact_base.h).  Declarada y no
+/// incluida: un pase que PREGUNTA no necesita conocer como se cachean.
+class FactBase;
 } // namespace asa
 } // namespace analysis
 
@@ -758,16 +761,186 @@ ir_pass_licm(IrFunction &fn, const analysis::PointsTo *pt = nullptr,
 ModulePassResult ir_pass_devirt_monomorphic(IrModule &mod);
 
 /**
+ * @brief Una funcion del modulo vista por el hash con que la nombra
+ *        `vrt:naked_fnaddr`.
+ *
+ * Los dos campos van NOMBRADOS porque un par de un entero y una cadena no dice
+ * que es ninguno de los dos: el entero es el resumen del nombre -- lo unico que
+ * viaja en el intermedio -- y el nombre es lo que necesita el CALL directo al
+ * deshacerlo.
+ *
+ * El nombre va INTERNADO y no copiado: son los de todas las funciones del
+ * modulo, ya existen en el, y duplicarlos seria una reserva por funcion para
+ * guardar lo que ya esta guardado.
+ */
+struct NakedFnAddrEntry {
+    uint64_t name_hash = 0; ///< FNV-1a de @c name, la constante del IR
+    const std::string *name = nullptr; ///< nombre internado de la funcion
+};
+
+/**
+ * @brief Las funciones de un modulo indexadas por ese hash.
+ *
+ * Contiguo y ORDENADO por @c name_hash, no una tabla dispersa: son unos pocos
+ * miles de entradas que se construyen de una vez y se consultan de tarde en
+ * tarde -- una por cada `naked_fnaddr` del modulo --, asi que lo que importa es
+ * recorrerlas seguidas al construirlo, no el coste de cada consulta.
+ */
+struct NakedFnAddrIndex {
+    std::vector<NakedFnAddrEntry> by_hash; ///< ordenadas por @c name_hash
+
+    /// @brief true si no hay nada que deshacer.
+    bool empty() const noexcept { return by_hash.empty(); }
+
+    /**
+     * @brief Busca el nombre cuyo resumen es @p hash.
+     * @param hash Resumen que viajaba en el intermedio.
+     * @return El nombre, o nullptr si ninguna funcion del modulo lo tiene.
+     */
+    const std::string *find(uint64_t hash) const noexcept;
+};
+
+/**
+ * @brief Construye @ref NakedFnAddrIndex a partir de un modulo.
+ *
+ * Se hace UNA vez y se le pasa a @ref ir_pass_devirt_cfn, que corre por
+ * funcion: rehacerlo dentro seria recorrer el modulo entero tantas veces como
+ * funciones tenga.
+ *
+ * Las @c is_naked se dejan FUERA a proposito.  Su direccion se toma para
+ * llamarlas desde ensamblador, con la convencion del anfitrion; pasar esa
+ * llamada a un CALL de la maquina virtual le cambiaria el convenio, y eso no
+ * daria un error -- daria otro comportamiento --.
+ *
+ * @param mod Modulo del que salen los nombres.
+ * @return El indice, ya ordenado.
+ */
+NakedFnAddrIndex ir_naked_fnaddr_index(const IrModule &mod);
+
+/**
  * @brief Devirtualizacion de CALLIND a puntero a funcion crudo (cfn) constante.
  *
- * Si el @c func_ptr de un CALLIND viene de un LABEL_ADDR (direccion de una
- * funcion conocida en compile-time), lo reescribe a un CALL directo a esa
- * funcion -- elimina la rama indirecta y habilita el inliner.
+ * Si el @c func_ptr de un CALLIND viene de una direccion de funcion CONOCIDA al
+ * compilar, lo reescribe a un CALL directo -- quita la rama indirecta y deja
+ * que el inliner entre --.  Una llamada cuyo destino se sabe no tiene por que
+ * bajar como indirecta.
  *
- * @param fn Funcion a transformar.
+ * La direccion llega por DOS caminos y hay que mirar los dos:
+ *
+ *   - `LABEL_ADDR`, que es la direccion de bytecode.
+ *   - `CALLN vrt:naked_fnaddr(proc, <hash>)`, que es como se toma la direccion
+ *     NATIVA de una funcion plana en interprete/JIT.  El hash es una constante
+ *     de compilacion derivada del nombre, asi que se deshace mirando los
+ *     nombres del modulo; sin esto el pase no veia NADA por este camino, y una
+ *     llamada perfectamente conocida se quedaba indirecta.
+ *
+ * @param fn    Funcion a transformar.
+ * Tambien mira A TRAVES DE MEMORIA: un `cfn` guardado una sola vez y leido de
+ * vuelta -- un `unique<cfn>`, un campo, una tabla con indice constante -- tiene
+ * destino conocido, pero el valor que llega al `load` no es el mismo SSA que
+ * el del `store`.  Quien empareja los dos es points-to, y se le pregunta a la
+ * base; sin eso la llamada se quedaba indirecta teniendo el destino escrito al
+ * lado, y una indirecta no se puede inlinar.
+ *
+ * @param index Las funciones del modulo por su hash, para deshacer el de
+ *              `naked_fnaddr`.  Vacio = solo se mira `LABEL_ADDR`.
+ * @param base  A quien preguntarle por los punteros de @p fn.
  * @return true si reescribio al menos un CALLIND.
  */
-PassResult ir_pass_devirt_cfn(IrFunction &fn);
+PassResult ir_pass_devirt_cfn(IrFunction &fn, const NakedFnAddrIndex &index,
+                              analysis::asa::FactBase &base);
+
+/**
+ * @brief Una llamada indirecta a una direccion del ANFITRION no es un CALLIND.
+ *
+ * `CALLIND` es la llamada indirecta DE LA MAQUINA: interpreta el valor como
+ * una direccion de codigo suyo.  Darle una direccion del proceso -- un export
+ * resuelto con `GetProcAddress`/`dlsym` -- no da un error: DEVUELVE CERO, y si
+ * lo llamado era una syscall, cero es ademas `STATUS_SUCCESS`.  Este pase la
+ * reescribe a la via nativa (`CALLNI`), que es la que le corresponde.
+ *
+ * Hace falta un PASE y no basta el bajado porque el bajado elige con lo que
+ * sabe en ese momento, y de que memoria es un valor que ha pasado por memoria
+ * no se sabe hasta que alguien adelanta el almacen a la carga.  Para entonces
+ * la instruccion ya esta puesta.
+ *
+ * Solo reescribe lo que puede AFIRMAR.  No toca un puntero con ABI a medida:
+ * ahi el reparto por registro es del `cfn` y la via nativa usa el suyo.
+ *
+ * De que memoria es el destino se lo PREGUNTA a la base, que es donde ese
+ * hecho tiene productor y cache.  La base entra por parametro y no se crea
+ * dentro a proposito: su memoizacion vale "mientras viva la base", asi que
+ * una por funcion y por pasada no cachearia nada -- se volveria a resolver
+ * lo mismo en cada vuelta del punto fijo --.
+ *
+ * @param fn   Funcion a transformar.
+ * @param base A quien preguntarle por los hechos de @p fn.
+ * @return true si reescribio al menos un CALLIND.
+ */
+PassResult ir_pass_callind_native(IrFunction &fn,
+                                  analysis::asa::FactBase &base);
+
+/**
+ * @enum CallTargetMemory
+ * @brief De que memoria es el destino de una llamada indirecta.
+ *
+ * TRES respuestas y no dos.  El intermedio lleva @c is_host_ptr, que es un
+ * booleano, y un booleano no sabe decir "no se": lo que no esta marcado puede
+ * ser de la maquina O puede ser que nadie lo haya averiguado.  Mezclarlas es
+ * lo que deja una direccion del proceso en una llamada indirecta DE LA
+ * MAQUINA, que no da error -- devuelve CERO --.
+ */
+enum class CallTargetMemory : uint8_t {
+    Unknown = 0, ///< no se pudo deducir; no se transforma NI se supone.
+    Host,        ///< memoria del proceso anfitrion (va por la via nativa).
+    Machine,     ///< codigo de la maquina (va por la indirecta de la maquina).
+};
+
+/**
+ * @enum CallTargetUnknown
+ * @brief POR QUE no se supo de que memoria es un destino.
+ *
+ * Un analisis que calla al renunciar parece que funciona.  Y aqui el motivo
+ * ademas separa casos que se arreglan de forma OPUESTA: lo que viene de un
+ * parametro no lo puede saber nunca quien lo recibe -- solo quien lo pasa --,
+ * mientras que lo que viene de memoria si se puede deducir mirando quien
+ * escribe ahi.
+ */
+enum class CallTargetUnknown : uint8_t {
+    None = 0,   ///< se supo; no aplica.
+    Parameter,  ///< llego como parametro: aqui dentro no hay nada que mirar.
+    FromMemory, ///< salio de una carga; depende de quien escribio.
+    Computed,   ///< es el resultado de una cuenta.
+    Disagree,   ///< dos caminos dicen cosas distintas.
+    TooDeep,    ///< la cadena de definiciones era demasiado larga.
+};
+
+/// Una llamada indirecta y lo que se sabe de su destino.
+struct CallTargetSite {
+    uint32_t line = 0;              ///< linea de fuente de la llamada.
+    IrValueId target = IR_NO_VALUE; ///< valor con la direccion.
+    CallTargetMemory memory = CallTargetMemory::Unknown;
+    /// Solo tiene sentido con @c Unknown.
+    CallTargetUnknown why = CallTargetUnknown::None;
+};
+
+/// Nombre estable del motivo, para volcados e informes.  NO es texto de
+/// usuario: lo que el usuario lee sale del catalogo.
+const char *call_target_unknown_name(CallTargetUnknown r);
+
+/**
+ * @brief Clasifica el destino de cada llamada indirecta de @p fn.
+ *
+ * Sigue las definiciones hacia atras: una direccion de codigo de la maquina
+ * nace de un @c LABEL_ADDR, una del anfitrion viene marcada, y lo que no llega
+ * a ninguna de las dos se contesta "no se" en vez de suponer.
+ *
+ * NO transforma nada: contesta.  Quien decide que hacer con un "no se" -- y
+ * bajo el diseno acordado eso es un ERROR pidiendo que se diga -- es el
+ * consumidor.
+ */
+std::vector<CallTargetSite>
+ir_callind_target_memory(const IrFunction &fn, analysis::asa::FactBase &base);
 
 /**
  * @brief Devirtualizacion ESPECULATIVA guiada por perfil/IC (C2).

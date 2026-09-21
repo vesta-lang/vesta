@@ -296,6 +296,21 @@ class Parser {
     void error_here(const char *msg);
 
     /**
+     * @brief Comprueba que lo escrito tras un `@` ES una anotacion, y lo dice
+     *        si no lo es.
+     *
+     * Antes, el nombre que ningun sitio reconocia se descartaba sin una
+     * palabra: una errata compilaba y la anotacion no hacia nada.  La lista de
+     * las que existen vive en @c vx/annotation_names.h, en UN sitio, porque el
+     * vocabulario estaba repartido por siete lugares de este fichero.
+     *
+     * @param name Nombre tal cual se escribio, sin el `@`.
+     * @param loc  La marca, no la declaracion de debajo: el error es de aqui.
+     * @return true si existe; false y ya se emitio el diagnostico si no.
+     */
+    bool check_annotation_name_(const std::string &name, const SourceLoc &loc);
+
+    /**
      * @brief Reporta un error en la posicion de un token dado.
      */
     void error_at(const Token &tok, const char *msg);
@@ -515,8 +530,8 @@ class Parser {
      * @param name Identificador a comprobar.
      * @return Cierto si nombra un tipo AQUI.
      */
-    [[nodiscard]] bool is_active_type_param(const std::string &name) const
-        noexcept;
+    [[nodiscard]] bool
+    is_active_type_param(const std::string &name) const noexcept;
     /// @brief Retira los aliases temporales insertados por el helper
     /// anterior (restaura @c declared_aliases_ al estado previo).
     void unregister_temp_type_aliases(const std::vector<std::string> &inserted);
@@ -997,7 +1012,6 @@ class Parser {
     /// veces.  La busqueda es lineal porque con dos entradas eso ES lo rapido.
     const std::vector<std::unique_ptr<ast::TypeNode>> *active_type_params_ =
         nullptr;
-
 
     ///  M.L24: flag indicando si la ultima invocacion de
     /// @c parse_top_level_decl skipeo la decl por @c @Target no

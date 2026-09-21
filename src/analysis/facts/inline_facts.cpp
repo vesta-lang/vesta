@@ -14,6 +14,7 @@
 #include "analysis/facts/inline_facts.h"
 
 #include "ir/ssa_ir.h"
+#include "util/env_flags.h" // el interruptor para medir A/B las reservas
 
 namespace analysis {
 
@@ -131,6 +132,7 @@ InlineFacts compute_inline_facts(const ir::IrFunction &fn) {
     /* Lo que se sabe sin abrir el cuerpo. */
     f.is_native = fn.is_native;
     f.is_naked = fn.is_naked;
+    f.wants_inline = fn.wants_inline;
     f.has_section = !fn.section.empty();
     f.is_new_helper = ir::is_new_helper_name(fn.name, nullptr);
     f.blacklisted_single = en_lista_de_un_bloque(fn.name);
@@ -218,7 +220,9 @@ bool inlineable_single_block(const InlineFacts &f, size_t threshold,
     size_t cuerpo = f.entry_instr_count;
     const size_t azucar = 2u * f.asm_bindings;
     cuerpo -= (azucar < cuerpo ? azucar : 0);
-    if (cuerpo > efectivo) return false;
+    /* `@Inline` levanta el umbral, no las reglas de correccion: las de abajo
+     * -- recursiva, asm crudo -- siguen decidiendo. */
+    if (!f.wants_inline && cuerpo > efectivo) return false;
 
     if (f.recursive) return false;
     /* RAW_ASM asume la convencion de llamada de la VM y no se puede mover.
@@ -239,7 +243,17 @@ bool inlineable_multi_block(const InlineFacts &f, size_t threshold) {
     if (f.recursive) return false;
     if (f.has_raw_asm || f.has_inline_asm) return false;
     if (f.has_jump_table) return false;
-    if (f.has_alloca) return false;
+    /* Reservar memoria NO impide inlinar.  Lo impedia porque una reserva de
+     * pila dejada dentro de un bucle hacia crecer la pila en cada vuelta,
+     * pero eso se arregla IZANDOLA al bloque de entrada del llamante -- que
+     * corre una vez --, y es lo que hace `inline_one_multiblock`.  Rechazar
+     * por ello dejaba fuera a casi cualquier funcion con un struct local, que
+     * es justo donde el inline multi-bloque tenia algo que dar.
+     *
+     * El interruptor devuelve el rechazo, solo para poder medir A/B que
+     * desbloquea quitarlo. */
+    if (f.has_alloca && util::flag_on(util::FlagId::NoInlineWithAlloca))
+        return false;
     if (f.frees_resources) return false;
     if (f.has_frame_op) return false;
     if (f.calls_new_helper) return false;
@@ -251,6 +265,11 @@ bool inlineable_multi_block(const InlineFacts &f, size_t threshold) {
      * rechaza por tamano, como un `__add__` -- y cualquier multi-bloque que
      * quepa. */
     if (f.block_count == 1 && f.instr_count <= 12) return false;
+    /* `@Inline` levanta el UMBRAL y solo el umbral: todo lo de arriba son
+     * reglas de que NO SE PUEDE y siguen aplicando.  El umbral es una cuenta
+     * de conveniencia para el caso general, y la anotacion dice que en esta
+     * funcion ya la hizo quien la escribio. */
+    if (f.wants_inline) return true;
     return f.instr_count <= threshold;
 }
 

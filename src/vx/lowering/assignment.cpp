@@ -343,7 +343,8 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
             if (v_ch == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
             // Buffer scratch de 1 byte con el char.
             ir::IrValueId v_scr = stack_alloc_buf(1, ln, native_poo_);
-            if (native_poo_) fn_->values[v_scr].is_host_ptr = true;
+            if (native_poo_)
+                fn_->values[v_scr].memory = ir::MemorySpace::HostByConstruction;
             emit_store_typed(v_scr, v_ch, ir::IrType::U8, ln);
             build_native_string_append_inplace(
                 v_slot, v_scr, emit_const(ir::IrType::I64, 1, ln), ln);
@@ -387,7 +388,9 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
              * vaciarlo se baja como un borrado por lotes, que exige saberlo:
              * sin la marca el selector no encuentra motivo para ese borrado y
              * renuncia a la funcion entera. */
-            if (native_poo_) fn_->values[v_slot].is_host_ptr = true;
+            if (native_poo_)
+                fn_->values[v_slot].memory =
+                    ir::MemorySpace::HostByConstruction;
             emit_native_str_free_if_heap(v_slot, ln);
             emit_zero_native_str_slot(v_slot, ln);
             emit_str_meta_sso(v_slot, emit_const(ir::IrType::I64, 0, ln), ln);
@@ -431,9 +434,40 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
         if (ite_e != elays_e.end()) {
             const ir::IrValueId slot = lookup(id->name);
             if (slot != ir::IR_NO_VALUE) {
-                emit_enum_copy(slot, rhs, fn_->values[rhs].is_host_ptr,
+                emit_enum_copy(slot, rhs, fn_->values[rhs].is_host_ptr(),
                                ite_e->second.size_bytes, e->loc.line);
                 return slot;
+            }
+        }
+    }
+
+    /* `static T x` local con T AGREGADO: se COPIA a su ranura de gdata.
+     *
+     * La escritura de un `static` local va por @c write_local, que EXCLUYE los
+     * agregados a proposito -- su comentario dice "se copian campo a campo via
+     * su direccion" --, pero en una asignacion no habia quien los copiara.  El
+     * resultado: `x = f()` sobre un `static` de tipo struct no escribia NADA y
+     * el programa seguia con el valor anterior (ceros, recien inicializado),
+     * sin un solo aviso.  Es justo el patron de un `static` que cachea lo que
+     * devolvio una resolucion: la primera llamada lo calcula, lo tira, y todas
+     * las siguientes lo vuelven a ver vacio.
+     *
+     * La copia es la MISMA de los demas destinos, por el helper comun. */
+    if (e->op == ast::AssignOp::Assign && rhs != ir::IR_NO_VALUE &&
+        id->result_type.kind == PrimitiveKind::STRUCT &&
+        !type_is_overlay(id->result_type)) {
+        auto sit = static_local_slots_.find(id->name);
+        if (sit != static_local_slots_.end() && sit->second.aggregate) {
+            auto it_ssl =
+                tc_.struct_layouts().find(id->result_type.struct_name);
+            if (it_ssl != tc_.struct_layouts().end()) {
+                const ir::IrValueId dst_addr = emit_str_lit_addr(
+                    sit->second.slot, e->loc.line, /*host_ptr=*/true);
+                emit_memberwise_copy(
+                    dst_addr, rhs,
+                    static_cast<uint64_t>(it_ssl->second.size_bytes),
+                    e->loc.line);
+                return dst_addr;
             }
         }
     }
@@ -450,6 +484,31 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
             // load-modify-store de abajo es acceso host directo.
             const ir::IrValueId v_addr =
                 emit_str_lit_addr(slot_idx, ln, /*host_ptr=*/true);
+            /* UN STRUCT SE COPIA, no se guarda como un escalar.
+             *
+             * De aqui abajo el global se trata como UN valor de una palabra, y
+             * para un struct eso escribe ocho bytes donde habia un agregado
+             * entero.  El enum ya tenia su caso justo arriba; el struct se
+             * quedo sin el, asi que `s = f()` sobre un `static` no copiaba
+             * NADA -- y no daba error: el struct se quedaba como estaba, con
+             * lo que el programa seguia con el valor VIEJO (ceros recien
+             * inicializado).  Un `static` cacheando el resultado de una
+             * resolucion es justo el patron que esto rompia.
+             *
+             * La copia es la MISMA de los otros destinos: el helper comun, no
+             * otra version de la regla. */
+            if (e->op == ast::AssignOp::Assign && rhs != ir::IR_NO_VALUE &&
+                id->result_type.kind == PrimitiveKind::STRUCT &&
+                !type_is_overlay(id->result_type)) {
+                auto it_gsl =
+                    tc_.struct_layouts().find(id->result_type.struct_name);
+                if (it_gsl != tc_.struct_layouts().end()) {
+                    emit_memberwise_copy(
+                        v_addr, rhs,
+                        static_cast<uint64_t>(it_gsl->second.size_bytes), ln);
+                    return v_addr;
+                }
+            }
             // Tipo declarado del global.  El compound assign tiene que operar
             // con EL del global, no con i64: sobre un `f64 g`, un `g += x` con
             // aritmetica entera sumaria los BITS IEEE (basura: 1.5+1.5+1.5 daba
@@ -672,41 +731,14 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
             // contenido).
             const ir::IrValueId dst_addr = lookup(id->name);
             if (dst_addr != ir::IR_NO_VALUE && dst_addr != rhs) {
-                const uint64_t sz =
-                    static_cast<uint64_t>(it_sl->second.size_bytes);
-                const bool dst_host = fn_->values[dst_addr].is_host_ptr;
-                const bool src_host = fn_->values[rhs].is_host_ptr;
-                const uint64_t qwords = (sz + 7) / 8;
-                for (uint64_t qi = 0; qi < qwords; ++qi) {
-                    const ir::IrValueId v_off =
-                        emit_const(ir::IrType::I64,
-                                   static_cast<int64_t>(qi * 8), e->loc.line);
-                    const ir::IrValueId s_at = fn_->new_value(ir::IrType::PTR);
-                    fn_->values[s_at].is_host_ptr = src_host;
-                    {
-                        ir::IrInstr ad{};
-                        ad.op = ir::IrOp::ADD;
-                        ad.type = ir::IrType::I64;
-                        ad.dst = s_at;
-                        ad.operands = {rhs, v_off};
-                        ad.source_line = e->loc.line;
-                        emit(current_block_, std::move(ad));
-                    }
-                    const ir::IrValueId w =
-                        emit_load_typed(s_at, ir::IrType::I64, e->loc.line);
-                    const ir::IrValueId d_at = fn_->new_value(ir::IrType::PTR);
-                    fn_->values[d_at].is_host_ptr = dst_host;
-                    {
-                        ir::IrInstr ad{};
-                        ad.op = ir::IrOp::ADD;
-                        ad.type = ir::IrType::I64;
-                        ad.dst = d_at;
-                        ad.operands = {dst_addr, v_off};
-                        ad.source_line = e->loc.line;
-                        emit(current_block_, std::move(ad));
-                    }
-                    emit_store_typed(d_at, w, ir::IrType::I64, e->loc.line);
-                }
+                /* La copia la hace el helper comun: era el MISMO bucle escrito
+                 * otra vez aqui, y dos copias de una regla acaban divergiendo
+                 * -- justo lo que ya paso con "esto se devuelve por buffer",
+                 * que vivia en nueve sitios y ninguna lista estaba completa. */
+                emit_memberwise_copy(
+                    dst_addr, rhs,
+                    static_cast<uint64_t>(it_sl->second.size_bytes),
+                    e->loc.line);
                 return dst_addr;
             }
         }
@@ -951,13 +983,13 @@ bool Lowering::try_lower_assign_to_field(ast::AssignExpr *e,
      */
     if (fa->result_type.kind == PrimitiveKind::FUNCTION &&
         !fa->result_type.fn_is_raw) {
-        const bool dst_host = fn_->values[addr].is_host_ptr;
-        const bool src_host = fn_->values[rhs].is_host_ptr;
+        const bool dst_host = fn_->values[addr].is_host_ptr();
+        const bool src_host = fn_->values[rhs].is_host_ptr();
         for (uint64_t qi = 0; qi < 2; ++qi) {
             const ir::IrValueId v_off = emit_const(
                 ir::IrType::I64, static_cast<int64_t>(qi * 8), e->loc.line);
             const ir::IrValueId s_at = fn_->new_value(ir::IrType::PTR);
-            fn_->values[s_at].is_host_ptr = src_host;
+            fn_->values[s_at].set_host(src_host);
             {
                 ir::IrInstr ad{};
                 ad.op = ir::IrOp::ADD;
@@ -970,7 +1002,7 @@ bool Lowering::try_lower_assign_to_field(ast::AssignExpr *e,
             const ir::IrValueId w =
                 emit_load_typed(s_at, ir::IrType::I64, e->loc.line);
             const ir::IrValueId d_at = fn_->new_value(ir::IrType::PTR);
-            fn_->values[d_at].is_host_ptr = dst_host;
+            fn_->values[d_at].set_host(dst_host);
             {
                 ir::IrInstr ad{};
                 ad.op = ir::IrOp::ADD;
@@ -1004,14 +1036,14 @@ bool Lowering::try_lower_assign_to_field(ast::AssignExpr *e,
         auto it_sl = tc_.struct_layouts().find(fa->result_type.struct_name);
         if (it_sl != tc_.struct_layouts().end())
             sz = static_cast<uint64_t>(it_sl->second.size_bytes);
-        const bool dst_host = fn_->values[addr].is_host_ptr;
-        const bool src_host = fn_->values[rhs].is_host_ptr;
+        const bool dst_host = fn_->values[addr].is_host_ptr();
+        const bool src_host = fn_->values[rhs].is_host_ptr();
         const uint64_t qwords = (sz + 7) / 8;
         for (uint64_t qi = 0; qi < qwords; ++qi) {
             const ir::IrValueId v_off = emit_const(
                 ir::IrType::I64, static_cast<int64_t>(qi * 8), e->loc.line);
             const ir::IrValueId s_at = fn_->new_value(ir::IrType::PTR);
-            fn_->values[s_at].is_host_ptr = src_host;
+            fn_->values[s_at].set_host(src_host);
             {
                 ir::IrInstr ad{};
                 ad.op = ir::IrOp::ADD;
@@ -1024,7 +1056,7 @@ bool Lowering::try_lower_assign_to_field(ast::AssignExpr *e,
             const ir::IrValueId w =
                 emit_load_typed(s_at, ir::IrType::I64, e->loc.line);
             const ir::IrValueId d_at = fn_->new_value(ir::IrType::PTR);
-            fn_->values[d_at].is_host_ptr = dst_host;
+            fn_->values[d_at].set_host(dst_host);
             {
                 ir::IrInstr ad{};
                 ad.op = ir::IrOp::ADD;
@@ -1200,8 +1232,8 @@ bool Lowering::try_lower_assign_to_index(ast::AssignExpr *e,
         if (struct_size > 0 && (struct_size % 8) == 0) {
             const ir::IrValueId src = lower_expr(e->value.get());
             if (src == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
-            const bool src_host = fn_->values[src].is_host_ptr;
-            const bool dst_host = fn_->values[addr].is_host_ptr;
+            const bool src_host = fn_->values[src].is_host_ptr();
+            const bool dst_host = fn_->values[addr].is_host_ptr();
             const uint64_t qwords = struct_size / 8;
             for (uint64_t q = 0; q < qwords; ++q) {
                 ir::IrValueId off_src = src;
@@ -1212,7 +1244,9 @@ bool Lowering::try_lower_assign_to_index(ast::AssignExpr *e,
                         emit_const(ir::IrType::I64, byte_off, e->loc.line);
                     {
                         ir::IrValueId v_new = fn_->new_value(ir::IrType::PTR);
-                        if (src_host) fn_->values[v_new].is_host_ptr = true;
+                        if (src_host)
+                            fn_->values[v_new].memory =
+                                ir::MemorySpace::HostByConstruction;
                         ir::IrInstr ad{};
                         ad.op = ir::IrOp::ADD;
                         ad.type = ir::IrType::I64;
@@ -1224,7 +1258,9 @@ bool Lowering::try_lower_assign_to_index(ast::AssignExpr *e,
                     }
                     {
                         ir::IrValueId v_new = fn_->new_value(ir::IrType::PTR);
-                        if (dst_host) fn_->values[v_new].is_host_ptr = true;
+                        if (dst_host)
+                            fn_->values[v_new].memory =
+                                ir::MemorySpace::HostByConstruction;
                         ir::IrInstr ad{};
                         ad.op = ir::IrOp::ADD;
                         ad.type = ir::IrType::I64;
@@ -1346,8 +1382,8 @@ bool Lowering::try_lower_assign_to_deref(ast::AssignExpr *e,
                 // structs.  Defensa por bytes <8: fall-through.
                 // Propagamos is_host_ptr de src/addr a los LOAD/STORE
                 // para emitir movh cuando corresponda.
-                const bool src_host = fn_->values[src].is_host_ptr;
-                const bool dst_host = fn_->values[addr].is_host_ptr;
+                const bool src_host = fn_->values[src].is_host_ptr();
+                const bool dst_host = fn_->values[addr].is_host_ptr();
                 const uint64_t qwords = struct_size / 8;
                 for (uint64_t q = 0; q < qwords; ++q) {
                     // src + q*8
@@ -1361,7 +1397,9 @@ bool Lowering::try_lower_assign_to_deref(ast::AssignExpr *e,
                         {
                             ir::IrValueId v_new =
                                 fn_->new_value(ir::IrType::PTR);
-                            if (src_host) fn_->values[v_new].is_host_ptr = true;
+                            if (src_host)
+                                fn_->values[v_new].memory =
+                                    ir::MemorySpace::HostByConstruction;
                             ir::IrInstr ad{};
                             ad.op = ir::IrOp::ADD;
                             ad.type = ir::IrType::I64;
@@ -1374,7 +1412,9 @@ bool Lowering::try_lower_assign_to_deref(ast::AssignExpr *e,
                         {
                             ir::IrValueId v_new =
                                 fn_->new_value(ir::IrType::PTR);
-                            if (dst_host) fn_->values[v_new].is_host_ptr = true;
+                            if (dst_host)
+                                fn_->values[v_new].memory =
+                                    ir::MemorySpace::HostByConstruction;
                             ir::IrInstr ad{};
                             ad.op = ir::IrOp::ADD;
                             ad.type = ir::IrType::I64;

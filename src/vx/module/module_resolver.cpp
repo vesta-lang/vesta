@@ -186,14 +186,14 @@ NamespaceList auto_import_modules(const std::string &manifest_path) {
 
     /* Barrido minimo, del mismo estilo que el de @ref derive_package_id: se
      * busca la clave y se leen las cadenas entre comillas de su lista.  Sirve
-     * igual para TOML (`modules = ["a", "b"]`) y para JSON (`"modules": [...]`),
-     * que es lo que ya hace el otro lector -- dos gramaticas completas aqui
-     * serian pagar un analizador para leer una lista de nombres. */
+     * igual para TOML (`modules = ["a", "b"]`) y para JSON (`"modules":
+     * [...]`), que es lo que ya hace el otro lector -- dos gramaticas completas
+     * aqui serian pagar un analizador para leer una lista de nombres. */
     size_t pos = manifest.find("modules");
     while (pos != std::string::npos) {
-        const bool lok = (pos == 0) ||
-                         (!std::isalnum((unsigned char)manifest[pos - 1]) &&
-                          manifest[pos - 1] != '_');
+        const bool lok =
+            (pos == 0) || (!std::isalnum((unsigned char)manifest[pos - 1]) &&
+                           manifest[pos - 1] != '_');
         if (lok) break;
         pos = manifest.find("modules", pos + 1);
     }

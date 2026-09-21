@@ -322,9 +322,22 @@ Lowering::SretInfo Lowering::sret_info(const Type &ret) const {
         info.bytes = static_cast<uint64_t>(tc_.result_layout(ret).bytes);
         return info;
     }
-    // (gap O): devolver un lambda.  El buffer es su ranura: direccion de la
-    // funcion en +0, del entorno en +8.
+    /* Devolver un LAMBDA: el buffer es su ranura, la direccion de la funcion
+     * en +0 y la del entorno en +8.
+     *
+     * Un `cfn` NO: es una direccion de codigo y nada mas, asi que cabe en un
+     * registro y vuelve como cualquier entero.  Meterlo en el buffer hacia que
+     * quien llamaba leyera la DIRECCION DEL BUFFER en vez del valor -- el
+     * puntero salia bien de dentro (`(i64)g` daba 454) y el llamante recibia
+     * una direccion del anfitrion --, y encima callando: compilaba, no decia
+     * nada y llamar por el puntero devuelto daba cero.
+     *
+     * Lo que los separa es el tipo, que ya lo sabe: son ocho bytes contra
+     * dieciseis.  Es la misma pregunta que los punteros inteligentes se hacen
+     * tres lineas mas abajo, donde un `shared<T>` tampoco mide lo que un
+     * `unique<T>`. */
     if (kind == PrimitiveKind::FUNCTION) {
+        if (ret.fn_is_raw) return info; // `cfn`: por registro
         info.uses_buffer = true;
         info.host_buffer = true;
         info.bytes = 16ULL;
@@ -356,6 +369,46 @@ Lowering::SretInfo Lowering::sret_info(const Type &ret) const {
 Lowering::SretInfo Lowering::sret_info_for(const std::string &name) const {
     auto it = fn_sret_.find(name);
     return (it == fn_sret_.end()) ? SretInfo{} : it->second;
+}
+
+Lowering::SretCall Lowering::prepare_sret_call(const SretInfo &si,
+                                               const Type &ret, int line) {
+    SretCall sc;
+    if (!si.uses_buffer) {
+        /* Lo corriente: cabe en un registro y la instruccion lleva su tipo. */
+        sc.call_type = (ret.kind == PrimitiveKind::VOID ||
+                        ret.kind == PrimitiveKind::COUNT)
+                           ? ir::IrType::VOID
+                           : ir_type_from_primitive(ret.kind);
+        if (sc.call_type != ir::IrType::VOID)
+            sc.dst = fn_->new_value(sc.call_type);
+        return sc;
+    }
+
+    sc.uses_buffer = true;
+    sc.buffer = fn_->new_value(ir::IrType::PTR);
+    ir::IrInstr al{};
+    al.op = ir::IrOp::ALLOCA;
+    al.type = ir::IrType::I8; // unidad: 1 byte
+    al.dst = sc.buffer;
+    /* Mide EXACTAMENTE lo que el llamado copia: escribe `bytes/8` palabras,
+     * asi que quedarse corto es escribir fuera, en el marco de quien llama. */
+    al.imm = si.bytes;
+    al.source_line = line;
+    /* Donde vive: en memoria del anfitrion para los agregados, porque el
+     * llamado marca su parametro como puntero de anfitrion y escribe con
+     * `movh`.  Un lambda y un puntero inteligente NO: su bajado tiene su propio
+     * manejo de memoria (entorno en el monton, bloque de control). */
+    if (si.host_buffer) al.host_alloca = true;
+    emit(current_block_, std::move(al));
+    if (si.host_buffer)
+        fn_->values[sc.buffer].memory = ir::MemorySpace::HostByConstruction;
+
+    /* La llamada no devuelve nada por registro: lo devuelto esta en el hueco,
+     * que es lo que @ref SretCall::result entrega.  Quien llama lo coloca como
+     * PRIMER argumento. */
+    sc.call_type = ir::IrType::VOID;
+    return sc;
 }
 
 void Lowering::register_fn_ret_info(const std::string &name, const Type &ret,
@@ -457,7 +510,7 @@ void Lowering::emit_zero_fill(ir::IrValueId addr, uint64_t size_bytes,
             // Heredar la naturaleza host/VM de la base (AOT native_poo aloca el
             // struct en la pila NATIVA -> el STORE debe ir a host, no a
             // vm_mem).
-            fn_->values[v_addr].is_host_ptr = fn_->values[addr].is_host_ptr;
+            fn_->values[v_addr].memory = fn_->values[addr].memory;
             ir::IrInstr ad{};
             ad.op = ir::IrOp::ADD;
             ad.type = ir::IrType::I64;
@@ -703,7 +756,7 @@ void Lowering::emit_enum_copy(ir::IrValueId dst_addr, ir::IrValueId src_addr,
                               bool src_is_host, uint64_t size_bytes,
                               uint32_t line) {
     if (dst_addr == ir::IR_NO_VALUE || src_addr == ir::IR_NO_VALUE) return;
-    const bool dst_is_host = fn_->values[dst_addr].is_host_ptr;
+    const bool dst_is_host = fn_->values[dst_addr].is_host_ptr();
     const uint64_t qwords = (size_bytes + 7) / 8;
     for (uint64_t qi = 0; qi < qwords; ++qi) {
         const uint64_t off = qi * 8;
@@ -711,7 +764,7 @@ void Lowering::emit_enum_copy(ir::IrValueId dst_addr, ir::IrValueId src_addr,
             emit_const(ir::IrType::I64, static_cast<int64_t>(off), line);
         // src + off (hereda la naturaleza del origen para el LOAD).
         const ir::IrValueId v_src_at = fn_->new_value(ir::IrType::PTR);
-        fn_->values[v_src_at].is_host_ptr = src_is_host;
+        fn_->values[v_src_at].set_host(src_is_host);
         {
             ir::IrInstr ad{};
             ad.op = ir::IrOp::ADD;
@@ -725,7 +778,7 @@ void Lowering::emit_enum_copy(ir::IrValueId dst_addr, ir::IrValueId src_addr,
             emit_load_typed(v_src_at, ir::IrType::I64, line);
         // dst + off (naturaleza del slot destino, tipicamente VM ALLOCA).
         const ir::IrValueId v_dst_at = fn_->new_value(ir::IrType::PTR);
-        fn_->values[v_dst_at].is_host_ptr = dst_is_host;
+        fn_->values[v_dst_at].set_host(dst_is_host);
         {
             ir::IrInstr ad{};
             ad.op = ir::IrOp::ADD;
@@ -1531,13 +1584,13 @@ void Lowering::emit_free_unique_field(ir::IrValueId this_vid,
      * un struct en su pila, del anfitrion si es una clase -- y su direccion
      * hereda eso de @c this_vid.  Por eso NO se usa @c emit_field_addr, que la
      * forzaria a anfitriona y leeria de donde no es. */
-    const bool container_host = fn_->values[this_vid].is_host_ptr;
+    const bool container_host = fn_->values[this_vid].is_host_ptr();
     ir::IrValueId slot_addr = this_vid;
     if (field_offset != 0) {
         const ir::IrValueId off = emit_const(
             ir::IrType::I64, static_cast<int64_t>(field_offset), line);
         slot_addr = fn_->new_value(ir::IrType::PTR);
-        fn_->values[slot_addr].is_host_ptr = container_host;
+        fn_->values[slot_addr].set_host(container_host);
         ir::IrInstr ad{};
         ad.op = ir::IrOp::ADD;
         ad.type = ir::IrType::I64;
@@ -1554,14 +1607,14 @@ void Lowering::emit_free_unique_field(ir::IrValueId this_vid,
 void Lowering::emit_memberwise_copy(ir::IrValueId dst_addr,
                                     ir::IrValueId src_addr, uint64_t size_bytes,
                                     uint32_t line) {
-    const bool dst_host = fn_->values[dst_addr].is_host_ptr;
-    const bool src_host = fn_->values[src_addr].is_host_ptr;
+    const bool dst_host = fn_->values[dst_addr].is_host_ptr();
+    const bool src_host = fn_->values[src_addr].is_host_ptr();
     const uint64_t qwords = (size_bytes + 7) / 8;
     for (uint64_t qi = 0; qi < qwords; ++qi) {
         const ir::IrValueId v_off =
             emit_const(ir::IrType::I64, static_cast<int64_t>(qi * 8), line);
         const ir::IrValueId s_at = fn_->new_value(ir::IrType::PTR);
-        fn_->values[s_at].is_host_ptr = src_host;
+        fn_->values[s_at].set_host(src_host);
         {
             ir::IrInstr ad{};
             ad.op = ir::IrOp::ADD;
@@ -1573,7 +1626,7 @@ void Lowering::emit_memberwise_copy(ir::IrValueId dst_addr,
         }
         const ir::IrValueId w = emit_load_typed(s_at, ir::IrType::I64, line);
         const ir::IrValueId d_at = fn_->new_value(ir::IrType::PTR);
-        fn_->values[d_at].is_host_ptr = dst_host;
+        fn_->values[d_at].set_host(dst_host);
         {
             ir::IrInstr ad{};
             ad.op = ir::IrOp::ADD;
@@ -1758,7 +1811,7 @@ bool split_module_init_into_chunks(ir::IrFunction &init, ir::IrModule &out) {
         for (ir::IrValueId v : shared) {
             ir::IrInstr a = *def_instr[v];
             const ir::IrValueId nv = f.new_value(init.values[v].type);
-            f.values[nv].is_host_ptr = init.values[v].is_host_ptr;
+            f.values[nv].memory = init.values[v].memory;
             a.dst = nv;
             vmap[v] = nv;
             f.append(newid[first], std::move(a));
@@ -1791,7 +1844,7 @@ bool split_module_init_into_chunks(ir::IrFunction &init, ir::IrModule &out) {
                 if (copy.dst != ir::IR_NO_VALUE) {
                     const ir::IrValueId old = copy.dst;
                     const ir::IrValueId nv = f.new_value(init.values[old].type);
-                    f.values[nv].is_host_ptr = init.values[old].is_host_ptr;
+                    f.values[nv].memory = init.values[old].memory;
                     vmap[old] = nv;
                     copy.dst = nv;
                 }
@@ -1850,7 +1903,7 @@ ir::IrValueId emit_field_addr(ir::IrFunction *fn, ir::IrBlockId block,
         // STORE usen movh.  Si la base ya tiene is_host_ptr=true, la
         // propagacion es trivial; si no, lo forzamos aqui (siempre lo
         // sera para nuestros punteros de objeto Vesta).
-        fn->values[base].is_host_ptr = true;
+        fn->values[base].memory = ir::MemorySpace::HostByConstruction;
         return base;
     }
     // Crear constante con el offset y sumar.
@@ -1869,7 +1922,7 @@ ir::IrValueId emit_field_addr(ir::IrFunction *fn, ir::IrBlockId block,
     // Marcar host_ptr: las operaciones LOAD/STORE consultan este flag
     // para emitir mov (VM) o movh (host).  Las direcciones derivadas
     // de un host_ptr siguen siendo host_ptr.
-    fn->values[addr].is_host_ptr = true;
+    fn->values[addr].memory = ir::MemorySpace::HostByConstruction;
     ir::IrInstr add{};
     add.op = ir::IrOp::ADD;
     add.type = ir::IrType::PTR;
@@ -1981,7 +2034,7 @@ Lowering::emit_string_override_call(const std::string &fn_name, ast::Expr *lhs,
         (fn_returns_str_value_.find(fn_name) != fn_returns_str_value_.end());
     if (override_is_str_sret) {
         const ir::IrValueId v_retbuf = fn_->new_value(ir::IrType::PTR);
-        fn_->values[v_retbuf].is_host_ptr = true;
+        fn_->values[v_retbuf].memory = ir::MemorySpace::HostByConstruction;
         ir::IrInstr al{};
         al.op = ir::IrOp::ALLOCA;
         al.type = ir::IrType::I8;
@@ -2054,7 +2107,8 @@ Lowering::build_native_string_from_literal(ast::StringLitExpr *slit,
     //    host_ptr se leeria como host -> segfault.  host_alloca=true +
     //    is_host_ptr=true mantienen la coherencia.
     const ir::IrValueId v_slot = fn_->new_value(ir::IrType::PTR);
-    if (native_poo_) fn_->values[v_slot].is_host_ptr = true;
+    if (native_poo_)
+        fn_->values[v_slot].memory = ir::MemorySpace::HostByConstruction;
     {
         ir::IrInstr al{};
         al.op = ir::IrOp::ALLOCA;
@@ -2075,7 +2129,7 @@ Lowering::build_native_string_from_literal(ast::StringLitExpr *slit,
         if (off != 0) {
             ir::IrValueId v_off = emit_const(ir::IrType::I64, off, source_line);
             v_dst = fn_->new_value(ir::IrType::PTR);
-            fn_->values[v_dst].is_host_ptr = true;
+            fn_->values[v_dst].memory = ir::MemorySpace::HostByConstruction;
             ir::IrInstr ad{};
             ad.op = ir::IrOp::ADD;
             ad.type = ir::IrType::I64;
@@ -2172,7 +2226,7 @@ Lowering::build_native_string_from_literal(ast::StringLitExpr *slit,
             if (off == 0) return v_buf;
             ir::IrValueId v_off = emit_const(ir::IrType::I64, off, source_line);
             ir::IrValueId v_dst = fn_->new_value(ir::IrType::PTR);
-            fn_->values[v_dst].is_host_ptr = true;
+            fn_->values[v_dst].memory = ir::MemorySpace::HostByConstruction;
             ir::IrInstr ad{};
             ad.op = ir::IrOp::ADD;
             ad.type = ir::IrType::I64;

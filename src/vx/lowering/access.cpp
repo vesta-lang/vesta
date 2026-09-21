@@ -68,7 +68,7 @@ ir::IrValueId Lowering::lower_index_addr(ast::IndexExpr *e) {
             idx_v = cast_if_needed(idx_v, fn_->values[idx_v].type,
                                    ir::IrType::I64, e->loc.line);
             ir::IrValueId addr = fn_->new_value(ir::IrType::PTR);
-            fn_->values[addr].is_host_ptr = fn_->values[ov_base].is_host_ptr;
+            fn_->values[addr].memory = fn_->values[ov_base].memory;
             ir::IrInstr ins{};
             ins.op = ir::IrOp::CALL;
             ins.func_name = rname;
@@ -95,7 +95,7 @@ ir::IrValueId Lowering::lower_index_addr(ast::IndexExpr *e) {
         };
         auto add_off = [&](ir::IrValueId off_v) -> ir::IrValueId {
             ir::IrValueId a = fn_->new_value(ir::IrType::PTR);
-            fn_->values[a].is_host_ptr = fn_->values[ov_base].is_host_ptr;
+            fn_->values[a].memory = fn_->values[ov_base].memory;
             ir::IrInstr ins{};
             ins.op = ir::IrOp::ADD;
             ins.type = ir::IrType::PTR;
@@ -191,8 +191,7 @@ ir::IrValueId Lowering::lower_index_addr(ast::IndexExpr *e) {
             // enhebra `root` si el resolver usa parent<T>() (F4).
             const std::string rname = generate_overlay_resolver(lay, *afi);
             table_base = fn_->new_value(ir::IrType::PTR);
-            fn_->values[table_base].is_host_ptr =
-                fn_->values[ov_base].is_host_ptr;
+            fn_->values[table_base].memory = fn_->values[ov_base].memory;
             ir::IrInstr ins{};
             ins.op = ir::IrOp::CALL;
             ins.func_name = rname;
@@ -289,7 +288,7 @@ ir::IrValueId Lowering::lower_index_addr(ast::IndexExpr *e) {
     const ir::IrValueId addr = fn_->new_value(ir::IrType::PTR);
     // Propagar is_host_ptr: p[i] vive en el mismo espacio que el puntero
     // gestionado (host para unique/shared; hereda de base para PTR/ARRAY).
-    fn_->values[addr].is_host_ptr = fn_->values[base_eff].is_host_ptr;
+    fn_->values[addr].memory = fn_->values[base_eff].memory;
     ir::IrInstr add{};
     add.op = ir::IrOp::ADD;
     add.type = ir::IrType::PTR;
@@ -428,7 +427,8 @@ ir::IrValueId Lowering::lower_index(ast::IndexExpr *e) {
     // El puntero cargado de un elemento overlay apunta a memoria HOST ajena:
     // marcarlo para que los accesos `hs[i].campo` emitan movh/loadzh (host) y
     // no mov/loadz (memoria VM).
-    if (type_is_overlay(e->result_type)) fn_->values[dst].is_host_ptr = true;
+    if (type_is_overlay(e->result_type))
+        fn_->values[dst].memory = ir::MemorySpace::HostByConstruction;
     // Bug host-vs-VM (2026-07-15): mismo criterio que el campo de struct/clase
     // en @c lower_field_access -- un elemento de tipo `T*` (puntero HOST crudo,
     // no `VirtualPtr<T>`) guarda por convencion una direccion host, asi que su
@@ -439,7 +439,7 @@ ir::IrValueId Lowering::lower_index(ast::IndexExpr *e) {
     // fuera: esa SI es una direccion de la memoria VM.
     if (e->result_type.kind == PrimitiveKind::PTR &&
         !e->result_type.is_virtual) {
-        fn_->values[dst].is_host_ptr = true;
+        fn_->values[dst].memory = ir::MemorySpace::HostByConstruction;
     }
     ir::IrInstr ld{};
     ld.op = ir::IrOp::LOAD;
@@ -473,7 +473,8 @@ ir::IrValueId Lowering::lower_ident(ast::IdentExpr *e) {
         if (e->result_type.fn_is_raw) return code; // cfn: 8 bytes crudos
         // Lambda: fat-pointer de 16 bytes {fn_addr, env=0}.
         const ir::IrValueId fv = stack_alloc_buf(16, e->loc.line, native_poo_);
-        if (native_poo_) fn_->values[fv].is_host_ptr = true;
+        if (native_poo_)
+            fn_->values[fv].memory = ir::MemorySpace::HostByConstruction;
         {
             // [fv+0] = fn_addr
             emit_store_typed(fv, code, ir::IrType::I64, e->loc.line);
@@ -490,7 +491,8 @@ ir::IrValueId Lowering::lower_ident(ast::IdentExpr *e) {
             ad.operands = {fv, o8};
             ad.source_line = e->loc.line;
             emit(current_block_, std::move(ad));
-            if (native_poo_) fn_->values[fv8].is_host_ptr = true;
+            if (native_poo_)
+                fn_->values[fv8].memory = ir::MemorySpace::HostByConstruction;
             const ir::IrValueId z = emit_const(ir::IrType::I64, 0, e->loc.line);
             emit_store_typed(fv8, z, ir::IrType::I64, e->loc.line);
         }
@@ -514,7 +516,7 @@ ir::IrValueId Lowering::lower_ident(ast::IdentExpr *e) {
                 is.imm = sit->second.slot;
                 is.source_line = ln;
                 emit(current_block_, std::move(is));
-                fn_->values[addr].is_host_ptr = true;
+                fn_->values[addr].memory = ir::MemorySpace::HostByConstruction;
             }
             if (sit->second.aggregate) return addr; // el valor ES la direccion
             ir::IrValueId v = emit_load_typed(addr, sit->second.ld_type, ln);
@@ -726,7 +728,7 @@ ir::IrValueId Lowering::lower_ident(ast::IdentExpr *e) {
                 // en AOT en `.data`, y en interp/JIT en el bloque host al que
                 // el loader mapea la seccion `gdata`.  Su direccion es un `T*`
                 // y el indexado usa movh.
-                fn_->values[v_a].is_host_ptr = true;
+                fn_->values[v_a].memory = ir::MemorySpace::HostByConstruction;
                 ir::IrInstr is{};
                 is.op = ir::IrOp::STR_LIT_ADDR;
                 is.type = ir::IrType::PTR;
@@ -1135,7 +1137,8 @@ ir::IrValueId Lowering::lower_field_access(ast::FieldAccessExpr *e) {
     // marcarlo para que los accesos `h.ch.campo` emitan movh/loadzh (host) y no
     // mov/loadz (memoria VM).  Mismo criterio que lower_index sobre arrays de
     // handles overlay.
-    if (type_is_overlay(e->result_type)) fn_->values[dst].is_host_ptr = true;
+    if (type_is_overlay(e->result_type))
+        fn_->values[dst].memory = ir::MemorySpace::HostByConstruction;
     ir::IrInstr ins{};
     ins.op = ir::IrOp::LOAD;
     ins.type = ft;
@@ -1176,14 +1179,23 @@ ir::IrValueId Lowering::lower_field_access(ast::FieldAccessExpr *e) {
     if (e->result_type.kind == PrimitiveKind::PTR ||
         e->result_type.kind == PrimitiveKind::ARRAY) {
         if (!e->result_type.is_virtual) {
-            fn_->values[dst].is_host_ptr = true;
+            fn_->values[dst].memory = ir::MemorySpace::HostByConstruction;
         }
+    }
+    /* Y cuando el TIPO del campo no puede decirlo -- un entero del ancho de
+     * una direccion, que es como el lenguaje nombra una direccion --, lo dice
+     * lo que el compilador DEDUJO de todas las escrituras a ese campo.  El
+     * mismo criterio que el campo de una clase; por aqui pasa el de un
+     * struct. */
+    if (const StructFieldInfo *fi_sp = field_info_of(e)) {
+        if (fi_sp->address_space == FieldAddressSpace::Host)
+            fn_->values[dst].memory = ir::MemorySpace::HostByConstruction;
     }
     // Si el campo es de tipo CLASS, el LOAD devuelve un host_ptr a
     // un objeto GC.  Marcar para gc-aware save/restore alrededor de
     // CALLs subsiguientes.
     if (e->result_type.kind == PrimitiveKind::CLASS) {
-        fn_->values[dst].is_host_ptr = true;
+        fn_->values[dst].memory = ir::MemorySpace::HostByConstruction;
         fn_->values[dst].is_gc_object = true;
     }
 

@@ -128,7 +128,7 @@ bool Lowering::try_lower_ownership_builtins(ast::CallExpr *e, Builtin b,
                        e->loc.line),
             e->loc.line);
         fn_->values[v_box].is_gc_object = true;
-        fn_->values[v_box].is_host_ptr = true;
+        fn_->values[v_box].memory = ir::MemorySpace::HostByConstruction;
         if (payload_is_struct_value || payload_is_smart_wrapper) {
             // El payload es un PTR a un buffer (slot del wrapper / struct
             // value): copiar qword-a-qword al box.  Mismo mecanismo que
@@ -138,8 +138,7 @@ bool Lowering::try_lower_ownership_builtins(ast::CallExpr *e, Builtin b,
                 const ir::IrValueId v_off = emit_const(
                     ir::IrType::I64, static_cast<int64_t>(i * 8), e->loc.line);
                 const ir::IrValueId v_src_p = fn_->new_value(ir::IrType::PTR);
-                fn_->values[v_src_p].is_host_ptr =
-                    fn_->values[v_payload].is_host_ptr;
+                fn_->values[v_src_p].memory = fn_->values[v_payload].memory;
                 {
                     ir::IrInstr ad{};
                     ad.op = ir::IrOp::ADD;
@@ -249,7 +248,7 @@ bool Lowering::try_lower_ownership_builtins(ast::CallExpr *e, Builtin b,
         }
         // LOAD ptr from [v_slot].
         const ir::IrValueId v_ptr = fn_->new_value(ir::IrType::PTR);
-        fn_->values[v_ptr].is_host_ptr = true;
+        fn_->values[v_ptr].memory = ir::MemorySpace::HostByConstruction;
         // BugFix R2: si el inner T es CLASS, marcar is_gc_object=true
         // para que el regalloc trate al SSA value como handle GC y
         // preserve su naturaleza a traves de CALLVIRTs (el GC scan
@@ -281,7 +280,7 @@ bool Lowering::try_lower_ownership_builtins(ast::CallExpr *e, Builtin b,
             // (no del Class) -> CALLVIRT con this invalido.
             if (inner_is_class) {
                 const ir::IrValueId v_obj = fn_->new_value(ir::IrType::PTR);
-                fn_->values[v_obj].is_host_ptr = true;
+                fn_->values[v_obj].memory = ir::MemorySpace::HostByConstruction;
                 fn_->values[v_obj].is_gc_object = true;
                 ir::IrInstr ld2{};
                 ld2.op = ir::IrOp::LOAD;
@@ -354,7 +353,7 @@ bool Lowering::try_lower_ownership_builtins(ast::CallExpr *e, Builtin b,
         // heap (RAW_ALLOC) en el lowering de su var-decl, asi que
         // el slot ES un host_ptr.  Param borrows tambien son host
         // por convencion (caller responsabilidad).
-        fn_->values[v_b].is_host_ptr = true;
+        fn_->values[v_b].memory = ir::MemorySpace::HostByConstruction;
         // B2 fix: para STRUCT (y otros tipos cuyo "valor" SSA es PTR
         // a buffer: ARRAY/OPTIONAL/RESULT/CLASS), pass-through del
         // host_ptr al struct.  Sin esto, LOAD payload_t=PTR cargaria
@@ -393,7 +392,7 @@ bool Lowering::try_lower_ownership_builtins(ast::CallExpr *e, Builtin b,
             out_value = ir::IR_NO_VALUE;
             return true;
         }
-        fn_->values[v_b].is_host_ptr = true;
+        fn_->values[v_b].memory = ir::MemorySpace::HostByConstruction;
         const Type inner = e->args[0]->result_type.pointee
                                ? *e->args[0]->result_type.pointee
                                : Type{};
@@ -421,7 +420,7 @@ bool Lowering::try_lower_ownership_builtins(ast::CallExpr *e, Builtin b,
             const ir::IrValueId v_n = emit_const(
                 ir::IrType::I64, static_cast<uint64_t>(it_l->second.size_bytes),
                 e->loc.line);
-            fn_->values[v_v].is_host_ptr = true;
+            fn_->values[v_v].memory = ir::MemorySpace::HostByConstruction;
             ir::IrInstr mc{};
             mc.op = ir::IrOp::MEMCPY;
             mc.type = ir::IrType::I8;
@@ -496,7 +495,8 @@ bool Lowering::lower_owner_box(ast::CallExpr *e, Builtin b,
                     ir::IrType::I64, static_cast<int64_t>(lay.size_bytes),
                     e->loc.line);
                 const ir::IrValueId v_host = fn_->new_value(ir::IrType::PTR);
-                fn_->values[v_host].is_host_ptr = true;
+                fn_->values[v_host].memory =
+                    ir::MemorySpace::HostByConstruction;
                 {
                     ir::IrInstr ins{};
                     ins.op = ir::IrOp::RAW_ALLOC;
@@ -551,7 +551,8 @@ bool Lowering::lower_owner_box(ast::CallExpr *e, Builtin b,
                             e->loc.line);
                         const ir::IrValueId v_addr =
                             fn_->new_value(ir::IrType::PTR);
-                        fn_->values[v_addr].is_host_ptr = true;
+                        fn_->values[v_addr].memory =
+                            ir::MemorySpace::HostByConstruction;
                         ir::IrInstr ad{};
                         ad.op = ir::IrOp::ADD;
                         ad.type = ir::IrType::I64;
@@ -671,7 +672,8 @@ bool Lowering::lower_owner_box(ast::CallExpr *e, Builtin b,
                 emit_const(ir::IrType::I64, static_cast<int64_t>(payload_size),
                            e->loc.line);
             const ir::IrValueId v_payload_ptr = fn_->new_value(ir::IrType::PTR);
-            fn_->values[v_payload_ptr].is_host_ptr = true;
+            fn_->values[v_payload_ptr].memory =
+                ir::MemorySpace::HostByConstruction;
             {
                 ir::IrInstr ins{};
                 ins.op = ir::IrOp::RAW_ALLOC;
@@ -711,7 +713,8 @@ bool Lowering::lower_owner_box(ast::CallExpr *e, Builtin b,
                     emit(current_block_, std::move(ld));
                 }
                 const ir::IrValueId v_dst_p = fn_->new_value(ir::IrType::PTR);
-                fn_->values[v_dst_p].is_host_ptr = true;
+                fn_->values[v_dst_p].memory =
+                    ir::MemorySpace::HostByConstruction;
                 {
                     ir::IrInstr ad{};
                     ad.op = ir::IrOp::ADD;
@@ -733,7 +736,8 @@ bool Lowering::lower_owner_box(ast::CallExpr *e, Builtin b,
                 emit_const(ir::IrType::I64, static_cast<int64_t>(payload_size),
                            e->loc.line);
             const ir::IrValueId v_payload_ptr = fn_->new_value(ir::IrType::PTR);
-            fn_->values[v_payload_ptr].is_host_ptr = true;
+            fn_->values[v_payload_ptr].memory =
+                ir::MemorySpace::HostByConstruction;
             {
                 ir::IrInstr ins{};
                 ins.op = ir::IrOp::RAW_ALLOC;
@@ -785,7 +789,7 @@ ir::IrValueId Lowering::emit_shared_ctrl_block(ir::IrValueId v_payload,
         emit_const(ir::IrType::I64, 16 + 8, line); // 24 bytes en total
     // RAW_ALLOC -> puntero del anfitrion al bloque de control.
     const ir::IrValueId v_ctrl = fn_->new_value(ir::IrType::PTR);
-    fn_->values[v_ctrl].is_host_ptr = true;
+    fn_->values[v_ctrl].memory = ir::MemorySpace::HostByConstruction;
     {
         ir::IrInstr ins{};
         ins.op = ir::IrOp::RAW_ALLOC;
@@ -1061,7 +1065,7 @@ bool Lowering::lower_borrow_of(ast::CallExpr *e, Builtin b,
         if (v_pres < fn_->values.size() && v_new < fn_->values.size()) {
             const ir::IrValue &src = fn_->values[v_pres];
             ir::IrValue &dst = fn_->values[v_new];
-            dst.is_host_ptr = src.is_host_ptr;
+            dst.memory = src.memory;
             dst.pointee_is_host_ptr = src.pointee_is_host_ptr;
             dst.is_gc_object = src.is_gc_object;
             /* Y la naturaleza de la memoria, que NO siempre esta en el valor de
@@ -1077,7 +1081,8 @@ bool Lowering::lower_borrow_of(ast::CallExpr *e, Builtin b,
              * es un objeto del anfitrion, y represtar es represtar uno de esos.
              * El local vive en la pila de la maquina, y ese se queda como
              * venga. */
-            if (kind != ir::BorrowOwnerKind::Plain) dst.is_host_ptr = true;
+            if (kind != ir::BorrowOwnerKind::Plain)
+                dst.memory = ir::MemorySpace::HostByConstruction;
         }
         /* DOS operandos, y los dos hacen falta: el primero es lo que se copia
          * -- el puntero prestado, que es el valor que sale --, y el segundo es

@@ -222,6 +222,37 @@ bool TypeChecker::report_ufcs_cast_hint(const Type &recv,
     return true;
 }
 
+bool TypeChecker::report_ufcs_lend_hint(const Type &recv,
+                                        const std::string &name,
+                                        const SourceLoc &loc) {
+    /* Solo si el receptor es un DUENYO.  Es lo unico desde donde se puede
+     * prestar, y lo que hace que la salida sea `lend` y no un cast. */
+    if (recv.kind != PrimitiveKind::UNIQUE_PTR &&
+        recv.kind != PrimitiveKind::SHARED_PTR)
+        return false;
+    if (!recv.pointee) return false;
+
+    const ufcs::Candidates *slots = ufcs_.all_named(name);
+    if (slots == nullptr) return false;
+
+    /* De las que se llaman asi, la que pide un prestamo DE LO MISMO.  Si pide
+     * otra cosa, prestar no acerca nada y de eso no hay que hablar aqui. */
+    for (uint32_t s : *slots) {
+        if (s >= function_sigs_.size()) continue;
+        const FunctionSig &sig = function_sigs_[s];
+        if (sig.param_types.empty()) continue;
+        const Type &p = sig.param_types[0];
+        const bool mut = p.kind == PrimitiveKind::BORROW_MUT;
+        if (!mut && p.kind != PrimitiveKind::BORROW) continue;
+        if (!p.pointee || !(*p.pointee == *recv.pointee)) continue;
+        diags_.diag(loc, DiagLevel::ERR, "VX2127",
+                    {written_type_name(recv), name, written_type_name(p),
+                     mut ? "lend_mut" : "lend"});
+        return true;
+    }
+    return false;
+}
+
 bool TypeChecker::report_ufcs_ns_hint(const Type &recv, const ast::Expr *base,
                                       const std::string &name,
                                       const SourceLoc &loc) {
@@ -304,6 +335,9 @@ bool TypeChecker::report_ufcs_import_hint(const Type &recv,
 }
 
 size_t TypeChecker::ufcs_receiver_hole(ast::CallExpr *e) {
+    // El parser ya dijo si hay alguno, asi que una llamada corriente -- que
+    // son casi todas -- no recorre sus argumentos para descubrir que no.
+    if (!e->has_receiver_hole) return kUfcsNoHole;
     size_t found = kUfcsNoHole;
     for (size_t i = 0; i < e->args.size(); ++i) {
         const ast::Expr *a = e->args[i].get();
@@ -493,7 +527,61 @@ bool TypeChecker::try_ufcs_call(ast::CallExpr *e, ast::FieldAccessExpr *fa,
         e->result_type = check_call(e);
         return true;
     }
-    if (cand_slots == nullptr || cand_slots->empty()) return false;
+    /* Sin candidata en el indice, pero CON hueco: la llamada se reescribe y
+     * decide el camino de siempre.
+     *
+     * El indice guarda funciones LIBRES.  Un miembro no esta ahi, y sin
+     * embargo es alcanzable en forma libre -- `mezcla(c, 2, 3)` encuentra el
+     * metodo de `c`, que es la otra direccion de `2.1` --, asi que con el
+     * receptor en medio (`2.mezcla(c, _, 3)`) no habia quien contestara: el
+     * punto buscaba un metodo de `i64` o una libre que tomara un `i64`, y
+     * ninguna de las dos es la pregunta.
+     *
+     * Reescribir es la DEFINICION del punto, asi que aqui no se decide nada
+     * nuevo: se deja el nodo en su otra grafia y lo resuelve `check_call`, que
+     * ya sabe encontrar tanto una libre como un miembro por el tipo de su
+     * primer argumento.
+     *
+     * Va al final a proposito -- despues de todas las sondas del indice --
+     * para que una libre con hueco siga pasando por el camino que le toca, con
+     * su auto-`&`, su regla del `out` y su choque con el miembro homonimo. */
+    if (cand_slots == nullptr || cand_slots->empty()) {
+        if (hole_pre == kUfcsNoHole || hole_pre == kUfcsHoleBad) return false;
+        const std::string name = fa->field_name;
+        /* Si el RECEPTOR declara un miembro con ese nombre, se mira ANTES de
+         * reescribir -- despues el nodo ya no tiene receptor --.  Es el caso
+         * de `c.mezcla(2, _)`: la forma libre del miembro tiene una ranura mas
+         * (el receptor) y la llamada solo da las otras, asi que el error que
+         * saldra abajo sera cierto y se callara lo util -- que el nombre SI
+         * existe, y donde --.  UNA consulta: la lista y la busqueda salen de
+         * la misma llamada. */
+        std::string owner;
+        const std::vector<ClassMethodInfo> *ms =
+            receiver_methods(recv, nullptr, &owner, nullptr);
+        const bool era_miembro =
+            ms != nullptr && find_instance_method(*ms, name) != nullptr;
+
+        auto id = std::make_unique<ast::IdentExpr>();
+        id->loc = fa->loc;
+        id->name = name;
+        /* El receptor se toma ANTES de tocar el callee: `fa` vive dentro de
+         * el, asi que sustituirlo primero se lleva por delante su base. */
+        std::unique_ptr<ast::Expr> receiver = std::move(fa->base);
+        e->callee = std::move(id);
+        e->args[hole_pre] = std::move(receiver); // el hueco ERA su sitio
+        /* Y deja de haberlo: en su sitio esta el receptor.  Sin borrar la
+         * marca, la llamada reescrita sigue diciendo que lleva hueco, y quien
+         * la resuelve despues -- que puede acabar en un metodo del tipo del
+         * primer argumento -- se niega a tomar el miembro por esa misma
+         * regla.  La marca describe el nodo, asi que se actualiza con el. */
+        e->has_receiver_hole = false;
+
+        const size_t errors_before = diags_.error_count();
+        e->result_type = check_call(e);
+        if (era_miembro && diags_.error_count() > errors_before)
+            diags_.diag(e->loc, DiagLevel::NOTE, "VX2120", {name, owner});
+        return true;
+    }
 
     /* DONDE cae el receptor.  Por defecto delante -- `x.f(a)` es `f(x, a)` --,
      * y en el hueco si se escribio uno: `x.f(a, _)` es `f(a, x)`.  Eso es lo
@@ -558,12 +646,34 @@ bool TypeChecker::try_ufcs_call(ast::CallExpr *e, ast::FieldAccessExpr *fa,
     const uint32_t pick =
         overload::select(cands.data(), cands.size(), arg_types,
                          &overload_accepts, this, &names_for_select);
-    /* Una PLANTILLA no se elige comparando tipos: sus parametros no resuelven a
-     * nada hasta que se instancia, asi que aqui figuran vacios y ninguna
-     * comparacion encaja.  Quien decide si la llamada vale es la DEDUCCION, y
-     * esa corre al comprobar la llamada ya reescrita -- que es exactamente el
-     * reparto de siempre: aqui se dice cual es la candidata, no si sirve. */
-    if (pick == overload::kNoPick &&
+    /* Que NINGUNA encaje por tipos no quiere decir que la llamada no exista.
+     *
+     * Lo que un argumento admite es mas de lo que sabe la regla de seleccion:
+     * un literal sin sufijo se re-tipa si cabe, una constante entra en un
+     * newtype, un puntero se convierte.  Por eso la llamada LIBRE, en este
+     * mismo punto, se queda con la primera candidata y deja que el error --
+     * si lo hay -- lo de la comprobacion de argumentos hablando de TIPOS; los
+     * metodos hacen lo mismo.
+     *
+     * Aqui se hacia lo contrario -- darse por no encontrada --, y entonces
+     * `memcpy_c(dst, src, 8)` compilaba mientras `dst.memcpy_c(src, 8)` decia
+     * que no hay ninguna funcion libre que tome un `u8*`, con un consejo que
+     * mandaba a importar lo que ya estaba importado.  El tercer parametro es
+     * `usize` y el literal es `i64`: eso lo arregla la conversion, no la
+     * seleccion.  Dos grafias de la misma llamada no pueden contestar cosas
+     * distintas.
+     *
+     * Una PLANTILLA nunca encaja aqui, y por la misma razon con otro nombre:
+     * sus parametros no resuelven a nada hasta instanciarla.  Quien decide si
+     * vale es la DEDUCCION, al comprobar la llamada ya reescrita.
+     *
+     * Y con VARIAS candidatas se sigue cediendo el paso.  No es lo mismo: con
+     * una no hay nada que elegir -- la llamada libre tampoco elige --, pero con
+     * varias, quedarse con la primera seria decidir por el programador con un
+     * criterio que no esta escrito en el fuente.  Ahi la respuesta la tiene que
+     * dar quien todavia puede mirar otras cosas: un metodo del receptor, un
+     * campo que sea una funcion, un builtin. */
+    if (pick == overload::kNoPick && cand_slots->size() != 1 &&
         (chosen == nullptr || !is_generic_fn_template(*chosen)))
         return false;
 
@@ -622,6 +732,8 @@ bool TypeChecker::try_ufcs_call(ast::CallExpr *e, ast::FieldAccessExpr *fa,
     } else {
         e->args[hole] = std::move(receiver); // el hueco ERA su sitio
     }
+    // Consumido: en su sitio esta el receptor.  Ver la nota de mas arriba.
+    e->has_receiver_hole = false;
     e->result_type = check_call(e);
     return true;
 }

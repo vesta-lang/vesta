@@ -72,6 +72,54 @@ constexpr uint8_t IRVAL_FLAG_GC_OBJECT = 1 << 4;
 /// se derramaron) y el intermedio se llevaria un byte por cada uno.
 constexpr uint8_t IRVAL_FLAG_HAS_REG = 1 << 5; ///< Host_ptr a objeto GC-managed
 
+/**
+ * @brief COMO se supo de que memoria es la direccion, en los dos bits altos.
+ *
+ * Sin esto el viaje por la cache colapsa la clase: el bit @c HOST_PTR solo
+ * dice si LO ES, asi que un `HostByType` volvia como deducido, y la
+ * distincion se perdia justo donde mas se nota -- en el modulo que se relee
+ * en vez de recompilarse --.
+ *
+ * SIN cambio de version, y por como estan elegidos los valores: el CERO
+ * significa "no se dijo", y entonces la clase se deriva del bit de siempre.
+ * Un fichero viejo trae ceros ahi y se lee exactamente como antes; un lector
+ * viejo ignora estos bits y sigue leyendo el suyo.
+ */
+constexpr uint8_t IRVAL_KIND_SHIFT = 6;
+constexpr uint8_t IRVAL_KIND_MASK = 0x3u << IRVAL_KIND_SHIFT;
+constexpr uint8_t IRVAL_KIND_UNSAID = 0;       ///< derivar del bit de siempre
+constexpr uint8_t IRVAL_KIND_CONSTRUCTION = 1; ///< lo construyo el compilador
+constexpr uint8_t IRVAL_KIND_TYPE = 2;         ///< lo declara el tipo
+constexpr uint8_t IRVAL_KIND_UNKNOWN = 3;      ///< nadie lo sabe
+
+/// La clase de @p m, para el byte de banderas.  @c HostByInference sale como
+/// "no se dijo": es lo que el bit de siempre ya significaba, asi que no gasta
+/// codigo propio.
+inline uint8_t kind_bits_of(ir::MemorySpace m) {
+    switch (m) {
+    case ir::MemorySpace::HostByConstruction: return IRVAL_KIND_CONSTRUCTION;
+    case ir::MemorySpace::HostByType: return IRVAL_KIND_TYPE;
+    case ir::MemorySpace::Unknown: return IRVAL_KIND_UNKNOWN;
+    case ir::MemorySpace::HostByInference:
+    case ir::MemorySpace::NotHost: break;
+    }
+    return IRVAL_KIND_UNSAID;
+}
+
+/// Lo contrario: de los bits y del bit de siempre, la clase.
+inline ir::MemorySpace memory_of_flags(uint8_t flags) {
+    switch ((flags & IRVAL_KIND_MASK) >> IRVAL_KIND_SHIFT) {
+    case IRVAL_KIND_CONSTRUCTION: return ir::MemorySpace::HostByConstruction;
+    case IRVAL_KIND_TYPE: return ir::MemorySpace::HostByType;
+    case IRVAL_KIND_UNKNOWN: return ir::MemorySpace::Unknown;
+    default: break;
+    }
+    /* No se dijo: un fichero de antes, o una deduccion.  El bit de siempre lo
+     * contesta igual que lo contestaba entonces. */
+    return (flags & IRVAL_FLAG_HOST_PTR) != 0 ? ir::MemorySpace::HostByInference
+                                              : ir::MemorySpace::NotHost;
+}
+
 // Bits del byte flags por IrInstr.  Solo 2 bits usados: el resto
 // queda para extensiones futuras sin cambio de formato.
 constexpr uint8_t INSTR_FLAG_PRESERVE =
@@ -104,6 +152,16 @@ constexpr uint8_t FN_FLAG_PRIVATE =
             ///< el de contraccion: el default del lenguaje es publico, y asi un
             ///< IR viejo sin el bit se lee como publico, que es lo prudente --
             ///< de una publica no se afirma nada de sus llamantes.
+/**
+ * @brief `@Inline`: metela aunque no quepa por tamano.
+ *
+ * Tiene que viajar: un modulo que se RELEE de la cache en vez de
+ * recompilarse tiene que tomar la misma decision, o el mismo programa se
+ * optimiza distinto segun si la cache estaba caliente.  Bit POSITIVO -- lo
+ * normal es no pedirlo --, asi que una cache anterior sin el se lee como
+ * "no lo pidio", que es lo que era.
+ */
+constexpr uint8_t FN_FLAG_WANTS_INLINE = 1 << 5;
 
 /**
  * @brief Serializa un @c IrValue al stream binario.
@@ -123,7 +181,10 @@ void write_value(std::vector<uint8_t> &o, const IrValue &v) {
     uint8_t flags = 0;
     if (v.is_param) flags |= IRVAL_FLAG_PARAM;
     if (v.is_const) flags |= IRVAL_FLAG_CONST;
-    if (v.is_host_ptr) flags |= IRVAL_FLAG_HOST_PTR;
+    if (v.is_host_ptr()) flags |= IRVAL_FLAG_HOST_PTR;
+    /* Y COMO se supo, en los dos bits altos.  Sin esto el viaje por la cache
+     * colapsa la clase y todo vuelve como deducido. */
+    flags |= static_cast<uint8_t>(kind_bits_of(v.memory) << IRVAL_KIND_SHIFT);
     if (v.pointee_is_host_ptr) flags |= IRVAL_FLAG_POINTEE_HOST_PTR;
     if (v.is_gc_object) flags |= IRVAL_FLAG_GC_OBJECT;
     if (v.reg != IR_NO_REG) flags |= IRVAL_FLAG_HAS_REG;
@@ -158,7 +219,7 @@ bool read_value(const std::vector<uint8_t> &in, size_t &off, IrValue &v) {
     // El compilador idealmente lo colapsa a operaciones bitwise + cmovs.
     v.is_param = (flags & IRVAL_FLAG_PARAM) != 0;
     v.is_const = (flags & IRVAL_FLAG_CONST) != 0;
-    v.is_host_ptr = (flags & IRVAL_FLAG_HOST_PTR) != 0;
+    v.memory = memory_of_flags(flags);
     v.pointee_is_host_ptr = (flags & IRVAL_FLAG_POINTEE_HOST_PTR) != 0;
     v.is_gc_object = (flags & IRVAL_FLAG_GC_OBJECT) != 0;
     // v11: el registro solo viaja si el valor tenia uno.
@@ -445,6 +506,7 @@ size_t serialize_function(const IrFunction &fn, std::vector<uint8_t> &out) {
     if (fn.is_native) fn_flags |= FN_FLAG_NATIVE;
     if (fn.is_variadic) fn_flags |= FN_FLAG_VARIADIC;
     if (fn.is_naked) fn_flags |= FN_FLAG_NAKED;
+    if (fn.wants_inline) fn_flags |= FN_FLAG_WANTS_INLINE;
     if (!fn.fp_contract) fn_flags |= FN_FLAG_NO_FP_CONTRACT;
     if (!fn.is_public) fn_flags |= FN_FLAG_PRIVATE;
     write_u8(out, fn_flags);
@@ -612,6 +674,7 @@ bool deserialize_function(const std::vector<uint8_t> &in, size_t &off,
     out.is_native = (fn_flags & FN_FLAG_NATIVE) != 0;
     out.is_variadic = (fn_flags & FN_FLAG_VARIADIC) != 0;
     out.is_naked = (fn_flags & FN_FLAG_NAKED) != 0;
+    out.wants_inline = (fn_flags & FN_FLAG_WANTS_INLINE) != 0;
     out.fp_contract = (fn_flags & FN_FLAG_NO_FP_CONTRACT) == 0;
     out.is_public = (fn_flags & FN_FLAG_PRIVATE) == 0;
 
