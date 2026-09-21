@@ -21,10 +21,23 @@ namespace ejemplos.ufcs_receptores_err;
 //    daria la llamada libre `f(3, 2)`, que es lo que se busca: por el punto no
 //    se afloja ninguna comprobacion.
 //
+// 3. El DUENYO donde se pide un PRESTAMO.  La candidata existe y toma un
+//    `borrow<i64>`; el receptor es el `unique<i64>` que lo posee.  De un
+//    duenyo a un prestamo no se llega con un cast -- no son dos vistas del
+//    mismo valor, son cosas distintas --, se llega prestandolo, y el mensaje
+//    dice con que se escribe.
+//
+//    Y el punto NO lo hace solo, a proposito: prestar es la operacion que
+//    tiene reglas -- exclusividad, que no escape --, y fabricarla al ver un
+//    punto haria que las dos grafias de la misma llamada dejaran de comprobar
+//    lo mismo, por el lado que se salta las comprobaciones.  Antes el mensaje
+//    era el generico "no hay ninguna libre que tome un `unique<i64>`", que
+//    niega una funcion escrita dos lineas mas arriba.
+//
 // Sin `main` a proposito: un negativo no se ejecuta, y su `main` chocaria con
 // el del ejemplo que acompanya, que es su vecino de directorio.
 //
-// Se espera que NO compile: VX2098.
+// Se espera que NO compile: VX2098 y VX2127.
 
 i64 escribe(out i64 r) {
 	r = 5;
@@ -41,3 +54,11 @@ i64 salida_por_el_punto(i64 s) => s.escribe();
 
 // 2: `inout` sobre algo que no es un sitio donde escribir.
 i64 inout_sobre_un_calculo() => (1 + 2).acumula(2);
+
+i64 lee(borrow<i64> b) => read_borrow(b);
+
+// 3: el duenyo donde se pide el prestamo.  `lee(lend(u))` si compila.
+i64 duenyo_por_el_punto() {
+	unique<i64> u = unique_box(7);
+	return u.lee();
+}

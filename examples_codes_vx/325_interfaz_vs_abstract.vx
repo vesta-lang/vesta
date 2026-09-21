@@ -45,7 +45,7 @@ struct Rect : FormaBase, Dibujable {
 // --- Cuadrado: solo satisface la interfaz Dibujable, SIN heredar de nadie.
 //     Aqui NO hay codigo reutilizado; el contrato obliga a escribir `area`.
 struct Cuadrado : Dibujable {
-	i64                                   lado;
+	i64 lado;
 	public i64 area() => this.lado * this.lado;
 }
 

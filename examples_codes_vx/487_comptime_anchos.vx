@@ -15,7 +15,7 @@ namespace ejemplos.comptime_anchos;
 // bits para que se vea que tampoco se recorta de mas.
 
 comptime i16 c_i16(i16 x) => x;
-comptime u8 c_u8(u8 x) =>    x;
+comptime u8 c_u8(u8 x) => x;
 comptime i32 c_i32(i32 x) => x;
 comptime i16 c_neg(i16 x) => x;
 i32 main() {

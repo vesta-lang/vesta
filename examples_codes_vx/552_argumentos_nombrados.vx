@@ -28,7 +28,7 @@ string enmarca(string marco, string texto) => marco.concat(texto).concat(marco);
 
 // 5. dos sobrecargas que solo se distinguen por COMO se llaman sus ranuras
 i64 mide(i64 alto, i64 ancho) => alto * 10 + ancho;
-i64 mide(i64 alto, i64 ancho, i64 fondo) =>  fondo;
+i64 mide(i64 alto, i64 ancho, i64 fondo) => fondo;
 
 // 7. Y el caso que ANTES era "redefinicion": mismos tipos, misma aridad, y lo
 // unico que cambia es como se llaman las ranuras.  Basta con que UNA se llame

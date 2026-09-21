@@ -28,7 +28,7 @@ namespace ejemplos.sobrecarga;
 // Resultado esperado: 42.
 
 // --- 1. por aridad ---------------------------------------------------------
-i64 suma(i64 a) =>            a;
+i64 suma(i64 a) => a;
 i64 suma(i64 a, i64 b) => a + b;
 
 // 13. Y una VARIADICA con el mismo nombre, que es la que recoge lo que no

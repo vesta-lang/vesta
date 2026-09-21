@@ -26,6 +26,9 @@ namespace ejemplos.ufcs_cadena;
 //      lo que permite llamar por el punto a una firma cuyo primer parametro no
 //      es el sujeto -- `memcpy(dst, src, n)` -- sin retorcer la firma, que era
 //      el precio que se daba por inevitable para poder escribir asi.
+//   6. Y que eso vale igual sobre un MIEMBRO, no solo sobre una funcion libre:
+//      un miembro tiene ranura para el receptor en su forma libre, asi que un
+//      hueco ahi significa lo mismo y el `this` se da como argumento.
 //
 // Resultado esperado: 42.
 
@@ -62,6 +65,13 @@ i64 restar(i64 a, i64 b) => a - b;
 // El texto va SEGUNDO a proposito: aqui el sujeto es lo de dentro, no el marco.
 string enmarca(string marco, string texto) => marco.concat(texto).concat(marco);
 
+// Un tipo con MIEMBROS, para el hueco sobre lo que no es una funcion libre.
+struct Caja {
+	i64 v;
+	i64 mezcla(i64 a, i64 b) => this.v + a * 10 + b * 100;
+	i64 con(Caja otra, i64 k) => this.v + otra.v * 10 + k;
+}
+
 i32 main() {
 	// 1. cuatro eslabones, ningun cast, ningun metodo declarado en ninguna
 	// parte.  Y el primer receptor es el literal `2` tal cual.
@@ -88,6 +98,25 @@ i32 main() {
 	// es lo de dentro, no el marco --, y aun asi se encadena sin tocar la firma.
 	string m = "eh".grita().enmarca("<<", _); // "<<" + "eh!" + "<<"
 	i64    q = m.largo();                     // "<<eh!<<" -> 7
+
+	/* 6. Y el hueco vale igual cuando lo que se llama es un MIEMBRO.
+	 *
+	 * Un miembro es alcanzable en forma libre -- `mezcla(c, 2, 3)` encuentra
+	 * el metodo de `c`, que es la otra direccion --, asi que tiene una ranura
+	 * para el receptor: la cero.  Por tanto un hueco ahi significa lo de
+	 * siempre, y el `this` se da como argumento.
+	 *
+	 * No iba: el punto consulta el indice de UFCS, que guarda funciones
+	 * LIBRES, y un miembro no esta ahi; asi que `2.mezcla(c, _, 3)` buscaba un
+	 * metodo de `i64` o una libre que tomara un `i64`, y ninguna de las dos es
+	 * la pregunta.  Ahora, sin candidata y con hueco, se reescribe y decide el
+	 * camino de siempre. */
+	Caja c = {1};
+	Caja d = {5};
+	if (mezcla(c, 2, 3) != 321) { return 1; }   // la otra direccion, ya iba
+	if (c.mezcla(2, 3) != 321) { return 2; }    // y la de siempre
+	if (2.mezcla(c, _, 3) != 321) { return 3; } // el hueco: el 2 va a `a`
+	if (d.con(c, _, 3) != 54) { return 4; }     // this=c (1), otra=d (5), k=3
 
 	i64 tot = n + l + r + x + (h1 - h2) + q - 7; // 42 + 0 + 7 - 7 = 42
 	println("num=${n} igual=${igual} cadena=${s} largo=${l}");

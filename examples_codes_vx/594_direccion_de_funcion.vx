@@ -1,0 +1,204 @@
+namespace ejemplos.direccion_de_funcion;
+
+// La DIRECCION de una funcion cuando el nombre esta SOBRECARGADO (fase 10).
+//
+// En una llamada, cual de las homonimas es lo deciden los ARGUMENTOS.  En una
+// referencia no hay ninguno -- eso es lo que separa `&f` de `f(...)` --, asi
+// que lo unico que queda es el tipo que el contexto ESPERA.  Es lo que hacen
+// C++ (`address of overloaded function`), C# (grupo de metodos -> delegado),
+// Java (`T::m` contra la interfaz funcional) y Swift.
+//
+// Lo que habia antes: se cogia la firma que el nombre tuviera apuntada, que es
+// la ULTIMA declarada.  Intercambiar dos lineas decidia si el programa
+// compilaba -- un criterio que no esta escrito en el fuente --.  Por eso aqui
+// hay pares declarados en ORDEN CONTRARIO y un trio: si decidiera el orden,
+// alguno fallaria.
+//
+// Lo que se ejercita, por ejes:
+//
+//   CONTEXTO que decide  los cinco: declaracion, asignacion, ranura de un
+//                        parametro, cast y RETORNO.
+//   GRAFIA del tipo      `cfn(i64) -> i64`, la de C `i64 (*g)(i64)` y el
+//                        lambda `fn(i64) -> i64`.
+//   GRAFIA del valor     con `&` y con el nombre DESNUDO, que tienen que
+//                        elegir lo mismo.
+//   QUE las separa       la ARIDAD, el TIPO con la misma aridad (la
+//                        coincidencia es exacta: un `f64` no entra por un
+//                        `i64`), y estar en medio de tres.
+//
+// Cada comprobacion que falla devuelve SU numero, asi que el codigo de salida
+// dice cual.  Si pasan todas, 42.
+//
+// @expect 42
+
+// La de UNA se declara primero.
+public i64 doble(i64 x) => x + x;
+public i64 doble(i64 x, i64 y) => x + y;
+
+// Y aqui al reves: primero la de DOS.
+public i64 junta(i64 x, i64 y) => x * y;
+public i64 junta(i64 x) => x + 1;
+
+// Misma ARIDAD, tipos distintos: lo que separa es el tipo, y exacto.
+public i64 mide(i64 x) => x;
+public i64 mide(f64 x) => 7_i64;
+
+// Tres, para que no valga ni "la primera" ni "la ultima".
+public i64 tres(i64 a) => 1_i64;
+public i64 tres(i64 a, i64 b) => 2_i64;
+public i64 tres(i64 a, i64 b, i64 c) => 3_i64;
+
+// La ranura de un parametro, en las dos grafias del tipo funcion.
+public i64 aplica(cfn(i64) -> i64 g, i64 v) => g(v);
+public i64 aplica_lam(fn(i64) -> i64 g, i64 v) => g(v);
+
+// Y el RETORNO, que es el quinto contexto: lo que se espera lo dice la firma.
+cfn(i64) -> i64 elige() => &doble;
+
+// Dos con el MISMO tipo.  Aqui la primera capa no puede decidir -- las dos lo
+// cumplen --, y lo que las separa es como se llaman sus ranuras, que en este
+// lenguaje es parte del contrato.  Es un desempate que C++ no puede hacer de
+// ninguna manera, porque alli el nombre de un parametro no distingue nada.
+public i64 rango(i64 min, i64 max) => max - min;
+public i64 rango(i64 base, i64 salto) => base + salto;
+
+// Y el eje del NAMESPACE, que se compone con los otros dos sin regla nueva.
+namespace medida {
+	public i64 escala(i64 x) => x * 3;
+	public i64 tramo(i64 min, i64 max) => max - min;
+	public i64 tramo(i64 base, i64 salto) => base + salto;
+}
+
+// Por el TIPO: un metodo y una libre alcanzable por ese receptor.  Las dos se
+// llaman por el punto, asi que de las dos se puede tomar la direccion por el
+// tipo -- que es el punto de la regla: la introspeccion ya las enumera juntas,
+// y si solo de unas se pudiera tomar el puntero, todo metaprograma tendria que
+// volver a preguntar de donde salio cada nombre.
+struct Punto {
+	i64 x;
+	i64 y;
+	i64 suma() => this.x + this.y;
+}
+
+public i64 area(Punto p) => p.x * p.y;
+
+i32 main() {
+	// --- 1) Declaracion, con `&`.  Las dos eligen la de UNA, sea cual sea
+	//        el orden en que se declararon.
+	cfn(i64) -> i64 a = &doble;
+	cfn(i64) -> i64 b = &junta;
+	if (a(5) != 10) { return 1; }
+	if (b(5) != 6) { return 2; }
+
+	// --- 2) Declaracion con el nombre DESNUDO: la misma eleccion.
+	cfn(i64) -> i64 c = doble;
+	if (c(4) != 8) { return 3; }
+
+	// --- 3) La grafia de C es el MISMO tipo, asi que decide igual.
+	i64 (*d)(i64) = &doble;
+	if (d(3) != 6) { return 4; }
+
+	/* --- 4) Y el lambda, que es otro tipo con el mismo criterio.
+	 *
+	 * Aqui va el nombre DESNUDO y no `&doble`, y no es un detalle de estilo:
+	 * `&f` es una direccion de codigo -- ocho bytes -- y un lambda son
+	 * dieciseis, direccion mas entorno.  El nombre desnudo se promueve al
+	 * lambda con el entorno vacio; `&doble` seria un `cfn` y ponerlo aqui es
+	 * un error de tipos, que es lo que tiene que ser. */
+	fn(i64) -> i64 e = doble;
+	if (e(2) != 4) { return 5; }
+
+	// --- 5) Lo que las separa puede ser el TIPO con la misma aridad, y la
+	//        coincidencia es EXACTA: aqui no entra la de `i64`.
+	cfn(f64) -> i64 m = &mide;
+	if (m(1.5) != 7) { return 6; }
+	cfn(i64) -> i64 mi = &mide;
+	if (mi(9) != 9) { return 7; }
+
+	// --- 6) Con TRES candidatas se elige la de en medio.
+	cfn(i64, i64) -> i64 t = &tres;
+	if (t(0, 0) != 2) { return 8; }
+
+	// --- 7) La ranura de un parametro, con `&` y sin el.
+	if (aplica(&doble, 10) != 20) { return 9; }
+	if (aplica(doble, 11) != 22) { return 10; }
+	if (aplica_lam(doble, 12) != 24) { return 11; }
+
+	// --- 8) El cast: la escapatoria cuando el destino natural no basta.
+	//        Aqui elige la OTRA, la de dos.
+	cfn(i64, i64) -> i64 dos = (cfn(i64, i64) -> i64)&doble;
+	if (dos(1, 2) != 3) { return 12; }
+
+	// --- 9) Y la asignacion, con el tipo que la variable ya tiene.
+	a = &junta;
+	if (a(2) != 3) { return 13; }
+
+	/* --- 10) El RETORNO.  Lo que se espera lo dice la firma de quien
+	 * devuelve, igual que los otros cuatro.
+	 *
+	 * Hasta hoy esto daba CERO, y sin sobrecarga tambien: el bajado trataba
+	 * todo retorno de tipo funcion como un lambda de dieciseis bytes -- la
+	 * direccion y su entorno --, asi que quien llamaba leia la direccion del
+	 * buffer en vez del valor.  Un `cfn` es una direccion y nada mas: vuelve
+	 * por registro.  Compilaba, no decia nada y llamar al puntero devuelto
+	 * daba cero. */
+	cfn(i64) -> i64 r = elige();
+	if (r(7) != 14) { return 14; }
+
+	// --- 11) El cast tambien en la grafia de C, que es el MISMO tipo.  La
+	//         escapatoria tiene que existir en las dos formas de escribirlo:
+	//         tenerla en una sola parte en dos lo que es una cosa.
+	i64 (*dosc)(i64, i64) = (i64 (*)(i64, i64))&doble;
+	if (dosc(1, 2) != 3) { return 15; }
+
+	/* --- 12) La SEGUNDA capa: las RANURAS.
+	 *
+	 * `rango` tiene dos con el mismo tipo, asi que el contexto no puede
+	 * decidir por mucho que se escriba -- las dos lo cumplen --.  Lo que las
+	 * separa es como se llaman sus ranuras, que aqui es parte del contrato, y
+	 * se nombran con la grafia del init designado, la que el lenguaje ya tiene
+	 * para eso.  Sin valores: no se esta llamando a nadie.
+	 *
+	 * Y esto FILTRA, no prefiere: escritas las ranuras, solo son viables las
+	 * candidatas que las tengan.  Es la distincion que impide que anyadir una
+	 * sobrecarga cambie en silencio a que cuerpo va un `&f` ya escrito. */
+	cfn(i64, i64) -> i64 mn = &rango(.min, .max);
+	cfn(i64, i64) -> i64 bs = &rango(.base, .salto);
+	if (mn(10, 30) != 20) { return 16; }
+	if (bs(10, 30) != 40) { return 17; }
+
+	/* --- 13) El eje del NAMESPACE, y como se compone con los otros dos.
+	 *
+	 * El nombre cualificado se reescribe al aplanado y de ahi en adelante es
+	 * la misma referencia que una desnuda: mismo desempate por tipo, mismo
+	 * filtro por ranura, mismo mensaje cuando nada decide.  Antes no llegaba a
+	 * ningun sitio -- ni sobrecargado ni sin sobrecargar --: salia un
+	 * `fn() -> void*` que nadie habia escrito. */
+	cfn(i64) -> i64 esc = &medida.escala;
+	if (esc(5) != 15) { return 18; }
+	cfn(i64, i64) -> i64 tmn = &medida.tramo(.min, .max);
+	cfn(i64, i64) -> i64 tbs = &medida.tramo(.base, .salto);
+	if (tmn(10, 30) != 20) { return 19; }
+	if (tbs(10, 30) != 40) { return 20; }
+
+	/* --- 14) Y por el TIPO, las dos cosas que el punto alcanza.
+	 *
+	 * El metodo lleva el receptor DELANTE -- `cfn(Punto*)`, el `this`
+	 * explicito, que es la expresion de metodo de Go --, y la libre es su
+	 * propia firma, `cfn(Punto)`, porque ahi el receptor ya es el primer
+	 * parametro.  La segunda no llegaba a ningun sitio: el mensaje negaba que
+	 * el tipo existiera y citaba el nombre aplanado.
+	 *
+	 * Que las dos valgan no es comodidad: la introspeccion ve metodos y
+	 * libres alcanzables UNIFORMEMENTE, y poder enumerarlas juntas pero no
+	 * poder tomar el puntero igual obligaria a cada metaprograma a ramificar
+	 * por de donde salio el nombre. */
+	Punto              p   = {3, 4};
+	cfn(Punto*) -> i64 met = &Punto.suma;
+	cfn(Punto) -> i64  lib = &Punto.area;
+	if (met(&p) != 7) { return 21; }
+	if (lib(p) != 12) { return 22; }
+
+	println("todas las comprobaciones OK");
+	return 42;
+}

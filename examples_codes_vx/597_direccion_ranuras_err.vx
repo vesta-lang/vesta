@@ -1,0 +1,48 @@
+namespace ejemplos.direccion_ranuras_err;
+
+// Las dos formas de fallar el filtro por RANURA de `&f(.min, .max)` (fase 10).
+//
+// La segunda capa existe porque hay un desempate que el tipo no puede hacer:
+// dos sobrecargas con los MISMOS tipos y ranuras distintas son dos funciones
+// -- eso es del lenguaje --, y ahi escribir el tipo esperado no decide nada
+// porque las dos lo cumplen.
+//
+// Lo que se comprueba es lo que se DICE en cada caso, no que falle:
+//
+//   VX2125  no se escribieron las ranuras y el tipo no puede decidir.  El
+//           mensaje no manda a escribir el tipo -- seria mandar a hacer lo que
+//           ya esta hecho --: manda a nombrarlas, y cita la forma exacta.
+//   VX2124  se escribieron, pero ninguna candidata las tiene.  Se citan las
+//           que hay CON sus nombres, que es lo que las distingue: sin ellos se
+//           imprimiria dos veces la misma linea.
+//   VX2126  `&Tipo.nombre` donde el tipo declara un METODO asi y ademas hay
+//           una libre de ese nombre alcanzable por ese receptor.  Las dos
+//           responden al punto, asi que nombrar el tipo no elige -- es la
+//           misma ambiguedad que denuncia `p.nombre()`, contestada igual.
+//
+// @compile-fail
+// @expect-error VX2125
+// @expect-error VX2124
+// @expect-error VX2126
+
+public i64 rango(i64 min, i64 max) => max - min;
+public i64 rango(i64 base, i64 salto) => base + salto;
+
+struct Punto {
+	i64 x;
+	i64 y;
+	i64 borde() => this.x;
+}
+
+// Se llama igual que el metodo y toma un Punto: `p.borde()` tampoco elegiria.
+public i64 borde(Punto p) => p.y;
+
+i32 main() {
+	// El tipo esta escrito y aun asi no decide: las dos lo cumplen.
+	cfn(i64, i64) -> i64 a = &rango;
+	// Y con ranuras que ninguna declara.
+	cfn(i64, i64) -> i64 b = &rango(.alto, .bajo);
+	// Metodo Y libre con el mismo nombre para el mismo receptor.
+	cfn(Punto) -> i64 c = &Punto.borde;
+	return 0;
+}

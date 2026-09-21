@@ -32,7 +32,7 @@ struct Atomic {
 	}
 
 	// El incremento es UNA instruccion (lock xadd): ningun hilo cabe en medio.
-	public i64 __iadd__(i64 d) => atomic_add64(&this.v, d) +     d;
+	public i64 __iadd__(i64 d) => atomic_add64(&this.v, d) + d;
 	public i64 __isub__(i64 d) => atomic_add64(&this.v, 0 - d) - d;
 }
 

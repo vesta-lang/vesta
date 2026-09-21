@@ -1,27 +1,76 @@
 namespace ejemplos.borrow_nll;
 
-// Test F1 - Non-Lexical Lifetimes (NLL):
-//   Un borrow se "libera" en compile-time tras su ULTIMO USO real,
-//   no al exit del scope.  Patron clasico: tomar un borrow, usarlo,
-//   y despues mover el owner (sin que el borrow siga vivo).
+// Un prestamo se libera en compilacion tras su ULTIMO USO real, no al salir
+// del ambito.  Patron clasico: tomarlo, usarlo, y despues mover al dueno.
 //
-// Sin NLL: ERROR R3 (move while borrowed).
-// Con NLL: OK (el borrow ya no se usa cuando se hace el move).
+//   sin la regla: error R3 (mover mientras esta prestado).
+//   con la regla: correcto, porque cuando se mueve ya no se usa.
+//
+// La segunda mitad es la MISMA regla aplicada al prestamo que NO TIENE
+// NOMBRE: `lee(lend(u))`, donde el `lend` va escrito en el sitio de la
+// llamada y no se guarda en ninguna variable.
+//
+// Ahi no se aplicaba, y no por la regla sino por como estaba indexado: el
+// comprobador guarda cada prestamo por el NOMBRE de quien se lo queda, y este
+// no tiene ninguno -- se registraba bajo la cadena vacia --.  Sin clave no se
+// le puede poner ultimo uso, y sin ultimo uso nadie lo suelta: vivia hasta el
+// final de la funcion y bloqueaba cualquier prestamo posterior del mismo
+// sitio.  Un temporal muere al acabar su sentencia, por definicion, asi que
+// ahora se identifica por DONDE esta escrito y lo suelta la misma maquinaria.
+//
+// Y de paso la grafia con punto, que es la misma llamada escrita del otro
+// modo y daba otro resultado: el comprobador vuelve a mirar el receptor mas
+// de una vez, y cada visita tomaba OTRO prestamo del mismo sitio.  Tres.  Asi
+// que `lend_mut(u).pon(9)` chocaba consigo mismo mientras `pon(lend_mut(u), 9)`
+// compilaba -- las dos grafias dejando de comprobar lo mismo, que es justo lo
+// que la llamada uniforme promete que no pasa --.  Al identificar el prestamo
+// por su sitio, volver a mirar el mismo nodo encuentra el que ya estaba.
+//
+// @expect 42
 
 unique<i32> consume(unique<i32> p) => p;
+
+// Estas toman el prestamo ya hecho, asi que quien las llama escribe el `lend`
+// en el sitio de la llamada y el prestamo se queda sin nombre.
+i32 lee(borrow<i32> b) => read_borrow(b);
+
+void pon(borrow_mut<i32> m, i32 v) {
+	write_borrow(m, v);
+}
 
 i32 main() {
 	unique<i32> owner = unique_box(42);
 
-	// Tomar borrow, ultimo uso en read_borrow.
+	// Tomar prestamo, ultimo uso en read_borrow.
 	borrow<i32> r = lend(owner);
 	i32         v = read_borrow(r); // ultimo uso de r
-	// <- aqui NLL libera el borrow
+	// <- aqui se libera el prestamo
 
-	// Ahora podemos mover owner sin error.
-	unique<i32> q   = move(owner); // OK con NLL
+	// Ahora se puede mover al dueno sin error.
+	unique<i32> q   = move(owner); // correcto
 	i32*        raw = ptr_of(q);
 	i32         w   = *raw;
+
+	// --- El prestamo SIN NOMBRE, la misma regla.
+	unique<i32> caja = unique_box(10);
+
+	// Compartido y anonimo: al acabar la sentencia ya no esta vivo.
+	i32 a = lee(lend(caja));
+	// La misma llamada por el punto, que tiene que dar lo mismo.
+	i32 b = lend(caja).lee();
+
+	// Y un EXCLUSIVO detras, que es lo que fallaba: si los compartidos de
+	// arriba no se hubieran soltado, este chocaria contra ellos.
+	pon(lend_mut(caja), 20);
+	// Tambien por el punto.  Aqui el receptor se mira mas de una vez, y con
+	// un prestamo por visita chocaba consigo mismo.
+	lend_mut(caja).pon(30);
+
+	i32 c = lee(lend(caja));
+
+	if (a != 10) { return 1; }
+	if (b != 10) { return 2; }
+	if (c != 30) { return 3; }
 
 	return v + w - 84 + 42; // 42 + 42 - 84 + 42 = 42
 }

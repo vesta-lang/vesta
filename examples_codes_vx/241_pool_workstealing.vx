@@ -29,8 +29,8 @@ void fork_task(i64 depth) {
 		vx_unlock((i64*)g_lock);
 		return;
 	}
-	pool_submit((i64)(cfn(i64) -> void) fork_task, depth - 1);
-	pool_submit((i64)(cfn(i64) -> void) fork_task, depth - 1);
+	pool_submit((i64)(cfn(i64) -> void)fork_task, depth - 1);
+	pool_submit((i64)(cfn(i64) -> void)fork_task, depth - 1);
 }
 
 i32 main() {
@@ -45,7 +45,7 @@ i32 main() {
 	pool_start(4); // 4 hilos worker
 
 	// Una raiz de profundidad 14 -> 16384 hojas repartidas por robo.
-	pool_submit((i64)(cfn(i64) -> void) fork_task, 14);
+	pool_submit((i64)(cfn(i64) -> void)fork_task, 14);
 
 	pool_join(); // espera a que se drene todo el arbol + para los workers
 

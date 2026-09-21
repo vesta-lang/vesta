@@ -48,7 +48,7 @@ i64 main() {
 	// --- Quitar la marca: renuncia explicita ------------------------------
 	// El cast dice "aqui dejo de comprobarlo".  La llamada es la MISMA, pero
 	// ahora la direccion la pone el usuario.
-	cfn(i64*) -> void crudo = (cfn(i64*) -> void) & escribe;
+	cfn(i64*) -> void crudo = (cfn(i64*) -> void)&escribe;
 	i64               b     = 0_i64;
 	crudo(&b);
 	println("marca quitada con un cast:      b = ${b}");
@@ -57,7 +57,7 @@ i64 main() {
 	// --- Ponerla: un cfn sin restricciones pasa a tenerlas -----------------
 	// Tambien vale al reves.  `por_puntero` no promete nada, y el cast le
 	// pone la promesa: desde aqui el sitio de llamada toma la direccion.
-	cfn(out i64) -> void marcado = (cfn(out i64) -> void) & por_puntero;
+	cfn(out i64) -> void marcado = (cfn(out i64) -> void)&por_puntero;
 	i64                  c       = 0_i64;
 	marcado(c);
 	println("marca puesta con un cast:       c = ${c}");

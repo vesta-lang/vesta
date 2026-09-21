@@ -1,0 +1,28 @@
+namespace ejemplos.direccion_sin_tipo_err;
+
+// `&f` de un nombre SOBRECARGADO cuando NADA en el contexto decide (fase 10).
+//
+// En una llamada eligen los argumentos; en una referencia no hay ninguno, asi
+// que lo unico que puede decidir es el tipo que el contexto espera.  Con `auto`
+// no hay tipo esperado: el contexto esta pidiendo que lo diga la expresion, y
+// la expresion esta pidiendo que lo diga el contexto.
+//
+// Lo importante no es que falle -- eso es lo unico posible --, sino QUE dice al
+// fallar.  Antes se cogia la firma que el nombre tuviera apuntada, que es la
+// ULTIMA declarada: compilaba en silencio y el programa hacia una cosa u otra
+// segun el orden de dos lineas.  Ahora se para y ENUMERA las candidatas, que es
+// lo que le falta saber a quien lo escribio.
+//
+// @compile-fail
+// @expect-error VX2121
+
+public i64 doble(i64 x) => x + x;
+public i64 doble(i64 x, i64 y) => x + y;
+
+i32 main() {
+	// Sin tipo esperado no hay de donde sacar CUAL.  La salida dice las dos
+	// candidatas con su firma escrita, y la escapatoria: nombrar el tipo o
+	// poner el cast.
+	auto f = &doble;
+	return 0;
+}

@@ -1,0 +1,56 @@
+namespace ejemplos.anotacion_erratada_err;
+
+// 592_anotacion_erratada_err.vx  --  NEGATIVO: no debe compilar (VXP092).
+//
+// Una anotacion mal escrita es un ERROR, y ademas dice cual querias.
+//
+// POR QUE HACE FALTA.  El parser leia el nombre tras el `@`, lo comparaba con
+// los que sabe manejar, y LO QUE NO RECONOCIA LO DESCARTABA SIN DECIR NADA.  Y
+// el vocabulario no estaba en un sitio: repartido por SIETE lugares del parser,
+// cada uno con su lista escrita a mano, asi que nadie podia decir que
+// anotaciones tiene el lenguaje sin leerlos todos.
+//
+// El precio de ese silencio depende de la anotacion:
+//
+//   `@Ovrride`  -> el metodo no redefine: anyade una sobrecarga.  Llamar por la
+//                  base sigue yendo a la base.
+//   `@Provdes`  -> el gancho no engancha, y el binario reserva con el asignador
+//                  de la biblioteca -- que en freestanding es el que no hay --.
+//   `@Targt`    -> la declaracion deja de estar condicionada y entra SIEMPRE.
+//
+// Ninguno da un error donde se escribio.  Dan otro comportamiento, mas tarde.
+//
+// La lista de las que existen vive ahora en UN sitio (`vx/annotation_names.h`),
+// que es lo que permite preguntarlo y lo que permite sugerir la cercana.
+//
+// Ver 591 para las dos RETIRADAS, que tienen mensaje propio porque ahi lo util
+// no es "no existe" sino cual es el reemplazo.
+//
+// Se comprueba en LOS TRES sitios donde se escribe una anotacion, porque cada
+// uno la leia por su cuenta: sobre una declaracion suelta, sobre un miembro de
+// clase y sobre un miembro de STRUCT.  El del struct importa tanto como los
+// otros -- un struct es una clase ligera: tiene campos, metodos, constructores,
+// `@Virtual`, y se puede declarar abstracto --, y era el peor de los tres: ni
+// siquiera llegaba a tragarselo, daba "se esperaba un tipo de campo o metodo"
+// acusando a la linea de debajo.
+
+@Ovrride
+i32 suelta() => 1;
+
+class Base {
+	public i32 valor() => 1;
+}
+
+class Hija : Base {
+	@Ovrrid
+	public i32 valor() => 2;
+}
+
+struct Punto {
+	i32 x;
+	i32 y;
+	@Virtua
+	i32 suma() => this.x + this.y;
+}
+
+i32 main() => 42;

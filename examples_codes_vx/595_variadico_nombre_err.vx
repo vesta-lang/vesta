@@ -1,0 +1,27 @@
+namespace ejemplos.variadico_nombre_err;
+
+// Nombrar el PAQUETE y dejar la ranura fija sin dar.
+//
+// El positivo esta en `481_variadicos_todos.vx`: `.xs = v` significa lo que
+// significa cualquier nombre -- a esta ranura --, y como la ranura es el
+// paquete, le entra ese valor.  De ahi sale este caso: si el receptor se manda
+// al paquete con el hueco, `a` se queda sin nadie que la rellene.
+//
+// Se dice, y se dice por lo que ES -- una ranura sin argumento --, no con un
+// caso especial del variadico.  La regla general basta.
+//
+// @expect-error VX2076
+
+i64 suma(i64* xs, i64 n) {
+	i64 a = 0_i64;
+	for (i64 i = 0_i64; i < n; i = i + 1) { a = a + xs[i]; }
+	return a;
+}
+
+i64 mide(i64 a, i64... xs) => a + suma(xs, vacount()) * 100;
+
+i32 main() {
+	i64 r = 5_i64;
+	// El receptor va al paquete; `a` se queda sin dar.
+	return (i32)r.mide(.xs = _);
+}

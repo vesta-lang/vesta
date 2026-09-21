@@ -20,7 +20,7 @@ concept MiNum<T> = type.is_numeric<T>();
 class Cuadrado {
 	i64 lado;
 	Cuadrado(i64 l) { this.lado = l; }
-	i64 area() => this.lado * this.   lado;
+	i64 area() => this.lado * this.lado;
 	bool igual(i64 x) => this.lado == x;
 }
 

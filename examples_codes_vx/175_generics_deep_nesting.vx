@@ -29,7 +29,7 @@ class Pair<A, B> {
 		this.first  = a;
 		this.second = b;
 	}
-	public A get_first() => this. first;
+	public A get_first() => this.first;
 	public B get_second() => this.second;
 }
 

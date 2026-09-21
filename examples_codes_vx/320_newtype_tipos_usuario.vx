@@ -14,8 +14,8 @@ namespace newtype_usuario;
 
 // ---- Sobre un STRUCT ------------------------------------------------------
 struct Punto {
-	i64                                x;
-	i64                                y;
+	i64 x;
+	i64 y;
 	public i64 suma() => this.x + this.y;
 }
 
@@ -28,7 +28,7 @@ i64 distancia_manhattan(Coord c) => c.suma(); // solo acepta Coord
 
 // ---- Sobre una CLASE ------------------------------------------------------
 class Caja {
-	public i64                v = 0_i64;
+	public i64 v = 0_i64;
 	public i64 leer() => this.v;
 }
 

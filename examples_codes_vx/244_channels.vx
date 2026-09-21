@@ -26,8 +26,8 @@ void consumer(i64 arg) {
 i32 main() {
 	g_ch = chan_new(4);
 	pool_start(2);
-	pool_submit((i64)(cfn(i64) -> void) consumer, 0);
-	pool_submit((i64)(cfn(i64) -> void) producer, 0);
+	pool_submit((i64)(cfn(i64) -> void)consumer, 0);
+	pool_submit((i64)(cfn(i64) -> void)producer, 0);
 	pool_join();
 	chan_free(g_ch);
 	return (g_sum == 5050) ? 42 : (i32)g_sum; // 1+2+..+100 = 5050

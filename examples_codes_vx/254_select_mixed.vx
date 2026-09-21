@@ -76,9 +76,9 @@ i32 main() {
 	src = chan_new(2);
 	dst = chan_new(2);
 	pool_start(4);
-	pool_submit((i64)(cfn(i64) -> void) consumer, 0);
-	pool_submit((i64)(cfn(i64) -> void) pump, 0);
-	pool_submit((i64)(cfn(i64) -> void) producer, 0);
+	pool_submit((i64)(cfn(i64) -> void)consumer, 0);
+	pool_submit((i64)(cfn(i64) -> void)pump, 0);
+	pool_submit((i64)(cfn(i64) -> void)producer, 0);
 	pool_join();
 	chan_free(src);
 	chan_free(dst);

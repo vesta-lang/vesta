@@ -11,7 +11,7 @@ namespace abstract_neg;
 
 @Abstract
 struct Forma {
-	i64                            lados;
+	i64 lados;
 	public i64 num_lados() => this.lados;
 }
 

@@ -1,0 +1,62 @@
+namespace ejemplos.ufcs_stdlib_literal;
+
+// La misma llamada escrita de las dos formas, con la funcion en OTRO PAQUETE.
+//
+// `memcpy_c(u8* dst, u8* src, usize n)` vive en `std.memory`.  Su tercer
+// parametro es `usize` y aqui se le pasa un literal sin sufijo, que es `i64`
+// mientras nadie diga lo contrario.  La conversion lo coloca -- por eso la
+// llamada libre siempre compilo --, pero la seleccion de sobrecarga no la ve,
+// y el punto se daba por no encontrado:
+//
+//     error: no free function 'memcpy_c' taking a 'u8*' is in scope here,
+//            but 'std.memory' has one.  [...] bring the name in with
+//            `import std.memory only memcpy_c;` and the dot works
+//
+// El consejo mandaba a hacer lo que el fichero YA hacia.  La llamada libre, en
+// ese mismo punto, se queda con la unica candidata y deja que hable la
+// comprobacion de argumentos; el punto se rendia.  Dos grafias de la misma
+// llamada no pueden contestar cosas distintas.
+//
+// Y el receptor no tiene por que ser el primer parametro: el hueco `_` dice en
+// que ranura cae, asi que una firma con el DESTINO delante se llama por el
+// punto tomando la FUENTE como sujeto, sin retocar la firma.
+//
+// @expect 42
+
+import std.memory only memcpy_c, memcpy;
+
+i32 main() {
+	u8* a = 8.malloc<u8>();
+	u8* b = 8.malloc<u8>();
+	u8* c = 8.malloc<u8>();
+
+	i32 i = 0_i32;
+	while (i < 8) {
+		a[i] = (u8)(i + 1);
+		b[i] = 0;
+		c[i] = 0;
+		i    = i + 1;
+	}
+
+	// 1) Por el punto, receptor en la ranura 0 y literal en la de `usize`.
+	b.memcpy_c(a, 8);
+
+	// 2) Con hueco: el sujeto es la FUENTE y el destino va primero.
+	a.memcpy(c, _, 8);
+
+	// 3) Y la grafia libre, que es la misma llamada.
+	i64 suma = 0_i64;
+	i        = 0;
+	while (i < 8) {
+		suma = suma + (i64)b[i] + (i64)c[i];
+		i    = i + 1;
+	}
+
+	a.free();
+	b.free();
+	c.free();
+
+	// (1+..+8) dos veces = 72; 72 - 30 = 42.
+	println("suma=${suma}");
+	return (i32)(suma - 30);
+}

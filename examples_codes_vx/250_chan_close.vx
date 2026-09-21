@@ -40,8 +40,8 @@ void consumer(i64 arg) {
 i32 main() {
 	g_ch = chan_new(4); // buffer pequeno -> fuerza park/wake real
 	pool_start(2);
-	pool_submit((i64)(cfn(i64) -> void) consumer, 0);
-	pool_submit((i64)(cfn(i64) -> void) producer, 0);
+	pool_submit((i64)(cfn(i64) -> void)consumer, 0);
+	pool_submit((i64)(cfn(i64) -> void)producer, 0);
 	pool_join();
 	chan_free(g_ch);
 	// sum(1..50) = 1275, count = 50 -> 42 si ambos correctos.

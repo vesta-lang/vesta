@@ -115,7 +115,7 @@ u64 run() {
 	u64 stk = fiber_stack_alloc(65_536);
 
 	// Crear la fibra: 1er switch arrancara fiber_body(st) sobre stk.
-	fiber_init(fib_ctx, stk, (u64)(cfn() -> void) fiber_body, st);
+	fiber_init(fib_ctx, stk, (u64)(cfn() -> void)fiber_body, st);
 
 	// Paso 1: arrancar (main -> fibra).  La fibra incrementa (counter=1) y cede.
 	fiber_switch(main_ctx, fib_ctx);

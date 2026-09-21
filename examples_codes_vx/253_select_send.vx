@@ -53,9 +53,9 @@ i32 main() {
 	c0 = chan_new(1);
 	c1 = chan_new(1);
 	pool_start(3);
-	pool_submit((i64)(cfn(i64) -> void) recv0, 0);
-	pool_submit((i64)(cfn(i64) -> void) recv1, 0);
-	pool_submit((i64)(cfn(i64) -> void) sender, 0);
+	pool_submit((i64)(cfn(i64) -> void)recv0, 0);
+	pool_submit((i64)(cfn(i64) -> void)recv1, 0);
+	pool_submit((i64)(cfn(i64) -> void)sender, 0);
 	pool_join();
 	chan_free(c0);
 	chan_free(c1);

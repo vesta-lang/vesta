@@ -10,7 +10,7 @@ struct Punto {
 	i64 y;
 }
 impl Punto {
-	i64 suma() => this.x + this.             y;
+	i64 suma() => this.x + this.y;
 	i64 escala(i64 k) => (this.x + this.y) * k;
 }
 

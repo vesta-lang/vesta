@@ -44,7 +44,7 @@ i32 main() {
 
 	// --- (3) doble indireccion sobre un nombre de struct --------------------
 	Punto** pp = (Punto**)malloc(8);
-	*pp = p;
+	*pp        = p;
 	acc += (*pp)[0].x; // 33
 
 	// --- (4) primitivos, que siempre entraron por otro camino ---------------

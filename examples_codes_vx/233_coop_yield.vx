@@ -108,9 +108,9 @@ i32 main() {
 	p3[1]      = trace;
 
 	// Crear las 3 tareas suspendibles (cada una con su fibra) en orden.
-	vasync_spawn_fiber((i64)(cfn() -> void) coop_task, (i64)st1);
-	vasync_spawn_fiber((i64)(cfn() -> void) coop_task, (i64)st2);
-	vasync_spawn_fiber((i64)(cfn() -> void) coop_task, (i64)st3);
+	vasync_spawn_fiber((i64)(cfn() -> void)coop_task, (i64)st1);
+	vasync_spawn_fiber((i64)(cfn() -> void)coop_task, (i64)st2);
+	vasync_spawn_fiber((i64)(cfn() -> void)coop_task, (i64)st3);
 
 	// Correr el scheduler round-robin hasta que las 3 terminen.
 	vasync_run();

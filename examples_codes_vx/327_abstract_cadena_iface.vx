@@ -25,14 +25,14 @@ concept Medible {
 // Valido: la obligacion se transfiere al derivado concreto.
 @Abstract
 struct Entidad : Medible {
-	i64                         id;
+	i64 id;
 	public i64 get_id() => this.id;
 }
 
 // Abstracto intermedio: hereda de otro abstracto (Entidad).
 @Abstract
 struct Poligono : Entidad {
-	i64                            lados;
+	i64 lados;
 	public i64 num_lados() => this.lados;
 }
 

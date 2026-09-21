@@ -23,7 +23,7 @@ i32 main() {
 	g_mtx = mutex_new();
 	pool_start(4);
 	for (i64 i = 0_i64; i < NF; i++) {
-		pool_submit((i64)(cfn(i64) -> void) worker, 0);
+		pool_submit((i64)(cfn(i64) -> void)worker, 0);
 	}
 	pool_join();
 	mutex_free(g_mtx);

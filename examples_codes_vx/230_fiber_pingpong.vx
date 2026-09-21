@@ -193,8 +193,8 @@ void fiber_init(u64 ctx, u64 top, u64 entry, u64 arg) {
 	s[5]      = 0;     // rdi
 	s[6]      = arg;   // rbx
 	s[7]      = 0;     // rbp
-	s[8]      = (u64)(cfn() -> void) __fiber_trampoline;
-	s[9]      = (u64)(cfn() -> void) __fiber_exit;
+	s[8]      = (u64)(cfn() -> void)__fiber_trampoline;
+	s[9]      = (u64)(cfn() -> void)__fiber_exit;
 	u64* c    = (u64*)ctx;
 	c[0]      = base;
 }
@@ -208,8 +208,8 @@ void fiber_init(u64 ctx, u64 top, u64 entry, u64 arg) {
 	s[3]      = entry; // r12
 	s[4]      = arg;   // rbx
 	s[5]      = 0;     // rbp
-	s[6]      = (u64)(cfn() -> void) __fiber_trampoline;
-	s[7]      = (u64)(cfn() -> void) __fiber_exit;
+	s[6]      = (u64)(cfn() -> void)__fiber_trampoline;
+	s[7]      = (u64)(cfn() -> void)__fiber_exit;
 	u64* c    = (u64*)ctx;
 	c[0]      = base;
 }
@@ -247,8 +247,8 @@ u64 run() {
 	u64 stk_a = (u64)malloc(65_536);
 	u64 stk_b = (u64)malloc(65_536);
 
-	fiber_init(ctx_a, stk_a + 65_536, (u64)(cfn() -> void) fiber_body, sa);
-	fiber_init(ctx_b, stk_b + 65_536, (u64)(cfn() -> void) fiber_body, sb);
+	fiber_init(ctx_a, stk_a + 65_536, (u64)(cfn() -> void)fiber_body, sa);
+	fiber_init(ctx_b, stk_b + 65_536, (u64)(cfn() -> void)fiber_body, sb);
 
 	// Arrancar: main -> A -> B -> A -> ... (5 rondas c/u) -> A agota -> main.
 	fiber_switch(main_ctx, ctx_a);

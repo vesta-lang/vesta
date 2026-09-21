@@ -21,7 +21,7 @@ class Pair<K, V> {
 		this.first  = f;
 		this.second = s;
 	}
-	public K getFirst() => this. first;
+	public K getFirst() => this.first;
 	public V getSecond() => this.second;
 }
 

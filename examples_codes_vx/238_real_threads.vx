@@ -46,8 +46,8 @@ i32 main() {
 	lo[3]     = 0;
 	g_counter = 0;
 
-	uintptr t1 = vx_thread_spawn((uintptr)(cfn(i64) -> i64) worker, 0);
-	uintptr t2 = vx_thread_spawn((uintptr)(cfn(i64) -> i64) worker, 0);
+	uintptr t1 = vx_thread_spawn((uintptr)(cfn(i64) -> i64)worker, 0);
+	uintptr t2 = vx_thread_spawn((uintptr)(cfn(i64) -> i64)worker, 0);
 	vx_thread_join(t1);
 	vx_thread_join(t2);
 

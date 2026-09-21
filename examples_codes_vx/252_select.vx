@@ -46,9 +46,9 @@ i32 main() {
 	g_ch_a = chan_new(1); // cap 1: fuerza send bloqueante -> park/wake
 	g_ch_b = chan_new(1);
 	pool_start(2);
-	pool_submit((i64)(cfn(i64) -> void) consumer, 0);
-	pool_submit((i64)(cfn(i64) -> void) producer_a, 0);
-	pool_submit((i64)(cfn(i64) -> void) producer_b, 0);
+	pool_submit((i64)(cfn(i64) -> void)consumer, 0);
+	pool_submit((i64)(cfn(i64) -> void)producer_a, 0);
+	pool_submit((i64)(cfn(i64) -> void)producer_b, 0);
 	pool_join();
 	chan_free(g_ch_a);
 	chan_free(g_ch_b);

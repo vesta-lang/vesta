@@ -28,7 +28,7 @@ struct zmm1 {
 	i64 cur0;
 }
 i64 xmm3(i64 rdi) => rdi;
-i64 f11(i64 x) =>    x;
+i64 f11(i64 x) => x;
 i64 ymm7(i64 r15) {
 	i64 rbp = r15 + 1;
 	return rbp;

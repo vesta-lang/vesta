@@ -35,7 +35,7 @@ struct Punto {
 // 1. Dos plantillas separadas por la FORMA de su parametro.  `saca(2)` solo
 // encaja con la primera; `saca(k)` encaja con las dos y gana la segunda, que
 // es la que pide una `Caja`.
-T saca<T>(T x) =>         x;
+T saca<T>(T x) => x;
 T saca<T>(Caja<T> c) => c.v;
 
 // 2. Y aqui tres, con la de dentro-de-dentro.  `Caja<Caja<T>>` pide mas que

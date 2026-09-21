@@ -53,16 +53,16 @@ struct V {
 	u32 c23 @0x005C;
 }
 
-i64 lee0(V v) => (i64)v. c0;
-i64 lee1(V v) => (i64)v. c1;
-i64 lee2(V v) => (i64)v. c2;
-i64 lee3(V v) => (i64)v. c3;
-i64 lee4(V v) => (i64)v. c4;
-i64 lee5(V v) => (i64)v. c5;
-i64 lee6(V v) => (i64)v. c6;
-i64 lee7(V v) => (i64)v. c7;
-i64 lee8(V v) => (i64)v. c8;
-i64 lee9(V v) => (i64)v. c9;
+i64 lee0(V v) => (i64)v.c0;
+i64 lee1(V v) => (i64)v.c1;
+i64 lee2(V v) => (i64)v.c2;
+i64 lee3(V v) => (i64)v.c3;
+i64 lee4(V v) => (i64)v.c4;
+i64 lee5(V v) => (i64)v.c5;
+i64 lee6(V v) => (i64)v.c6;
+i64 lee7(V v) => (i64)v.c7;
+i64 lee8(V v) => (i64)v.c8;
+i64 lee9(V v) => (i64)v.c9;
 i64 lee10(V v) => (i64)v.c10;
 i64 lee11(V v) => (i64)v.c11;
 i64 lee12(V v) => (i64)v.c12;

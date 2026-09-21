@@ -20,7 +20,7 @@ class Contador {
 // Receptor STRUCT (value-type): el metodo ligado captura una COPIA del struct
 // (snapshot al momento de `&p.metodo`); opera sobre esa copia.
 struct Punto {
-	i64                           v;
+	i64 v;
 	i64 escala(i64 k) => this.v * k;
 }
 

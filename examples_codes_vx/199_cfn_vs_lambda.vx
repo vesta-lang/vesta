@@ -123,13 +123,13 @@ i32 main() {
 	tabla[2] = (u64)&negar;
 	i64 suma = 0_i64;
 	for (i64 i = 0_i64; i < 3; i = i + 1) {
-		suma = suma + ((cfn(i64) -> i64) tabla[i])(10); // doblar+triplicar+negar
+		suma = suma + ((cfn(i64) -> i64)tabla[i])(10); // doblar+triplicar+negar
 	}
 	if (suma != 20 + 30 - 10) { return 6; } // 20 + 30 - 10 = 40
 
 	// === 2e. CAST entre firmas distintas (la firma es solo compile-time) ===
 	cfn(i64) -> i64 ci = &doblar;
-	cfn(u64) -> u64 cu = (cfn(u64) -> u64) ci;
+	cfn(u64) -> u64 cu = (cfn(u64) -> u64)ci;
 	if (cu(21) != 42) { return 7; }
 
 	// === 2h. &Tipo.metodo -- puntero a metodo NO LIGADO (estilo C) ===

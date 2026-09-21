@@ -1,0 +1,36 @@
+namespace ejemplos.borrow_anon_misma_sentencia_err;
+
+// NEGATIVO: un prestamo SIN NOMBRE cuenta mientras dura su sentencia.
+//
+// Es la otra mitad de `118_borrow_nll.vx`, y la que hay que guardar aparte.
+//
+// Un prestamo anonimo -- `f(lend(u))`, con el `lend` escrito en el sitio de la
+// llamada -- no se soltaba NUNCA: el comprobador indexa por el nombre de quien
+// se lo queda y este no tiene ninguno, asi que se quedaba sin clave, y sin
+// clave nadie puede ponerle ultimo uso ni soltarlo.  Vivia hasta el final de
+// la funcion y bloqueaba cualquier prestamo posterior del mismo sitio.
+//
+// Al darle identidad -- DONDE esta escrito -- y hacer que muera con su
+// sentencia, el riesgo es pasarse al otro lado: que deje de contar tambien
+// DENTRO de ella.  Y ahi si esta vivo, porque los dos argumentos se evaluan
+// para la misma llamada.  Esto tiene que seguir siendo un error.
+//
+// Va en su propio fichero y no junto al positivo por una razon de metodo: un
+// negativo solo guarda lo que haria compilar el fichero ENTERO.  Metido al
+// lado de otro caso que tambien falla, este podria empezar a colarse y la
+// prueba seguiria en verde.
+//
+// @compile-fail
+// @expect-error VX2027
+
+void mezcla(borrow<i32> a, borrow_mut<i32> b) {
+	write_borrow(b, read_borrow(a));
+}
+
+i32 main() {
+	unique<i32> owner = unique_box(42);
+	// Compartido y exclusivo del mismo dueno, los dos vivos a la vez porque
+	// los dos son para ESTA llamada.
+	mezcla(lend(owner), lend_mut(owner));
+	return 0;
+}

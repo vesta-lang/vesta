@@ -1,0 +1,59 @@
+namespace ejemplos.generico_nombre_escrito_err;
+
+// NEGATIVO: un mensaje cita el tipo COMO SE ESCRIBIO, no como se guarda.
+//
+// Una instanciacion vive con el nombre que se le dio al crearla -- `Caja_i64`
+// --, y ese nombre no esta escrito en ningun sitio: el usuario escribio
+// `Caja<i64>`.  Citarlo como esta guardado manda a buscar un tipo que no
+// existe en su fichero, y ademas esconde que lo que tiene delante es un
+// generico.
+//
+// Lo que se comprueba no es que falle -- el metodo no existe y eso esta claro
+// --, sino QUE NOMBRE sale en el mensaje, en las cuatro formas:
+//
+//   simple        `Caja<i64>`
+//   anidado       `Caja<Caja<i64>>`, deshecho hasta el fondo
+//   varios args   `Par<i64, Caja<u8>>`
+//   con namespace `col.Caja<i64>` -- los DOS ejes a la vez
+//
+// El ultimo es el que fallaba.  Los dos ejes se ACUMULAN en el mismo nombre
+// (`col__Caja_i64`) y se aplicaban como si fueran excluyentes: deshecho antes
+// el namespace, salia `col.Caja_i64` -- medio nombre traducido y medio no, con
+// la parte sin traducir siendo justo la que no existe en el fichero.
+//
+// @compile-fail
+// @expect-error Caja<i64>
+// @expect-error Caja<Caja<i64>>
+// @expect-error Par<i64, Caja<u8>>
+// @expect-error col.Caja<i64>
+
+struct Caja<T> {
+	T v;
+}
+
+struct Par<K, V> {
+	K a;
+	V b;
+}
+
+namespace col {
+	public struct Caja<T> {
+		public T v;
+	}
+}
+
+i32 main() {
+	Caja<i64> simple;
+	simple.noexiste();
+
+	Caja<Caja<i64>> anidado;
+	anidado.noexiste();
+
+	Par<i64, Caja<u8>> varios;
+	varios.noexiste();
+
+	col.Caja<i64> conns;
+	conns.noexiste();
+
+	return 0;
+}

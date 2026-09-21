@@ -56,7 +56,7 @@ i64 escala(Punto p, i64 k) => (p.x + p.y) * k;
 
 // 3 y 4. receptor primitivo, con sobrecarga entre las candidatas
 u64 doble(u64 v) => v * 2_u64;
-u64 mas(u64 a, u64 b) => a +            b;
+u64 mas(u64 a, u64 b) => a + b;
 u64 mas(u64 a, u64 b, u64 c) => a + b + c;
 
 // 5. el MISMO nombre para otro receptor: otra cabeza de tipo, otra candidata

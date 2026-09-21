@@ -12,7 +12,7 @@ using Cantidad = i64;
 
 // #4: metodo generico.
 struct Caja {
-	i64             base;
+	i64 base;
 	U id<U>(U x) => x;
 }
 

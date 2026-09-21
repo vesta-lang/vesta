@@ -57,12 +57,12 @@ i32 main() {
 
 	i64 k = 0_i64;
 	while (k < 40) {
-		pool_submit((i64)(cfn(i64) -> void) coop_fiber, 0); // ceden
+		pool_submit((i64)(cfn(i64) -> void)coop_fiber, 0); // ceden
 		k = k + 1;
 	}
 	k = 0;
 	while (k < 60) {
-		pool_submit((i64)(cfn(i64) -> void) plain_task, 0); // no ceden
+		pool_submit((i64)(cfn(i64) -> void)plain_task, 0); // no ceden
 		k = k + 1;
 	}
 

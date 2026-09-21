@@ -2481,6 +2481,44 @@ es = "@SyncImpl en '{0}': su nombre no acaba ni en 'monitor_enter' ni en 'monito
 en = "@SyncImpl is incomplete: '{0}' is missing.  Acquiring and releasing are one decision; replacing only one of them pairs the language's monitor with yours, so the lock would be taken one way and released another"
 es = "@SyncImpl esta a medias: falta '{0}'.  Adquirir y liberar son UNA decision; sustituir solo uno empareja el monitor del lenguaje con el tuyo, asi que el cerrojo se tomaria de una forma y se soltaria de otra"
 
+# --- anotacion valida que ese miembro no admite (VXP094) ---
+#
+# Un struct es una clase ligera -- tiene campos, metodos, constructores,
+# `@Virtual` y se puede declarar abstracto --, asi que escribirle una anotacion
+# es lo natural.  Pero sus MIEMBROS solo admiten hoy `@Virtual` y `@Override`;
+# cualquier otra la rechazaba el parser con "se esperaba un tipo de campo o
+# metodo", que acusa a la linea de debajo y no dice nada de la anotacion.
+#
+# Las de la declaracion del struct (`@Abstract`, `@Target`, ...) SI valen: van
+# por otro camino.  Por eso el mensaje distingue el miembro del struct entero,
+# que es justo lo que confundia.
+
+[VXP094]
+en = "'@{0}' is a real annotation, but a struct member does not take it yet: the ones it takes are {1}.  On the struct declaration itself the usual ones do work"
+es = "'@{0}' si es una anotacion, pero un miembro de struct todavia no la admite: las que admite son {1}.  Sobre la declaracion del struct si valen las de siempre"
+
+# --- el filtro por ranura, mezclado con argumentos (VXP095 / VXP096) ---
+#
+# `&f(.min, .max)` no llama a nadie: nombra ranuras para decir a cual de las
+# homonimas se apunta, cuando el tipo no alcanza porque las dos lo tienen
+# igual.  La grafia es la del init designado, que es la que el lenguaje ya
+# tiene para nombrar una ranura, y se distingue de una llamada con nombres
+# (`f(.min = 3)`) por que NO hay valores.
+#
+# Mezclar las dos no significa nada -- o se esta llamando o se esta apuntando
+# --, y son dos errores distintos segun por donde se empiece: el nombre suelto
+# detras de argumentos, y el argumento detras de nombres sueltos.  El parser lo
+# ve en el sitio, asi que lo dice ahi en vez de dejar un arbol raro para que
+# alguien lo interprete despues.
+
+[VXP095]
+en = "a bare slot name only means something in '&f(.a, .b)', which says which overload is meant: here there are arguments, so this one needs its '= value'"
+es = "un nombre de ranura a secas solo significa algo en '&f(.a, .b)', que dice a que sobrecarga se apunta: aqui hay argumentos, asi que este necesita su '= valor'"
+
+[VXP096]
+en = "'&f(.a, .b)' names slots and nothing else: they do not mix with arguments, because nobody is being called"
+es = "'&f(.a, .b)' nombra ranuras y ya esta: no se mezclan con argumentos, porque no se esta llamando a nadie"
+
 # --- anotacion que no existe (VXP092 / VXP093) ---
 #
 # El parser leia el nombre tras el `@`, lo comparaba con los que sabe manejar, y
@@ -3274,6 +3312,22 @@ es = "'{0}' no es una clase ni un struct, y tampoco hay ninguna funcion libre '{
 en = "no '{1}' takes a '{0}' as its first parameter, but there are for: {2}.  Cast the receiver: `(({3})receiver).{1}(...)`"
 es = "ninguna '{1}' toma un '{0}' de primer parametro, pero si las hay para: {2}.  Convierte el receptor: `(({3})receptor).{1}(...)`"
 
+# El hermano de VX2071 para el PRESTAMO: la candidata existe y pide un
+# `borrow<T>`, y el receptor es el DUENYO de ese `T`.  De un duenyo a un
+# prestamo no se llega con un cast -- son cosas distintas, no dos vistas del
+# mismo valor --: se llega prestandolo, que es lo que el borrow checker mira.
+#
+# Por eso no se hace solo.  Que el punto fabricara el prestamo se saltaria
+# justo la operacion que tiene reglas (exclusividad, que no escape), y las dos
+# grafias de la misma llamada dejarian de comprobar lo mismo -- por el lado que
+# se salta las comprobaciones, que es el peor --.  Asi que se pide escrito, y
+# aqui se dice como.
+# {0} el tipo del receptor, {1} el nombre tras el punto, {2} lo que pide la
+# candidata, {3} `lend` o `lend_mut` segun cual sea.
+["VX2127"]
+en = "'{1}' does take a '{2}', and the receiver is the OWNER of it: an owner is not a borrow, and no cast turns one into the other -- lend it: `{3}(receiver).{1}(...)`.  It is not done for you because that is the operation with the rules (exclusivity, not escaping), and the dot must not skip what the free call checks"
+es = "'{1}' si toma un '{2}', y el receptor es el DUENYO de eso: un duenyo no es un prestamo, y ningun cast convierte uno en otro -- prestalo: `{3}(receptor).{1}(...)`.  No se hace solo porque esa es la operacion que tiene reglas (exclusividad, que no escape), y el punto no puede saltarse lo que la llamada libre comprueba"
+
 # Dos huecos son dos receptores, y solo hay uno.  No se elige en silencio cual
 # de los dos: se dice.
 ["VX2072"]
@@ -3572,6 +3626,65 @@ es = "@Provides: '{1}' dice cubrir el builtin '{0}', pero no se le puede alcanza
 en = "'{0}.{1}(...)': the type '{0}' does declare '{1}', but not as `static`, so it needs a receiver and cannot be called through the type.  Add `static` to its declaration -- that is how the stdlib declares its own ({0}'s neighbours: `public static ... max()`) -- or call it on an instance."
 es = "'{0}.{1}(...)': el tipo '{0}' SI declara '{1}', pero no como `static`, asi que necesita un receptor y no se le puede llamar por el tipo.  Añade `static` a su declaracion -- es como la stdlib declara los suyos (`public static ... max()`) -- o llamalo sobre una instancia."
 
+# `&f` con VARIAS homonimas y nada que decida cual.  En una llamada lo deciden
+# los argumentos; en una referencia no hay ninguno, asi que decide el tipo que
+# el contexto ESPERA -- y si no hay contexto, no hay respuesta.  Se dicen las
+# candidatas: el error de C++ para esto es famoso por no decirlas.
+# {0} el nombre, {1} cuantas hay.
+["VX2121"]
+en = "'&{0}' does not say which one: '{0}' has {1} overloads and nothing here decides.  In a call the arguments decide; in a reference there are none, so it is the type the context expects -- write it, or the cast."
+es = "'&{0}' no dice a cual: '{0}' tiene {1} sobrecargas y aqui no hay nada que lo decida.  En una llamada lo deciden los argumentos; en una referencia no hay ninguno, asi que decide el tipo que el contexto espera -- escribelo, o el cast."
+
+# `&f(.min, .max)` nombrando ranuras que ninguna candidata tiene.  Es la
+# SEGUNDA capa: cuando dos homonimas tienen los mismos tipos, lo unico que las
+# separa es como se llaman sus ranuras.  Si lo escrito no casa con ninguna, la
+# referencia no apunta a nada, y decirlo aqui es mejor que dejar que el fallo
+# salga como un tipo que no encaja.  Las candidatas se citan CON los nombres,
+# que es lo que las distingue.
+# {0} el nombre, {1} las ranuras escritas.
+["VX2124"]
+en = "'&{0}({1})': none of its overloads has those slots.  In '&f(.a, .b)' the names are what picks one when the type does not, so they have to be the ones the signature declares"
+es = "'&{0}({1})': ninguna de sus sobrecargas tiene esas ranuras.  En '&f(.a, .b)' los nombres son lo que elige cuando el tipo no decide, asi que tienen que ser los que la firma declara"
+
+# Como VX2121, pero donde el tipo esperado NO PUEDE decidir porque dos
+# candidatas lo tienen igual.  Mandar a escribir el tipo seria mandar a hacer
+# lo que ya esta hecho; lo que las separa es como se llaman sus ranuras, y para
+# eso esta la segunda capa.  Se cita la forma exacta que hay que escribir.
+# {0} el nombre, {1} las ranuras de la primera candidata, ya con los puntos.
+["VX2125"]
+en = "'&{0}' does not say which one, and the type cannot say it either: two of them have the same one.  What tells them apart is what their slots are called, so name them: '&{0}({1})'"
+es = "'&{0}' no dice a cual, y el tipo tampoco puede decirlo: dos de ellas lo tienen igual.  Lo que las separa es como se llaman sus ranuras, asi que nombralas: '&{0}({1})'"
+
+# `&Tipo.nombre` donde el tipo declara un METODO asi Y hay una funcion libre
+# alcanzable por ese receptor que tambien se llama asi.  Las dos son validas
+# por el punto, asi que tomar la direccion por el tipo no puede elegir una: es
+# la misma ambiguedad que denuncia `p.nombre()`, y se contesta igual.  La
+# salida es escribir cual: el metodo por su clase, la libre por su nombre.
+# {0} el nombre, {1} el tipo.
+["VX2126"]
+en = "'&{1}.{0}' does not say which one: '{1}' declares a method called '{0}' AND there is a free function of that name reachable by a '{1}'.  Both answer to the dot, so naming the type does not pick one -- '&{0}' is the free one; for the method, rename one of the two, which is what '<a {1}>.{0}(...)' already asks for"
+es = "'&{1}.{0}' no dice a cual: '{1}' declara un metodo llamado '{0}' Y hay una funcion libre de ese nombre alcanzable por un '{1}'.  Las dos responden al punto, asi que nombrar el tipo no elige -- '&{0}' es la libre; para el metodo, renombra una de las dos, que es lo que '<un {1}>.{0}(...)' ya pide"
+
+# Una de las candidatas de VX2121, VX2124 o VX2125.  {0} su firma.
+["VX2122"]
+en = "candidate: {0}"
+es = "candidata: {0}"
+
+# `auto` sin nada de donde sacar el tipo: el inicializador no devuelve un
+# valor.  {0} el nombre de la variable.
+["VX2123"]
+en = "cannot infer the type of '{0}': its initializer does not return a value"
+es = "no se puede inferir el tipo de '{0}': su inicializador no devuelve un valor"
+
+# El hueco dice que el receptor va a OTRA ranura, asi que la llamada es la
+# forma LIBRE del miembro -- la que lleva el receptor de primer parametro -- y
+# ahi hay una ranura mas que llenar.  Sin esta nota el error de arriba es
+# cierto pero se calla lo util: que el nombre SI existe, y donde.
+# {0} el nombre, {1} el tipo que lo declara.
+["VX2120"]
+en = "'{1}' does declare '{0}', and with a hole the call is its FREE form -- the one that takes the receiver as its first parameter -- so that slot has to be given too: `{0}(<receiver>, ...)`.  Without the hole, `<receiver>.{0}(...)` is the ordinary method call."
+es = "'{1}' SI declara '{0}', y con hueco la llamada es su forma LIBRE -- la que toma el receptor de primer parametro --, asi que esa ranura tambien hay que darla: `{0}(<receptor>, ...)`.  Sin el hueco, `<receptor>.{0}(...)` es la llamada al metodo de siempre."
+
 ["VX2097"]
 en = "@Provides: '{0}' does not meet the contract of the builtin '{1}': it takes ({4}) and returns {5}, where the builtin takes ({2}) and returns {3}.  The annotation names the builtin, but what the function implements is the primitive underneath, and its signature is the one to match."
 es = "@Provides: '{0}' no cumple el contrato del builtin '{1}': toma ({4}) y devuelve {5}, donde el builtin toma ({2}) y devuelve {3}.  La anotacion nombra el builtin, pero lo que la funcion implementa es el primitivo de debajo, y su firma es la que hay que cumplir."
@@ -3612,3 +3725,58 @@ es = "esto no produce un tipo: donde va un tipo, la llamada tiene que resolverse
 ["VX2100"]
 en = "scoped method {0} of '{1}' does not exist: only {2} are reachable from here.  The index comes from 'scoped.method.count<{1}>()', and what it counts depends on what THIS file imports"
 es = "el metodo alcanzable {0} de '{1}' no existe: desde aqui solo se alcanzan {2}.  El indice sale de 'scoped.method.count<{1}>()', y lo que ese cuenta depende de lo que importa ESTE fichero"
+
+# --- una direccion sin saber de que memoria es (VX2128) ---
+#
+# Un tipo plano -- un `u64`, un `uintptr` -- puede llevar una direccion del
+# ANFITRION o una de la MAQUINA, y el tipo no lo dice.  No se puede saber:
+# solo se puede DEDUCIR (del tipo cuando lo hay, de la frontera del FFI, de
+# las escrituras a un campo).  Donde la deduccion no llega, esto es un ERROR y
+# no una suposicion.
+#
+# Por que no se elige una por defecto: la llamada indirecta de la maquina
+# interpreta el valor como codigo SUYO, asi que darle una direccion del
+# proceso no da un error -- DEVUELVE CERO --.  Y cuando lo llamado era una
+# syscall, cero es ademas STATUS_SUCCESS: lo que nunca llego a ejecutarse se
+# da por bueno.  Un valor por defecto que "funciona" convierte un error en un
+# resultado equivocado, y eso no se ve hasta mucho despues.
+[VX2128]
+en = "cannot tell which memory this address belongs to, and calling it needs to know: a flat type can hold either a host address or a machine one, and nothing here says which.  Say it -- cast it to a pointer for host memory, or to 'VirtualPtr<T>' for the machine's"
+es = "no se puede saber de que memoria es esta direccion, y para llamarla hay que saberlo: un tipo plano puede llevar una del anfitrion o una de la maquina, y aqui nada lo dice.  Dilo -- un cast a puntero para la del anfitrion, o a 'VirtualPtr<T>' para la de la maquina"
+
+# --- por que no se supo de que memoria es (VX2129..VX2133) ---
+#
+# El motivo no es un adorno: separa casos que se arreglan de forma OPUESTA.
+# Lo que llega por un parametro no lo puede saber NUNCA quien lo recibe --
+# solo quien lo pasa --, mientras que lo que viene de memoria si se deduce
+# mirando quien escribe ahi.  Un mensaje que no los separe manda al sitio
+# equivocado.
+[VX2129]
+en = "it arrived as a parameter: which memory it belongs to is known by whoever passes it, not by whoever receives it"
+es = "llego como parametro: de que memoria es lo sabe quien lo pasa, no quien lo recibe"
+
+[VX2130]
+en = "it came out of memory: which memory it belongs to depends on what was written there"
+es = "salio de memoria: de que memoria es depende de lo que se escribiera ahi"
+
+[VX2131]
+en = "it is the result of a computation, so there is no origin to follow"
+es = "es el resultado de una cuenta, asi que no hay origen que seguir"
+
+[VX2132]
+en = "two paths reach here saying different things, so neither can be taken as the answer"
+es = "dos caminos llegan aqui diciendo cosas distintas, asi que ninguno vale como respuesta"
+
+[VX2133]
+en = "the chain of definitions was too long to follow"
+es = "la cadena de definiciones era demasiado larga para seguirla"
+
+# --- cuantas direcciones de funcion cruzan a codigo real (VX2134) ---
+#
+# Lo IMPRIME una medicion, no un diagnostico, pero sale del catalogo igual:
+# que un texto lo lea una persona es lo que decide que tenga que estar en su
+# idioma, no si viene de un error.  Escribirlo a mano aqui seria dejar castellano
+# clavado en el compilador, que es justo lo que el catalogo existe para evitar.
+[VX2134]
+en = "[fnaddr] addresses={0} crossing={1} (native-call={2} inline-asm={3} store={4} return={5} via-callee={6})"
+es = "[fnaddr] direcciones={0} cruzan={1} (llamada-nativa={2} asm={3} almacen={4} retorno={5} por-callee={6})"

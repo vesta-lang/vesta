@@ -42,9 +42,9 @@ concept Sumable<T> = true;
 
 // Sobre un struct: el numero de parametros es justo lo que se rompia.
 impl Punto {
-	i64 cero() => this.                               y;
-	i64 uno(i64 a) => this.x +                        a;
-	i64 dos(i64 a, i64 b) => this.x + this.y + a +    b;
+	i64 cero() => this.y;
+	i64 uno(i64 a) => this.x + a;
+	i64 dos(i64 a, i64 b) => this.x + this.y + a + b;
 	i64 tres(i64 a, i64 b, i64 c) => this.x + a + b + c;
 }
 

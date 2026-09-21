@@ -148,9 +148,9 @@ i32 main() {
 	p3[1]    = lock_obj;
 	p3[2]    = cnt_cell;
 
-	vasync_spawn_fiber((i64)(cfn() -> void) race_task, (i64)s1);
-	vasync_spawn_fiber((i64)(cfn() -> void) race_task, (i64)s2);
-	vasync_spawn_fiber((i64)(cfn() -> void) race_task, (i64)s3);
+	vasync_spawn_fiber((i64)(cfn() -> void)race_task, (i64)s1);
+	vasync_spawn_fiber((i64)(cfn() -> void)race_task, (i64)s2);
+	vasync_spawn_fiber((i64)(cfn() -> void)race_task, (i64)s3);
 
 	vasync_run();
 

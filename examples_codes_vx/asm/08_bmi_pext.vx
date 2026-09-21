@@ -5,7 +5,7 @@
 // @expect 3
 u64 main() {
 
-	register("rdi") u64 src = 0b1011_u64;  // bits: 3,1,0
+	register("rdi") u64 src  = 0b1011_u64; // bits: 3,1,0
 	register("rsi") u64 mask = 0b1010_u64; // selecciona los bits 3 y 1
 	register("rax") u64 out;
 	asm volatile {

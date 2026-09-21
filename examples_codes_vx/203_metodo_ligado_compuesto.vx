@@ -24,7 +24,7 @@ Contador hacer(i64 base) {
 }
 
 struct Punto {
-	i64                x;
+	i64 x;
 	i64 leer() => this.x;
 }
 

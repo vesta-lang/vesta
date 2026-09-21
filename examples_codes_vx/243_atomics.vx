@@ -32,7 +32,7 @@ i32 main() {
 	uintptr[4] h;
 	i64        k = 0_i64;
 	while (k < 4) {
-		h[k] = vx_thread_spawn((uintptr)(cfn(u64) -> void) worker, (uintptr)k);
+		h[k] = vx_thread_spawn((uintptr)(cfn(u64) -> void)worker, (uintptr)k);
 		k    = k + 1;
 	}
 	k = 0;
