@@ -84,8 +84,12 @@ enum class CostClass : uint8_t {
 const char *cost_class_str(CostClass c);
 
 /**
- * @brief Nombre de una confianza (@c "exacta", @c "heuristica",
- *        @c "desconocida").
+ * @brief Nombre ESTABLE de una confianza (@c "exact", @c "heuristic",
+ *        @c "unknown").
+ *
+ * No es texto de usuario: viaja en el JSON de @c --analyze y en el del
+ * servidor de lenguaje, donde quien lo recibe lo COMPARA.  Por eso va en
+ * ingles, como @c certainty_name del ASA, y lo traduce el que lo ensena.
  *
  * Existia y no estaba declarada, asi que quien la necesitaba fuera del modulo
  * -- el servidor de lenguaje -- mandaba el numero del enum.  Un "2" no dice

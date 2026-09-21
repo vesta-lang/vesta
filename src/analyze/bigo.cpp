@@ -48,6 +48,7 @@
 #include "vx/asm/asm_analyze.h" // un `asm` puede llevar un bucle dentro
 #include "vx/asm/asm_cfg.h" // ...y su grafo de flujo dice cuantos y anidados
 #include "vx/asm/asm_effects.h" // arquitectura del objetivo (tabla de efectos)
+#include "vx/diag/diag_catalog.h" // el detalle lo LEE alguien: sale del catalogo
 
 #include <algorithm>
 #include <cctype>
@@ -79,10 +80,10 @@ const char *cost_class_str(CostClass c) {
 
 const char *confidence_str(Confidence c) {
     switch (c) {
-    case Confidence::EXACT: return "exacta";
-    case Confidence::HEURISTIC: return "heuristica";
+    case Confidence::EXACT: return "exact";
+    case Confidence::HEURISTIC: return "heuristic";
     case Confidence::UNKNOWN:
-    default: return "desconocida";
+    default: return "unknown";
     }
 }
 
@@ -672,33 +673,32 @@ CostResult analyze_function(const ir::IrFunction &fn,
     std::ostringstream det;
     if (!asm_forma_segura && asm_depth_total == 0 && headers.empty() &&
         !r.is_recursive) {
-        det << "un bloque asm mueve el control por una via que no se puede "
-               "seguir (salto indirecto, `ret`, llamada o etiqueta ausente): "
-               "no consta que no de vueltas";
+        det << vx::diag::format("VX9287", {});
     } else if (asm_depth_total > 0 && headers.empty() && !r.is_recursive) {
-        det << asm_depth_total
-            << " bucle(s) dentro de un asm (el numero de vueltas no se acota "
-               "aqui; declaralo con @complexity si lo sabes)";
+        det << vx::diag::format("VX9288",
+                                {std::to_string(asm_depth_total)});
     } else if (max_depth.total() == 0 && !r.is_recursive) {
-        det << "sin loops ni recursion";
+        det << vx::diag::format("VX9289", {});
     } else {
         bool first = true;
         if (max_depth.total() > 0) {
-            det << headers.size() << " loop(s), anidamiento max "
-                << max_depth.total();
+            det << vx::diag::format(
+                "VX9290", {std::to_string(headers.size()),
+                           std::to_string(max_depth.total())});
             /* Que parte del anidamiento crece despacio.  Sin decirlo, dos
              * cifras de la misma linea se contradicen: "O(n log n)" con
              * "anidamiento max 2" parece un error de cuenta. */
             if (max_depth.log > 0)
-                det << " (" << max_depth.log << " de ellos multiplicativo"
-                    << (max_depth.log == 1 ? "" : "s") << ": log n)";
+                det << vx::diag::format(
+                    max_depth.log == 1 ? "VX9291" : "VX9292",
+                    {std::to_string(max_depth.log)});
             first = false;
         }
         if (r.is_recursive) {
             if (!first) det << "; ";
-            det << "recursiva (" << self_calls << " self-call"
-                << (self_calls == 1 ? "" : "s") << ")";
-            if (r.is_divide_conquer) det << " divide-y-venceras";
+            det << vx::diag::format(self_calls == 1 ? "VX9293" : "VX9294",
+                                    {std::to_string(self_calls)});
+            if (r.is_divide_conquer) det << vx::diag::format("VX9295", {});
         }
     }
     // 4.a. Detectar la ESTRATEGIA de dispatch de match/switch y anotarla.
@@ -722,14 +722,14 @@ CostResult analyze_function(const ir::IrFunction &fn,
         }
         const char *sw = nullptr;
         if (has_dense)
-            sw = "switch O(1) jump table (denso)";
+            sw = "VX9296";
         else if (has_bst)
-            sw = "switch O(log k) BST (k casos)";
+            sw = "VX9297";
         else if (has_linear)
-            sw = "switch O(k) lineal (k casos)";
+            sw = "VX9298";
         if (sw) {
             if (det.tellp() > 0) det << "; ";
-            det << sw;
+            det << vx::diag::format(sw, {});
         }
     }
     r.detail = det.str();

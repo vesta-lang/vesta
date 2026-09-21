@@ -292,18 +292,26 @@ function explicar(
             parrafo(
                 md,
                 grupo.fuentes.length === 1
-                    ? `aqui llega ${articulo(grupo.fuentes[0].clase)} desde la linea ${desde}`
-                    : `aqui se llega desde ${grupo.fuentes.length} sitios: lineas ${desde}`,
+                    ? vscode.l10n.t('{0} arrives here from line {1}',
+                                    articulo(grupo.fuentes[0].clase), desde)
+                    : vscode.l10n.t('reached here from {0} places: lines {1}',
+                                    grupo.fuentes.length, desde),
             );
         }
         for (const fuente of grupo.fuentes) {
             if (fuente.linea !== linea) {
                 continue;
             }
-            const sentido = grupo.hasta > fuente.linea ? 'baja' : 'sube';
+            /* Subir y bajar son dos frases ENTERAS, no una con un verbo
+             * metido: el orden de las palabras no es el mismo en todos los
+             * idiomas, y un verbo suelto no se puede traducir sin la frase. */
             parrafo(
                 md,
-                `${fuente.clase} que ${sentido} a la linea ${grupo.hasta + 1}`,
+                grupo.hasta > fuente.linea
+                    ? vscode.l10n.t('{0} going down to line {1}',
+                                    articulo(fuente.clase), grupo.hasta + 1)
+                    : vscode.l10n.t('{0} going up to line {1}',
+                                    articulo(fuente.clase), grupo.hasta + 1),
             );
         }
     }
@@ -315,7 +323,8 @@ function explicar(
         if (salida.line - 1 === linea) {
             parrafo(
                 md,
-                `de aqui el flujo SALE del bloque, a \`${salida.symbol}\``,
+                vscode.l10n.t('from here the flow LEAVES the block, to `{0}`',
+                              salida.symbol),
             );
         }
     }
@@ -323,16 +332,15 @@ function explicar(
     if (bloque.hasIndirect) {
         parrafo(
             md,
-            '_hay un salto indirecto en este bloque -- a un registro, no a una ' +
-            'etiqueta --: su destino no se sabe hasta ejecutarlo, asi que ' +
-            'faltan flechas_',
+            vscode.l10n.t(
+                '_there is an indirect jump in this block -- to a register, not to a label --: its target is not known until it runs, so arrows are missing_'),
         );
     }
     if (bloque.hasUnresolved) {
         parrafo(
             md,
-            '_hay un salto a una etiqueta local (`.algo`) que el bloque no ' +
-            'define: eso no lo resuelve nadie_',
+            vscode.l10n.t(
+                '_there is a jump to a local label (`.something`) that the block does not define: nobody resolves that_'),
         );
     }
     return md;
@@ -353,10 +361,27 @@ function parrafo(md: vscode.MarkdownString, texto: string): void {
 }
 
 /**
- * @brief El articulo que le toca a una clase de salto.
+ * @brief Como se nombra una clase de salto dentro de la frase.
+ *
+ * El articulo va DENTRO de la traduccion, no delante: en espanol depende del
+ * genero de la palabra ("una rama", "un salto") y en otros idiomas puede no
+ * haber ninguno.  Ponerlo aparte obligaba a acertar el genero de un texto que
+ * viene del servidor.
+ *
  * @param clase Clase que informa el servidor.
- * @return La clase con su articulo delante.
+ * @return La clase tal y como entra en la frase.
  */
 function articulo(clase: string): string {
-    return clase === 'rama' ? 'una rama' : `un ${clase}`;
+    switch (clase) {
+        case 'branch': return vscode.l10n.t('a branch');
+        case 'jump': return vscode.l10n.t('a jump');
+        case 'call': return vscode.l10n.t('a call');
+        case 'ret': return vscode.l10n.t('a return');
+        case 'indirect': return vscode.l10n.t('an indirect jump');
+        case 'unclassified': return vscode.l10n.t('an unclassified terminator');
+        case 'fallthrough': return vscode.l10n.t('a fallthrough');
+        // Una clase que no se conoce se ensena TAL CUAL: es lo que delata que
+        // el servidor mando algo nuevo, en vez de taparlo con una frase.
+        default: return clase;
+    }
 }

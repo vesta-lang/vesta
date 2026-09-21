@@ -109,98 +109,118 @@ function componer(linea: string, f: InstructionResponse): vscode.MarkdownString 
 
     const c = f.cost;
     if (c?.timed) {
-        md.appendMarkdown(`**En ${f.microarch}**\n\n`);
-        md.appendMarkdown(`- latencia: ${c.latency}\n`);
-        md.appendMarkdown(`- se puede repetir cada: ${c.reciprocalThroughput}\n`);
-        md.appendMarkdown(`- uops: ${c.uops}\n`);
+        md.appendMarkdown('**' + vscode.l10n.t('On {0}', f.microarch ?? '') + '**\n\n');
+        md.appendMarkdown('- ' + vscode.l10n.t('latency: {0}', c.latency ?? '') + '\n');
+        md.appendMarkdown(
+            '- ' + vscode.l10n.t('can repeat every: {0}',
+                                 c.reciprocalThroughput ?? '') + '\n');
+        md.appendMarkdown('- ' + vscode.l10n.t('uops: {0}', c.uops ?? '') + '\n');
         if (c.divCycles !== undefined) {
-            md.appendMarkdown(`- ciclos de division: ${c.divCycles}\n`);
+            md.appendMarkdown(
+                '- ' + vscode.l10n.t('division cycles: {0}', c.divCycles) + '\n');
         }
         if (c.microcoded) {
-            md.appendMarkdown('- microcodificada\n');
+            md.appendMarkdown('- ' + vscode.l10n.t('microcoded') + '\n');
         }
         if (c.macroFusible) {
-            md.appendMarkdown('- se puede fusionar con la siguiente\n');
+            md.appendMarkdown('- ' + vscode.l10n.t('can fuse with the next one') + '\n');
         }
         const puertos = (c.ports ?? [])
             .map(p => `${p.name ?? p.port}x${p.uops}`)
             .join(', ');
         if (puertos.length > 0) {
-            md.appendMarkdown(`- puertos: ${puertos}\n`);
+            md.appendMarkdown('- ' + vscode.l10n.t('ports: {0}', puertos) + '\n');
         }
         md.appendMarkdown('\n');
     } else if (f.microarch) {
         // Decir que esa maquina no la cronometra no es lo mismo que no saber
         // nada de la instruccion: lo demas sigue siendo cierto.
-        md.appendMarkdown(`_${f.microarch} no cronometra esta forma._\n\n`);
+        md.appendMarkdown(
+            '_' + vscode.l10n.t('{0} has no timings for this form.', f.microarch) +
+            '_\n\n');
     }
 
     const toca: string[] = [];
     if (f.reads?.length) {
-        toca.push(`lee \`${f.reads.join(', ')}\``);
+        toca.push(vscode.l10n.t('reads `{0}`', f.reads.join(', ')));
     }
     if (f.writes?.length) {
-        toca.push(`escribe \`${f.writes.join(', ')}\``);
+        toca.push(vscode.l10n.t('writes `{0}`', f.writes.join(', ')));
     }
     if (f.readsMemory) {
-        toca.push('lee memoria');
+        toca.push(vscode.l10n.t('reads memory'));
     }
     if (f.writesMemory) {
-        toca.push('escribe memoria');
+        toca.push(vscode.l10n.t('writes memory'));
     }
     if (f.flagsRead?.length) {
-        toca.push(`lee banderas \`${f.flagsRead.join(', ')}\``);
+        toca.push(vscode.l10n.t('reads flags `{0}`', f.flagsRead.join(', ')));
     } else if (f.readsFlags) {
-        toca.push('lee banderas');
+        toca.push(vscode.l10n.t('reads flags'));
     }
     if (f.flagsWritten?.length) {
-        toca.push(`escribe banderas \`${f.flagsWritten.join(', ')}\``);
+        toca.push(vscode.l10n.t('writes flags `{0}`', f.flagsWritten.join(', ')));
     } else if (f.writesFlags) {
-        toca.push('escribe banderas');
+        toca.push(vscode.l10n.t('writes flags'));
     }
     if (f.readsState?.length) {
-        toca.push(`lee \`${f.readsState.join(', ')}\``);
+        toca.push(vscode.l10n.t('reads `{0}`', f.readsState.join(', ')));
     }
     if (f.writesState?.length) {
-        toca.push(`escribe \`${f.writesState.join(', ')}\``);
+        toca.push(vscode.l10n.t('writes `{0}`', f.writesState.join(', ')));
     }
     if (toca.length > 0) {
-        md.appendMarkdown('**Toca:** ' + toca.join(', ') + '\n\n');
+        md.appendMarkdown(
+            '**' + vscode.l10n.t('Touches:') + '** ' + toca.join(', ') + '\n\n');
     }
 
     if (f.barrier) {
-        md.appendMarkdown('**Barrera:** nada se puede mover al otro lado.\n\n');
+        md.appendMarkdown(
+            '**' + vscode.l10n.t('Barrier:') + '** ' +
+            vscode.l10n.t('nothing can move across it.') + '\n\n');
     }
     if (f.isCall) {
-        md.appendMarkdown('**Llamada:** se le supone todo efecto.\n\n');
+        md.appendMarkdown(
+            '**' + vscode.l10n.t('Call:') + '** ' +
+            vscode.l10n.t('every effect is assumed.') + '\n\n');
     }
 
     // Que hizo el compilador con ella.  No todas las instrucciones acaban como
     // una instruccion: el subconjunto computacional se eleva a operaciones del
     // IR y a partir de ahi el optimizador las mueve como cualquier otro codigo.
     if (f.lifted === 'ir') {
+        /* Con las operaciones y sin ellas son dos frases ENTERAS: un inciso
+         * entre parentesis no cae en el mismo sitio en todos los idiomas. */
         const ops = (f.irOps ?? []).slice(0, 6).join(', ');
         md.appendMarkdown(
-            '**Elevada:** el compilador la convirtio en operaciones del IR' +
-            (ops ? ` (\`${ops}\`)` : '') +
-            ', asi que la optimiza como al resto del codigo.\n\n',
+            '**' + vscode.l10n.t('Lifted:') + '** ' +
+            (ops
+                ? vscode.l10n.t(
+                    'the compiler turned it into IR operations (`{0}`), so it optimises it like the rest of the code.',
+                    ops)
+                : vscode.l10n.t(
+                    'the compiler turned it into IR operations, so it optimises it like the rest of the code.')) +
+            '\n\n',
         );
     } else if (f.lifted === 'micro') {
         md.appendMarkdown(
-            '_Se emite tal cual; el compilador la reordena sabiendo lo que ' +
-            'toca._\n\n',
+            '_' + vscode.l10n.t(
+                'Emitted as is; the compiler reorders it knowing what it touches.') +
+            '_\n\n',
         );
     }
-    if (f.resolvedBy === 'texto') {
+    if (f.resolvedBy === 'text') {
         md.appendMarkdown(
-            '_Resuelta contra la base por su texto: el compilador no dejo una ' +
-            'instruccion para esta linea._\n\n',
+            '_' + vscode.l10n.t(
+                'Resolved against the database by its text: the compiler left no instruction for this line.') +
+            '_\n\n',
         );
     }
     if (f.modeled === false) {
         md.appendMarkdown(
-            '_Sus operandos no estan modelados: se trata de forma ' +
-            'conservadora y no se reordena a su alrededor._\n',
+            '_' + vscode.l10n.t(
+                'Its operands are not modelled: it is treated conservatively and nothing is reordered around it.') +
+            '_\n',
         );
     }
     return md;

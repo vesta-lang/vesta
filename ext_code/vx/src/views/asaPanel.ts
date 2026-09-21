@@ -21,6 +21,81 @@ import * as vscode from 'vscode';
 import { VestaLanguageClient, describeError } from '../lsp/client';
 import { AsaFactsResponse, VestaMethod } from '../lsp/protocol';
 import { createNonce } from '../util/html';
+import { embedStrings } from '../util/webviewL10n';
+
+/**
+ * @brief El texto del panel, traducido en el anfitrion.
+ *
+ * Por nombres y no por frases: dentro del panel no hay `l10n`.  Ver
+ * `util/webviewL10n.ts`.
+ *
+ * @return Los pares nombre -> texto.
+ */
+function strings(): Record<string, string> {
+    return {
+        search: vscode.l10n.t('Search in what is known...'),
+        anyCertainty: vscode.l10n.t('Any certainty'),
+        onlyProven: vscode.l10n.t('Only what is proven'),
+        onlyInferred: vscode.l10n.t('Only what is inferred'),
+        onlyUnknown: vscode.l10n.t('Only what is not known'),
+        // El distintivo de cada hecho.  Lo que manda el servidor es el nombre
+        // estable (`proven`); lo que se lee aqui es su traduccion.
+        certProven: vscode.l10n.t('proven'),
+        certInferred: vscode.l10n.t('inferred'),
+        certUnknown: vscode.l10n.t('not known'),
+        viewLabel: vscode.l10n.t('View'),
+        viewCode: vscode.l10n.t('The code'),
+        viewIr: vscode.l10n.t('The IR'),
+        groupLabel: vscode.l10n.t('Group by'),
+        groupByClaim: vscode.l10n.t('What is known'),
+        groupBySubject: vscode.l10n.t('What it talks about'),
+        refresh: vscode.l10n.t('Refresh'),
+        refreshHint: vscode.l10n.t('Analyse and repaint it again'),
+        silentTitle: vscode.l10n.t('Why nothing more is known'),
+
+        analysing: vscode.l10n.t('Analysing...'),
+        saidNothing: vscode.l10n.t('The analysis said nothing about this module.'),
+
+        sectionFunction: vscode.l10n.t('Function'),
+        sectionDomain: vscode.l10n.t('What is looked at'),
+        everything: vscode.l10n.t('Everything'),
+        unnamed: vscode.l10n.t('(unnamed)'),
+        doubleClickToOpen: vscode.l10n.t('Double-click to open {0}'),
+
+        theFunction: vscode.l10n.t('the function {0}'),
+        theWholeModule: vscode.l10n.t('the whole module'),
+        theBlock: vscode.l10n.t('block #{0}'),
+        theValue: vscode.l10n.t('value %{0}'),
+
+        countBySubject: vscode.l10n.t('{0} of {1} facts, about {2} things'),
+        countByClaim: vscode.l10n.t('{0} of {1} facts, {2} distinct things'),
+        colLine: vscode.l10n.t('Line'),
+        colHowMany: vscode.l10n.t('How many'),
+        colClaim: vscode.l10n.t('What is known'),
+        colCertainty: vscode.l10n.t('Certainty'),
+        colHowKnown: vscode.l10n.t('How it is known'),
+        colAbout: vscode.l10n.t('About what'),
+
+        lineInFunction: vscode.l10n.t('line {0} in {1}'),
+        andMore: vscode.l10n.t('and {0} more'),
+        andMoreHint: vscode.l10n.t('See one row for each of them'),
+        inFunction: vscode.l10n.t('in {0}'),
+        openFunction: vscode.l10n.t('Open {0}'),
+        oneKnownThing: vscode.l10n.t('1 thing known'),
+        knownThings: vscode.l10n.t('{0} things known'),
+        goToLine: vscode.l10n.t('Go to line {0}'),
+
+        onlyOn: vscode.l10n.t('only on {0}'),
+        byRule: vscode.l10n.t('by {0}'),
+        followsFrom: vscode.l10n.t('follows from'),
+        factNumber: vscode.l10n.t('fact #{0}'),
+
+        silentSummary: vscode.l10n.t(
+            'Why nothing more is known   {0} unanswered across {1} analyses'),
+        domainTally: vscode.l10n.t(
+            '{0}: looked at {1}, said something about {2}, stayed silent on {3}'),
+    };
+}
 
 /** Peticion que la pagina manda al editor. */
 interface PanelRequest {
@@ -88,7 +163,7 @@ export class AsaPanel {
         if (!AsaPanel.current) {
             const panel = vscode.window.createWebviewPanel(
                 AsaPanel.viewType,
-                'Vesta: lo que el compilador sabe',
+                vscode.l10n.t('Vesta: what the compiler knows'),
                 column,
                 { enableScripts: true, retainContextWhenHidden: true, localResourceRoots: [] },
             );
@@ -185,7 +260,7 @@ async function abrirFuncion(nombre: string): Promise<void> {
     const primero = (encontrados ?? [])[0];
     if (!primero) {
         void vscode.window.showInformationMessage(
-            `Vesta: no se encontro ${nombre} en el espacio de trabajo.`,
+            vscode.l10n.t('Vesta: {0} was not found in the workspace.', nombre),
         );
         return;
     }
@@ -212,8 +287,9 @@ async function abrirFuncion(nombre: string): Promise<void> {
  */
 function buildHtml(): string {
     const nonce = createNonce();
+    const T = strings();
     return `<!DOCTYPE html>
-<html lang="es">
+<html lang="${vscode.env.language}">
 <head>
 <meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy"
@@ -316,9 +392,13 @@ function buildHtml(): string {
     /* Lo seguro que es cada cosa, que es lo primero que hay que saber de un
      * hecho: no vale lo mismo algo demostrado que algo supuesto. */
     .cert { font-size: 10px; padding: 0 5px; border-radius: 8px; white-space: nowrap; }
-    .cert.demostrada { background: var(--vscode-charts-green, #2ea043); color: #08170c; }
-    .cert.inferida  { background: var(--vscode-charts-blue, #3b82f6); color: #06122b; }
-    .cert.desconocida { background: var(--vscode-charts-orange, #d29922); color: #241a02; }
+    /* Las clases llevan el nombre que manda el servidor (proven, inferred,
+     * unknown), no su traduccion.  Antes decian "demostrada" y compania, que
+     * no coincide con nada de lo que llega: los tres distintivos salian SIN
+     * color y nadie lo notaba, porque una clase CSS que no existe no da error. */
+    .cert.proven { background: var(--vscode-charts-green, #2ea043); color: #08170c; }
+    .cert.inferred { background: var(--vscode-charts-blue, #3b82f6); color: #06122b; }
+    .cert.unknown { background: var(--vscode-charts-orange, #d29922); color: #241a02; }
     .origen { opacity: .7; font-size: 11px; }
     .detalle { opacity: .6; }
     .ambito { color: var(--vscode-charts-orange, #d29922); }
@@ -353,24 +433,24 @@ function buildHtml(): string {
 </head>
 <body>
 <header>
-    <input type="search" id="buscar" placeholder="Buscar en lo que se sabe...">
+    <input type="search" id="buscar" placeholder="${T.search}">
     <select id="certeza">
-        <option value="">Cualquier certeza</option>
-        <option value="demostrada">Solo lo demostrado</option>
-        <option value="inferida">Solo lo inferido</option>
-        <option value="desconocida">Solo lo que no se sabe</option>
+        <option value="">${T.anyCertainty}</option>
+        <option value="proven">${T.onlyProven}</option>
+        <option value="inferred">${T.onlyInferred}</option>
+        <option value="unknown">${T.onlyUnknown}</option>
     </select>
-    <label for="ver">Ver</label>
+    <label for="ver">${T.viewLabel}</label>
     <select id="ver">
-        <option value="codigo">El codigo</option>
-        <option value="ir">El IR</option>
+        <option value="codigo">${T.viewCode}</option>
+        <option value="ir">${T.viewIr}</option>
     </select>
-    <label for="agrupar">Agrupar por</label>
+    <label for="agrupar">${T.groupLabel}</label>
     <select id="agrupar">
-        <option value="dicho">Lo que se sabe</option>
-        <option value="sujeto">De que habla</option>
+        <option value="dicho">${T.groupByClaim}</option>
+        <option value="sujeto">${T.groupBySubject}</option>
     </select>
-    <button id="recargar" title="Volver a analizar y repintar">Actualizar</button>
+    <button id="recargar" title="${T.refreshHint}">${T.refresh}</button>
     <span id="cuenta"></span>
 </header>
 <div id="mensaje" class="oculto"></div>
@@ -381,10 +461,11 @@ function buildHtml(): string {
 </div>
 <div class="tirador horizontal" id="tiradorCallado"></div>
 <details id="callado" class="oculto">
-    <summary id="calladoTitulo">Por que no se sabe mas</summary>
+    <summary id="calladoTitulo">${T.silentTitle}</summary>
     <div id="calladoCuerpo"></div>
 </details>
 <script nonce="${nonce}">
+${embedStrings(T)}
 (function () {
     var api = acquireVsCodeApi();
     var elBuscar = document.getElementById('buscar');
@@ -453,7 +534,7 @@ function buildHtml(): string {
 
     window.addEventListener('message', function (evento) {
         var d = evento.data;
-        if (d.kind === 'loading') { mensaje('Analizando...', false); return; }
+        if (d.kind === 'loading') { mensaje(T.analysing, false); return; }
         if (d.kind === 'error') { mensaje(d.message, true); return; }
         var p = d.payload || {};
         if (p.error) { mensaje(p.error, true); return; }
@@ -463,7 +544,7 @@ function buildHtml(): string {
         // se sigue de otro.
         for (var i = 0; i < hechos.length; i++) { hechos[i].idx = i; }
         if (hechos.length === 0 && dominios.length === 0) {
-            mensaje('El analisis no dijo nada de este modulo.', false);
+            mensaje(T.saidNothing, false);
             return;
         }
         elMensaje.classList.add('oculto');
@@ -484,7 +565,7 @@ function buildHtml(): string {
     function contarPor(campo) {
         var cuenta = {};
         for (var i = 0; i < hechos.length; i++) {
-            var k = hechos[i][campo] || '(sin nombre)';
+            var k = hechos[i][campo] || T.unnamed;
             cuenta[k] = (cuenta[k] || 0) + 1;
         }
         var lista = [];
@@ -499,9 +580,9 @@ function buildHtml(): string {
 
     function pintarLado() {
         elLado.innerHTML = '';
-        agregarSeccion('Funcion', contarPor('functionDisplay'), funcionSel, false,
+        agregarSeccion(T.sectionFunction, contarPor('functionDisplay'), funcionSel, false,
                        function (v) { funcionSel = v; pintarLado(); pintarTabla(); });
-        agregarSeccion('Que se mira', contarPor('domain'), dominioSel, true,
+        agregarSeccion(T.sectionDomain, contarPor('domain'), dominioSel, true,
                        function (v) { dominioSel = v; pintarLado(); pintarTabla(); });
     }
 
@@ -518,7 +599,7 @@ function buildHtml(): string {
         h.textContent = titulo;
         elLado.appendChild(h);
 
-        elLado.appendChild(hacerItem('Todo', hechos.length, seleccion === '',
+        elLado.appendChild(hacerItem(T.everything, hechos.length, seleccion === '',
                                      function () { alElegir(''); }));
         for (var i = 0; i < lista.length; i++) {
             (function (entrada) {
@@ -528,8 +609,8 @@ function buildHtml(): string {
                                      function () { alElegir(entrada.nombre); });
                 /* Doble clic sobre una funcion: se abre.  Un clic filtra, que
                  * es lo que se hace casi siempre desde aqui. */
-                if (titulo === 'Funcion' && entrada.nombre !== '(sin nombre)') {
-                    item.title = 'Doble clic para abrir ' + entrada.nombre;
+                if (titulo === T.sectionFunction && entrada.nombre !== T.unnamed) {
+                    item.title = tf(T.doubleClickToOpen, entrada.nombre);
                     item.addEventListener('dblclick', function () {
                         api.postMessage({ type: 'goto', nombre: entrada.nombre,
                                           name: entrada.nombre });
@@ -571,8 +652,8 @@ function buildHtml(): string {
         for (var i = 0; i < hechos.length; i++) {
             var f = hechos[i];
             if (funcionSel &&
-                (f.functionDisplay || f.function || '(sin nombre)') !== funcionSel) { continue; }
-            if (dominioSel && (f.domain || '(sin nombre)') !== dominioSel) { continue; }
+                (f.functionDisplay || f.function || T.unnamed) !== funcionSel) { continue; }
+            if (dominioSel && (f.domain || T.unnamed) !== dominioSel) { continue; }
             if (cert && f.certainty !== cert) { continue; }
             if (texto) {
                 var todo = (f.label + ' ' + f.subject + ' ' + f.detail + ' ' +
@@ -597,12 +678,17 @@ function buildHtml(): string {
     function deQue(f) {
         if (elVer.value === 'codigo' && f.sourceText) { return f.sourceText; }
         if (f.subjectText) { return f.subjectText; }
-        if (f.subject === 'funcion') {
-            return 'la funcion ' + (f.functionDisplay || f.function || '');
+        /* Los nombres son los que manda el servidor (subject_kind_name del
+         * ASA, que ya va en ingles).  Estaban en espanol y no coincidian con
+         * nada: ninguna de las cuatro ramas se cumplia jamas y el panel caia
+         * al return de abajo, ensenando "value" y "function" crudos donde
+         * tenia que leerse "el valor %3". */
+        if (f.subject === 'function') {
+            return tf(T.theFunction, f.functionDisplay || f.function || '');
         }
-        if (f.subject === 'modulo') { return 'el modulo entero'; }
-        if (f.subject === 'bloque') { return 'el bloque #' + f.subjectId; }
-        if (f.subject === 'valor') { return 'el valor %' + f.subjectId; }
+        if (f.subject === 'module') { return T.theWholeModule; }
+        if (f.subject === 'block') { return tf(T.theBlock, f.subjectId); }
+        if (f.subject === 'value') { return tf(T.theValue, f.subjectId); }
         return f.subject || '';
     }
 
@@ -677,10 +763,10 @@ function buildHtml(): string {
     /** Una fila por COSA de la que se habla, con todo lo que se sabe de ella. */
     function pintarPorSujeto(lista) {
         var grupos = agrupar(lista);
-        elCuenta.textContent = lista.length + ' de ' + hechos.length +
-            ' hechos, sobre ' + grupos.length + ' cosas';
+        elCuenta.textContent = tf(T.countBySubject, lista.length, hechos.length,
+                                  grupos.length);
 
-        var tabla = nuevaTabla(['Linea', 'Que se sabe', 'Certeza', 'Como se sabe']);
+        var tabla = nuevaTabla([T.colLine, T.colClaim, T.colCertainty, T.colHowKnown]);
         for (var g = 0; g < grupos.length; g++) {
             tabla.appendChild(hacerCabeceraGrupo(grupos[g]));
             for (var h = 0; h < grupos[g].hechos.length; h++) {
@@ -693,10 +779,10 @@ function buildHtml(): string {
     /** Una fila por COSA QUE SE SABE, con las cosas de las que se sabe. */
     function pintarPorDicho(lista) {
         var grupos = agruparPorDicho(lista);
-        elCuenta.textContent = lista.length + ' de ' + hechos.length +
-            ' hechos, ' + grupos.length + ' cosas distintas';
+        elCuenta.textContent = tf(T.countByClaim, lista.length, hechos.length,
+                                  grupos.length);
 
-        var tabla = nuevaTabla(['Cuantos', 'Que se sabe', 'Certeza', 'De que']);
+        var tabla = nuevaTabla([T.colHowMany, T.colClaim, T.colCertainty, T.colAbout]);
         for (var g = 0; g < grupos.length; g++) {
             tabla.appendChild(hacerFilaDicho(grupos[g]));
         }
@@ -726,8 +812,8 @@ function buildHtml(): string {
 
         var tdC = document.createElement('td');
         var chip = document.createElement('span');
-        chip.className = 'cert ' + (grupo.certeza || 'desconocida');
-        chip.textContent = grupo.certeza || '?';
+        chip.className = 'cert ' + (grupo.certeza || 'unknown');
+        chip.textContent = certLabel(grupo.certeza);
         tdC.appendChild(chip);
         tr.appendChild(tdC);
 
@@ -742,7 +828,8 @@ function buildHtml(): string {
                 var s = document.createElement('span');
                 s.className = 'enlace';
                 s.textContent = deQue(f);
-                s.title = 'linea ' + f.line + ' en ' + (f.functionDisplay || f.function || '');
+                s.title = tf(T.lineInFunction, f.line,
+                             f.functionDisplay || f.function || '');
                 s.addEventListener('click', function (ev) {
                     ev.stopPropagation();
                     if (f.line > 0) { api.postMessage({ type: 'reveal', line: f.line }); }
@@ -754,8 +841,8 @@ function buildHtml(): string {
         if (n > cuantas) {
             var mas = document.createElement('span');
             mas.className = 'enlace';
-            mas.textContent = 'y ' + (n - cuantas) + ' mas';
-            mas.title = 'Ver una fila por cada una';
+            mas.textContent = tf(T.andMore, n - cuantas);
+            mas.title = T.andMoreHint;
             mas.addEventListener('click', function (ev) {
                 ev.stopPropagation();
                 elBuscar.value = grupo.dicho;
@@ -792,8 +879,8 @@ function buildHtml(): string {
             // querer ir, y hasta ahora era solo texto.
             var f = document.createElement('span');
             f.className = 'grupoFn enlace';
-            f.textContent = '  en ' + grupo.fn;
-            f.title = 'Abrir ' + grupo.fn;
+            f.textContent = '  ' + tf(T.inFunction, grupo.fn);
+            f.title = tf(T.openFunction, grupo.fn);
             f.addEventListener('click', function (ev) {
                 ev.stopPropagation();
                 api.postMessage({ type: 'goto', name: grupo.fn });
@@ -803,12 +890,12 @@ function buildHtml(): string {
         var n = document.createElement('span');
         n.className = 'grupoN';
         n.textContent = grupo.hechos.length === 1
-            ? '1 cosa sabida' : grupo.hechos.length + ' cosas sabidas';
+            ? T.oneKnownThing : tf(T.knownThings, grupo.hechos.length);
         td.appendChild(n);
         tr.appendChild(td);
         if (grupo.linea > 0) {
             tr.style.cursor = 'pointer';
-            tr.title = 'Ir a la linea ' + grupo.linea;
+            tr.title = tf(T.goToLine, grupo.linea);
             tr.addEventListener('click', function () {
                 api.postMessage({ type: 'reveal', line: grupo.linea });
             });
@@ -824,7 +911,7 @@ function buildHtml(): string {
             tr.addEventListener('click', function () {
                 api.postMessage({ type: 'reveal', line: f.line });
             });
-            tr.title = 'Ir a la linea ' + f.line;
+            tr.title = tf(T.goToLine, f.line);
         }
 
         tr.appendChild(celda(f.line > 0 ? String(f.line) : '', 'linea'));
@@ -850,15 +937,15 @@ function buildHtml(): string {
         if (ambito.length) {
             var am = document.createElement('span');
             am.className = 'ambito';
-            am.textContent = '  solo en ' + ambito.join('/');
+            am.textContent = '  ' + tf(T.onlyOn, ambito.join('/'));
             tdQ.appendChild(am);
         }
         tr.appendChild(tdQ);
 
         var tdC = document.createElement('td');
         var chip = document.createElement('span');
-        chip.className = 'cert ' + (f.certainty || 'desconocida');
-        chip.textContent = f.certainty || '?';
+        chip.className = 'cert ' + (f.certainty || 'unknown');
+        chip.textContent = certLabel(f.certainty);
         tdC.appendChild(chip);
         tr.appendChild(tdC);
 
@@ -867,13 +954,13 @@ function buildHtml(): string {
         var tdK = document.createElement('td');
         tdK.className = 'origen';
         var partes = [];
-        if (f.rule) { partes.push('por ' + f.rule); }
+        if (f.rule) { partes.push(tf(T.byRule, f.rule)); }
         else if (f.source) { partes.push(f.source); }
         tdK.appendChild(document.createTextNode(partes.join(' ')));
 
         var de = f.from || [];
         if (de.length) {
-            tdK.appendChild(document.createTextNode('  se sigue de '));
+            tdK.appendChild(document.createTextNode('  ' + T.followsFrom + ' '));
             for (var d = 0; d < de.length; d++) {
                 (function (idFuente) {
                     var enlace = document.createElement('span');
@@ -904,7 +991,7 @@ function buildHtml(): string {
     /** Una linea con lo que dice el hecho numero @p id, para el emergente. */
     function descripcionCorta(id) {
         var f = hechos[id];
-        if (!f) { return 'hecho #' + id; }
+        if (!f) { return tf(T.factNumber, id); }
         return deQue(f) + ': ' + (f.label || f.code || '');
     }
 
@@ -940,6 +1027,16 @@ function buildHtml(): string {
         return td;
     }
 
+    /** La certeza, leida.  Lo que llega es el nombre estable del servidor. */
+    function certLabel(certainty) {
+        if (certainty === 'proven') { return T.certProven; }
+        if (certainty === 'inferred') { return T.certInferred; }
+        if (certainty === 'unknown') { return T.certUnknown; }
+        // Un valor que no conocemos se ensena TAL CUAL: inventarle una
+        // traduccion esconderia que el servidor mando algo nuevo.
+        return certainty || '?';
+    }
+
     /** Lo que el analisis miro y de lo que NO supo decir nada, y por que. */
     function pintarCallado() {
         var conMotivos = [];
@@ -953,8 +1050,7 @@ function buildHtml(): string {
 
         var mudos = 0;
         for (var m = 0; m < conMotivos.length; m++) { mudos += conMotivos[m].silent || 0; }
-        elCalladoTitulo.textContent = 'Por que no se sabe mas   ' + mudos +
-            ' sin respuesta en ' + conMotivos.length + ' analisis';
+        elCalladoTitulo.textContent = tf(T.silentSummary, mudos, conMotivos.length);
 
         elCalladoCuerpo.innerHTML = '';
         for (var d = 0; d < conMotivos.length; d++) {
@@ -962,8 +1058,8 @@ function buildHtml(): string {
             var titulo = document.createElement('div');
             titulo.style.opacity = '.75';
             titulo.style.marginTop = '8px';
-            titulo.textContent = dom.domain + ': miro ' + dom.looked +
-                ', dijo algo de ' + dom.facts + ', se callo en ' + dom.silent;
+            titulo.textContent = tf(T.domainTally, dom.domain, dom.looked,
+                                    dom.facts, dom.silent);
             elCalladoCuerpo.appendChild(titulo);
 
             var tabla = document.createElement('table');

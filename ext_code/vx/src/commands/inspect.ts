@@ -65,7 +65,8 @@ export function registerInspectCommands(
                 try {
                     await handler();
                 } catch (err) {
-                    void vscode.window.showErrorMessage(`Vesta: ${describeError(err)}`);
+                    void vscode.window.showErrorMessage(
+                        vscode.l10n.t('Vesta: {0}', describeError(err)));
                 }
             }),
         );
@@ -103,7 +104,7 @@ async function request<T>(
     params: Record<string, unknown>,
 ): Promise<T> {
     return vscode.window.withProgress(
-        { location: vscode.ProgressLocation.Window, title: `Vesta: ${title}` },
+        { location: vscode.ProgressLocation.Window, title: vscode.l10n.t('Vesta: {0}', title) },
         () => client.request<T>(method, params),
     );
 }
@@ -141,8 +142,8 @@ async function pickFunction(
     const items: Item[] = [];
     if (allowModule) {
         items.push({
-            label: 'El modulo entero',
-            detail: 'Sin aislar ninguna funcion',
+            label: vscode.l10n.t('The whole module'),
+            detail: vscode.l10n.t('Without singling out any function'),
             value: '',
         });
     }
@@ -153,7 +154,7 @@ async function pickFunction(
     }
 
     const choice = await vscode.window.showQuickPick(items, {
-        placeHolder: 'Elige la funcion',
+        placeHolder: vscode.l10n.t('Choose the function'),
     });
     return choice?.value;
 }
@@ -161,6 +162,14 @@ async function pickFunction(
 /** @brief Nombre corto del fichero activo, para titular las vistas. */
 function baseName(document: vscode.TextDocument): string {
     return path.basename(document.uri.fsPath);
+}
+
+/**
+ * @brief Como se nombra en los informes lo que no es una funcion concreta.
+ * @return El texto del modulo entero, en el idioma del editor.
+ */
+function wholeModuleLabel(): string {
+    return vscode.l10n.t('module');
 }
 
 /** @brief Abre la vista del IR, preguntando la fase. */
@@ -176,17 +185,17 @@ async function showIr(deps: InspectContext): Promise<void> {
     const choice = await vscode.window.showQuickPick<Item>(
         [
             {
-                label: 'Despues de optimizar',
-                detail: 'El IR que llega al generador de codigo',
+                label: vscode.l10n.t('After optimising'),
+                detail: vscode.l10n.t('The IR that reaches the code generator'),
                 phase: 'post',
             },
             {
-                label: 'Antes de optimizar',
-                detail: 'El IR tal y como sale del bajado',
+                label: vscode.l10n.t('Before optimising'),
+                detail: vscode.l10n.t('The IR just as lowering leaves it'),
                 phase: 'pre',
             },
         ],
-        { placeHolder: 'Que fase del IR' },
+        { placeHolder: vscode.l10n.t('Which phase of the IR') },
     );
     if (!choice) {
         return;
@@ -201,7 +210,7 @@ async function showIr(deps: InspectContext): Promise<void> {
     applyTarget(params, inspectTarget());
     const response = await request<TextResponse>(
         deps.client,
-        'generando el IR',
+        vscode.l10n.t('generating the IR'),
         VestaMethod.Ir,
         params,
     );
@@ -228,7 +237,7 @@ async function showIrDiff(deps: InspectContext): Promise<void> {
 
     const response = await request<IrDiffResponse>(
         deps.client,
-        'comparando el IR',
+        vscode.l10n.t('comparing the IR'),
         VestaMethod.IrDiff,
         { uri, function: functionName },
     );
@@ -245,10 +254,10 @@ async function showIrDiff(deps: InspectContext): Promise<void> {
      * Se compone en unificado (+/-) porque es lo que el editor sabe colorear
      * como un diff. */
     const rows = response.rows ?? [];
-    const label = functionName || 'modulo';
+    const label = functionName || wholeModuleLabel();
     if (rows.length === 0) {
         void vscode.window.showInformationMessage(
-            `Vesta: no hay IR que comparar en ${label}.`,
+            vscode.l10n.t('Vesta: there is no IR to compare in {0}.', label),
         );
         return;
     }
@@ -278,9 +287,10 @@ async function showIrDiff(deps: InspectContext): Promise<void> {
 
     // Decirlo arriba: sin esto, un diff sin cambios se lee como un fallo.
     const cabecera = cambios === 0
-        ? `# El optimizador no toco ${label}.\n`
-        : `# El optimizador cambio ${cambios} de ${rows.length} lineas de ${label}.\n` +
-          '# -- antes de optimizar    ++ despues\n';
+        ? '# ' + vscode.l10n.t('The optimiser did not touch {0}.', label) + '\n'
+        : '# ' + vscode.l10n.t('The optimiser changed {0} of the {1} lines of {2}.',
+                               cambios, rows.length, label) + '\n' +
+          '# ' + vscode.l10n.t('-- before optimising    ++ after') + '\n';
 
     await deps.views.show(
         'ir-diff',
@@ -306,12 +316,12 @@ async function showBytecode(deps: InspectContext): Promise<void> {
     applyTarget(params, inspectTarget());
     const response = await request<TextResponse>(
         deps.client,
-        'generando el bytecode',
+        vscode.l10n.t('generating the bytecode'),
         VestaMethod.Bytecode,
         params,
     );
     if (!showErrorIfAny(response)) {
-        const label = functionName || 'modulo';
+        const label = functionName || wholeModuleLabel();
         await deps.views.show(
             'bytecode',
             `${baseName(document)} (${label}).vel`,
@@ -343,7 +353,7 @@ async function showAsm(deps: InspectContext, backend: 'jit' | 'aot'): Promise<vo
     const method = backend === 'jit' ? VestaMethod.JitAsm : VestaMethod.AotAsm;
     const response = await request<AsmResponse>(
         deps.client,
-        `compilando (${backend.toUpperCase()})`,
+        vscode.l10n.t('compiling ({0})', backend.toUpperCase()),
         method,
         asmParams(uri, functionName, target),
     );
@@ -352,8 +362,13 @@ async function showAsm(deps: InspectContext, backend: 'jit' | 'aot'): Promise<vo
         return;
     }
     if (response.unsupported || response.incompatible) {
+        /* El motivo lo da el servidor, que lo saca del catalogo del compilador;
+         * el de aqui solo cubre el caso en que no diga ninguno. */
         void vscode.window.showWarningMessage(
-            `Vesta: ${response.reason ?? 'la funcion no se puede compilar en este modo.'}`,
+            vscode.l10n.t(
+                'Vesta: {0}',
+                response.reason
+                    ?? vscode.l10n.t('the function cannot be compiled in this mode.')),
         );
         return;
     }
@@ -394,21 +409,28 @@ function asmParams(
  * @return Texto de cabecera, terminado en linea en blanco.
  */
 function buildAsmHeader(response: AsmResponse, backend: string): string {
-    const lines: string[] = [];
-    lines.push(`; funcion    : ${response.function ?? ''}`);
-    lines.push(`; generador  : ${backend.toUpperCase()}`);
+    /* Las filas se juntan con su texto ya traducido y se alinean DESPUES: un
+     * relleno escrito a mano cuadra en un idioma y se tuerce en el siguiente,
+     * y la cabecera de un desensamblado se lee en columna. */
+    const rows: Array<[string, string]> = [];
+    rows.push([vscode.l10n.t('function'), response.function ?? '']);
+    rows.push([vscode.l10n.t('backend'), backend.toUpperCase()]);
     if (response.bytes !== undefined) {
-        lines.push(`; tamano     : ${response.bytes} bytes`);
+        rows.push([vscode.l10n.t('size'), vscode.l10n.t('{0} bytes', response.bytes)]);
     }
     if (response.instructions !== undefined) {
-        lines.push(`; instruccs. : ${response.instructions}`);
+        rows.push([vscode.l10n.t('instructions'), String(response.instructions)]);
     }
     for (const arg of response.args ?? []) {
-        lines.push(`; argumento  : ${arg.reg} = ${arg.name}`);
+        rows.push([vscode.l10n.t('argument'), `${arg.reg} = ${arg.name}`]);
     }
     for (const reloc of response.relocs ?? []) {
-        lines.push(`; reubicacion: +${reloc.offset} ${reloc.kind} ${reloc.symbol}`);
+        rows.push([vscode.l10n.t('relocation'),
+                   `+${reloc.offset} ${reloc.kind} ${reloc.symbol}`]);
     }
+
+    const width = rows.reduce((max, [label]) => Math.max(max, label.length), 0);
+    const lines = rows.map(([label, value]) => `; ${label.padEnd(width)} : ${value}`);
     lines.push('');
     return lines.join('\n');
 }
@@ -442,7 +464,7 @@ async function showModes(deps: InspectContext): Promise<void> {
 
     const response = await request<ModesResponse>(
         deps.client,
-        'analizando los modos',
+        vscode.l10n.t('analysing the modes'),
         VestaMethod.Modes,
         { uri: document.uri.toString(), tier: aotTier() },
     );
@@ -450,42 +472,55 @@ async function showModes(deps: InspectContext): Promise<void> {
         return;
     }
 
-    const parts: string[] = [titleFor(document, 'Los tres modos de ejecucion')];
+    const yes = vscode.l10n.t('yes');
+    const no = vscode.l10n.t('no');
+    const parts: string[] = [
+        titleFor(document, vscode.l10n.t('The three execution modes')),
+    ];
     for (const mode of response.modes ?? []) {
-        parts.push(`[${mode.mode}]`);
+        // Se recogen las filas del modo y se alinean juntas, por lo mismo que
+        // la cabecera del desensamblado: el ancho lo fija el idioma.
+        const rows: Array<[string, string]> = [];
         if (mode.ok !== undefined) {
-            parts.push(`  compila       : ${mode.ok ? 'si' : 'no'}`);
+            rows.push([vscode.l10n.t('compiles'), mode.ok ? yes : no]);
         }
         if (mode.errors !== undefined) {
-            parts.push(`  errores       : ${mode.errors}`);
+            rows.push([vscode.l10n.t('errors'), String(mode.errors)]);
         }
         if (mode.warnings !== undefined) {
-            parts.push(`  avisos        : ${mode.warnings}`);
+            rows.push([vscode.l10n.t('warnings'), String(mode.warnings)]);
         }
         if (mode.tier) {
-            parts.push(`  nivel         : ${mode.tier}`);
+            rows.push([vscode.l10n.t('tier'), mode.tier]);
         }
         if (mode.compatible !== undefined) {
-            parts.push(`  compatible    : ${mode.compatible ? 'si' : 'no'}`);
+            rows.push([vscode.l10n.t('compatible'), mode.compatible ? yes : no]);
         }
         if (mode.compilable_functions?.length) {
-            parts.push(`  compiladas    : ${mode.compilable_functions.join(', ')}`);
+            rows.push([vscode.l10n.t('compiled'), mode.compilable_functions.join(', ')]);
         }
         if (mode.fallback_functions?.length) {
-            parts.push(`  al interprete : ${mode.fallback_functions.join(', ')}`);
-        }
-        for (const issue of mode.issues ?? []) {
-            parts.push(
-                `  - ${issue.fn_display || issue.fn_name} ` +
-                `(linea ${issue.source_line}): ${issue.reason}`);
+            rows.push([vscode.l10n.t('to the interpreter'),
+                       mode.fallback_functions.join(', ')]);
         }
         if (mode.note) {
-            parts.push(`  nota          : ${mode.note}`);
+            rows.push([vscode.l10n.t('note'), mode.note]);
+        }
+
+        parts.push(`[${mode.mode}]`);
+        const width = rows.reduce((max, [label]) => Math.max(max, label.length), 0);
+        for (const [label, value] of rows) {
+            parts.push(`  ${label.padEnd(width)} : ${value}`);
+        }
+        for (const issue of mode.issues ?? []) {
+            parts.push('  - ' + vscode.l10n.t(
+                '{0} (line {1}): {2}',
+                issue.fn_display || issue.fn_name, issue.source_line, issue.reason));
         }
         parts.push('');
     }
 
-    await deps.views.show('modes', `${baseName(document)} (modos).txt`, parts.join('\n'));
+    await deps.views.show('modes', `${baseName(document)} (modes).txt`, parts.join('\n'));
 }
 
 /** @brief Abre el informe de compatibilidad con la compilacion anticipada. */
@@ -498,7 +533,7 @@ async function showAotCompat(deps: InspectContext): Promise<void> {
     const tier = aotTier();
     const response = await request<AotCompatResponse>(
         deps.client,
-        'comprobando la compatibilidad',
+        vscode.l10n.t('checking compatibility'),
         VestaMethod.AotCompat,
         { uri: document.uri.toString(), tier },
     );
@@ -506,16 +541,21 @@ async function showAotCompat(deps: InspectContext): Promise<void> {
         return;
     }
 
-    const parts: string[] = [titleFor(document, `Compatibilidad AOT (nivel ${tier})`)];
-    parts.push(`Compatible: ${response.compatible ? 'si' : 'no'}`);
+    const parts: string[] = [
+        titleFor(document, vscode.l10n.t('AOT compatibility (tier {0})', tier)),
+    ];
+    parts.push(response.compatible
+        ? vscode.l10n.t('Compatible: yes')
+        : vscode.l10n.t('Compatible: no'));
     parts.push('');
 
     const issues = response.issues ?? [];
     if (issues.length > 0) {
-        parts.push('Lo que lo impide:');
+        parts.push(vscode.l10n.t('What stands in the way:'));
         parts.push(
             renderTable(
-                ['funcion', 'linea', 'operacion', 'motivo'],
+                [vscode.l10n.t('function'), vscode.l10n.t('line'),
+                 vscode.l10n.t('operation'), vscode.l10n.t('reason')],
                 issues.map(i => [i.fn_display || i.fn_name,
                                  String(i.source_line), i.op, i.reason]),
             ),
@@ -524,7 +564,7 @@ async function showAotCompat(deps: InspectContext): Promise<void> {
 
     const okFunctions = response.ok_functions ?? [];
     if (okFunctions.length > 0) {
-        parts.push(`Funciones sin problemas (${okFunctions.length}):`);
+        parts.push(vscode.l10n.t('Functions with no problems ({0}):', okFunctions.length));
         parts.push('  ' + okFunctions.join('\n  '));
     }
 
@@ -540,7 +580,7 @@ async function showMacroExpand(deps: InspectContext): Promise<void> {
 
     const response = await request<MacroExpandResponse>(
         deps.client,
-        'expandiendo las macros',
+        vscode.l10n.t('expanding the macros'),
         VestaMethod.MacroExpand,
         { uri: document.uri.toString() },
     );
@@ -551,19 +591,22 @@ async function showMacroExpand(deps: InspectContext): Promise<void> {
     const expansions = response.expansions ?? [];
     const skipped = response.skipped ?? [];
     if (expansions.length === 0 && skipped.length === 0) {
-        void vscode.window.showInformationMessage('Vesta: el modulo no usa macros.');
+        void vscode.window.showInformationMessage(
+            vscode.l10n.t('Vesta: the module does not use macros.'));
         return;
     }
 
-    const parts: string[] = [titleFor(document, 'Codigo generado por las macros')];
+    const parts: string[] = [
+        titleFor(document, vscode.l10n.t('Code generated by the macros')),
+    ];
     for (const expansion of expansions) {
         parts.push(`// ${expansion.macro_name}(${expansion.args.join(', ')})`);
-        parts.push(`// en ${expansion.call_site_loc}`);
+        parts.push('// ' + vscode.l10n.t('at {0}', expansion.call_site_loc));
         parts.push(expansion.generated_code);
         parts.push('');
     }
     if (skipped.length > 0) {
-        parts.push('// Macros que no se pudieron expandir:');
+        parts.push('// ' + vscode.l10n.t('Macros that could not be expanded:'));
         for (const skip of skipped) {
             parts.push(`//   ${skip.name}: ${skip.reason}`);
         }
@@ -586,7 +629,7 @@ async function showComptimeValues(deps: InspectContext): Promise<void> {
 
     const response = await request<ComptimeValuesResponse>(
         deps.client,
-        'evaluando el codigo de compilacion',
+        vscode.l10n.t('evaluating the compile-time code'),
         VestaMethod.ComptimeValues,
         { uri: document.uri.toString() },
     );
@@ -597,15 +640,16 @@ async function showComptimeValues(deps: InspectContext): Promise<void> {
     const values = response.values ?? [];
     if (values.length === 0) {
         void vscode.window.showInformationMessage(
-            'Vesta: el modulo no tiene valores resueltos en tiempo de compilacion.',
+            vscode.l10n.t('Vesta: the module has no values resolved at compile time.'),
         );
         return;
     }
 
     const text =
-        titleFor(document, 'Valores resueltos al compilar') +
+        titleFor(document, vscode.l10n.t('Values resolved at compile time')) +
         renderTable(
-            ['nombre', 'ambito', 'tipo', 'valor'],
+            [vscode.l10n.t('name'), vscode.l10n.t('scope'),
+             vscode.l10n.t('type'), vscode.l10n.t('value')],
             values.map(v => [v.name, v.scope, v.type_kind, v.value_str]),
         );
 
@@ -650,13 +694,33 @@ async function showDiagram(deps: InspectContext): Promise<void> {
     }
     const choice = await vscode.window.showQuickPick<Item>(
         [
-            { label: 'IR optimizado', detail: 'Grafo de bloques tras optimizar', diagram: 'ir-post' },
-            { label: 'IR sin optimizar', detail: 'Grafo de bloques recien bajado', diagram: 'ir-pre' },
-            { label: 'Arbol sintactico', detail: 'Estructura del fuente', diagram: 'ast' },
-            { label: 'Bytecode', detail: 'Flujo del codigo de la maquina virtual', diagram: 'vel' },
-            { label: 'Codigo maquina', detail: 'Grafo del codigo nativo de una funcion', diagram: 'asm' },
+            {
+                label: vscode.l10n.t('Optimised IR'),
+                detail: vscode.l10n.t('Block graph after optimising'),
+                diagram: 'ir-post',
+            },
+            {
+                label: vscode.l10n.t('Unoptimised IR'),
+                detail: vscode.l10n.t('Block graph straight out of lowering'),
+                diagram: 'ir-pre',
+            },
+            {
+                label: vscode.l10n.t('Syntax tree'),
+                detail: vscode.l10n.t('Structure of the source'),
+                diagram: 'ast',
+            },
+            {
+                label: vscode.l10n.t('Bytecode'),
+                detail: vscode.l10n.t('Flow of the virtual machine code'),
+                diagram: 'vel',
+            },
+            {
+                label: vscode.l10n.t('Machine code'),
+                detail: vscode.l10n.t("Graph of a function's native code"),
+                diagram: 'asm',
+            },
         ],
-        { placeHolder: 'Que diagrama' },
+        { placeHolder: vscode.l10n.t('Which diagram') },
     );
     if (!choice) {
         return;
@@ -675,7 +739,7 @@ async function showDiagram(deps: InspectContext): Promise<void> {
     const target = inspectTarget();
     const response = await request<TextResponse>(
         deps.client,
-        'dibujando el diagrama',
+        vscode.l10n.t('drawing the diagram'),
         VestaMethod.Diagram,
         diagramParams(uri, choice.diagram, format, functionName, target),
     );
@@ -685,7 +749,7 @@ async function showDiagram(deps: InspectContext): Promise<void> {
 
     const text = response.text ?? '';
     if (format === 'html') {
-        DiagramPanel.show(`Vesta: ${choice.label}`, text);
+        DiagramPanel.show(vscode.l10n.t('Vesta: {0}', choice.label), text);
         return;
     }
     const extension = format === 'mermaid' ? 'mmd' : 'dot';
@@ -739,7 +803,7 @@ async function showMachineView(deps: InspectContext): Promise<void> {
  */
 function showErrorIfAny(response: { error?: string }): boolean {
     if (response.error) {
-        void vscode.window.showErrorMessage(`Vesta: ${response.error}`);
+        void vscode.window.showErrorMessage(vscode.l10n.t('Vesta: {0}', response.error));
         return true;
     }
     return false;

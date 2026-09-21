@@ -59,6 +59,8 @@
 #include "vx/module/namespace_flatten.h" // demangle_symbol: el nombre escrito
 #include "toolchain/native_backend.h"    // el mismo codegen que usa el AOT real
 #include "ir/ssa_ir.h"
+
+#include <string_view> // el volcado se recorta sin copiarlo linea a linea
 #include "ir/ssa_ir_serialize.h"
 #include "jit/code_cache.h"
 #include "jit/runtime_entries.h"
@@ -185,7 +187,8 @@ uint32_t first_source_line(const ir::IrFunction &fn) {
  */
 bool parse_post_opt_module(const vx::CompileResult &result, ir::IrModule &out) {
     if (result.ir_module_cache_bytes.empty()) return false;
-    return ir::parse_ir_module_cache(result.ir_module_cache_bytes, out);
+    return ir::parse_ir_module_cache(result.ir_module_cache_bytes.data(),
+                                      result.ir_module_cache_bytes.size(),out);
 }
 
 /**
@@ -1350,7 +1353,8 @@ nlohmann::json Inspector::ir(const std::string &uri, const std::string &phase,
         if (res.ir_module_cache_bytes_preopt.empty())
             return {{"error", "no se pudo generar el IR pre-optimizacion"}};
         ir::IrModule mod;
-        if (!ir::parse_ir_module_cache(res.ir_module_cache_bytes_preopt, mod))
+        if (!ir::parse_ir_module_cache(res.ir_module_cache_bytes_preopt.data(),
+                                   res.ir_module_cache_bytes_preopt.size(),mod))
             return {
                 {"error", "no se pudo deserializar el IR pre-optimizacion"}};
         std::ostringstream oss;
@@ -1398,36 +1402,99 @@ std::vector<std::string> ir_split_lines(const std::string &s) {
     return out;
 }
 
-/// Extrae el bloque @c @function <fn>( ... ) del dump @p dump (con sus
-/// @c @template_of/@type_args precedentes), hasta el siguiente @c @function o
-/// EOF.  Si no se encuentra (o fn vacio), devuelve el dump entero.
+/// Si @p line empieza por @p prefix.  En C++17 no hay `starts_with`.
+///
+/// El prefijo entra como vista y no como puntero a cadena: asi vale igual un
+/// literal que un `std::string` ya construido, y de paso no hay que medir el
+/// largo en cada llamada.
+bool starts_with(std::string_view line, std::string_view prefix) {
+    return line.size() >= prefix.size() &&
+           line.compare(0, prefix.size(), prefix) == 0;
+}
+
+/**
+ * @brief Si @p line es una de las que ENCABEZAN a un @c @function.
+ *
+ * Son las que el volcado escribe DELANTE de la funcion y hablan de ELLA: de
+ * que fichero salio y de que plantilla es instancia.  Se preguntan juntas
+ * porque se recortan juntas por los dos extremos -- hacia atras para
+ * llevarselas con su funcion, hacia delante para NO llevarse las de la
+ * siguiente --, y se preguntan por @ref ir_dump y no por un literal escrito
+ * aqui: el vocabulario lo fija quien lo escribe.
+ */
+bool heads_a_function(std::string_view line) {
+    return starts_with(line, ir::ir_dump::kFile) ||
+           starts_with(line, ir::ir_dump::kTemplateOf) ||
+           starts_with(line, ir::ir_dump::kTypeArgs);
+}
+
+/**
+ * @brief Extrae del volcado @p dump el bloque de la funcion @p fn, con las
+ *        lineas que la encabezan.
+ *
+ * LAS DOS PUNTAS SE RECORTAN, y hasta que el volcado gano @c @file solo hacia
+ * falta una.  Esa linea va DELANTE de su `@function`, asi que quedaba fuera del
+ * bloque de su propia funcion por arriba y dentro del de la anterior por abajo:
+ * cada funcion se ensenaba sin su fichero y con el de la de al lado pegado al
+ * final.  En un modulo FUSIONADO -- que es justo para lo que se anadio la tabla
+ * de ficheros -- eso es atribuir cada trozo al fichero equivocado.
+ *
+ * UNA PASADA Y UNA SOLA COPIA: el volcado de un modulo son miles de lineas, y
+ * partirlo en un vector de cadenas para devolver una decena es una reserva por
+ * linea y otra por concatenacion.  Aqui se buscan los dos desplazamientos y se
+ * corta el original.
+ *
+ * @param dump El volcado entero.
+ * @param fn   La funcion; vacia devuelve el volcado tal cual.
+ * @return El bloque, o el volcado entero si esa funcion no esta.
+ */
 std::string ir_extract_fn(const std::string &dump, const std::string &fn) {
     if (fn.empty()) return dump;
-    std::vector<std::string> lines = ir_split_lines(dump);
-    const std::string want = "@function " + fn + "(";
-    int found = -1;
-    for (int i = 0; i < (int)lines.size(); ++i)
-        if (lines[i].rfind(want, 0) == 0) {
-            found = i;
-            break;
+    const std::string want = std::string(ir::ir_dump::kFunction) + fn + "(";
+    const std::string_view all(dump);
+
+    /* El tramo de lineas en blanco o de cabecera que se lleva viendo.  Con dos
+     * marcas y no una: al ABRIR interesa donde empieza la primera directiva (la
+     * cabecera es de la funcion que viene), y al CERRAR donde empieza el hueco
+     * entero, porque la linea en blanco separa dos funciones y no cierra esta. */
+    size_t gap = std::string_view::npos;       // blanco-o-cabecera
+    size_t heading = std::string_view::npos;   // la primera directiva del tramo
+    size_t start = std::string_view::npos;
+    size_t stop = all.size();
+
+    for (size_t at = 0, next = 0; at < all.size(); at = next) {
+        const size_t nl = all.find('\n', at);
+        next = (nl == std::string_view::npos) ? all.size() : nl + 1;
+        const std::string_view line =
+            all.substr(at, (nl == std::string_view::npos ? all.size() : nl) - at);
+
+        if (starts_with(line, ir::ir_dump::kFunction)) {
+            if (start != std::string_view::npos) {
+                stop = (gap != std::string_view::npos) ? gap : at;
+                break;
+            }
+            if (starts_with(line, want))
+                start = (heading != std::string_view::npos) ? heading : at;
+            gap = heading = std::string_view::npos;
+            continue;
         }
-    if (found < 0) return dump;
-    int start = found;
-    while (start > 0 && (lines[start - 1].rfind("@template_of", 0) == 0 ||
-                         lines[start - 1].rfind("@type_args", 0) == 0))
-        --start;
-    int end = (int)lines.size();
-    for (int i = found + 1; i < (int)lines.size(); ++i)
-        if (lines[i].rfind("@function ", 0) == 0) {
-            end = i;
-            break;
+        if (heads_a_function(line)) {
+            if (gap == std::string_view::npos) gap = at;
+            if (heading == std::string_view::npos) heading = at;
+            continue;
         }
-    std::string out;
-    for (int i = start; i < end; ++i) {
-        out += lines[i];
-        out += "\n";
+        /* La tabla de ficheros cierra la funcion anterior pero NO encabeza a la
+         * siguiente: es del MODULO.  Se nota cuando dos volcados van seguidos
+         * -- el pre y el post en el mismo fichero --, que es donde la ultima
+         * funcion del primero se llevaba pegada la cabecera del segundo. */
+        if (starts_with(line, ir::ir_dump::kSourceFile) || line.empty()) {
+            if (gap == std::string_view::npos) gap = at;
+            continue;
+        }
+        gap = heading = std::string_view::npos; // una linea con cuerpo corta el tramo
     }
-    return out;
+    if (start == std::string_view::npos) return dump;
+    return std::string(all.substr(start, stop - start));
 }
 
 /// Extrae el bloque .vel (bytecode textual) de UNA funcion del volcado del
@@ -1735,10 +1802,12 @@ nlohmann::json Inspector::function_report(const std::string &uri) {
             if (ck.function != cr.function) continue;
             nlohmann::json jc;
             jc["contract"] = ck.contract;
-            jc["status"] = ck.status == analyze::ContractCheck::OK ? "cumple"
+            /* Veredicto ESTABLE, no texto de usuario: lo compara quien lo
+             * recibe, asi que va en ingles y lo traduce el que lo ensena. */
+            jc["status"] = ck.status == analyze::ContractCheck::OK ? "keeps"
                            : ck.status == analyze::ContractCheck::VIOLATED
-                               ? "incumple"
-                               : "no se puede decidir";
+                               ? "breaks"
+                               : "undecided";
             jc["detail"] = ck.detail;
             checks.push_back(std::move(jc));
         }
@@ -2271,7 +2340,7 @@ nlohmann::json Inspector::aot_compat(const std::string &uri,
     const AotBuild &build = *build_ref;
     ir::IrModule mod;
     if (build.ir_bytes.empty() ||
-        !ir::parse_ir_module_cache(build.ir_bytes, mod))
+        !ir::parse_ir_module_cache(build.ir_bytes.data(), build.ir_bytes.size(),mod))
         return {{"error", "el modulo no produjo IR en modo nativo (revisa los "
                           "diagnosticos)"}};
 
@@ -2438,7 +2507,7 @@ nlohmann::json Inspector::aot_asm(const std::string &uri,
                   target.any_override() ? target.cache_key() : "", target.opt);
     const AotBuild &build = *build_ref;
     const bool got_ir = !build.ir_bytes.empty() &&
-                        ir::parse_ir_module_cache(build.ir_bytes, mod);
+                        ir::parse_ir_module_cache(build.ir_bytes.data(), build.ir_bytes.size(),mod);
     if (!got_ir)
         return {{"error", "el modulo no produjo IR en modo nativo (revisa los "
                           "diagnosticos)"}};
@@ -3072,15 +3141,20 @@ nlohmann::json Inspector::asm_block(const std::string &uri, uint32_t line,
         for (const std::string &et : cfg.insns[i].labels)
             por_etiqueta.emplace(et, i);
 
+    /* Nombre ESTABLE del terminador, no texto de usuario: viaja por el
+     * protocolo y quien lo recibe lo compara.  Por eso va en ingles, como los
+     * nombres de campo de al lado y como `certainty_name` del ASA -- que lo
+     * deja dicho por escrito --: el que lo MUESTRA lo traduce, y asi el mismo
+     * valor vale para cualquier idioma del editor. */
     auto nombre_term = [](vx::AsmTerm t) {
         switch (t) {
-        case vx::AsmTerm::UncondJump: return "salto";
-        case vx::AsmTerm::CondBranch: return "rama";
-        case vx::AsmTerm::Call: return "llamada";
-        case vx::AsmTerm::Ret: return "retorno";
-        case vx::AsmTerm::Indirect: return "indirecto";
-        case vx::AsmTerm::Unknown: return "sin clasificar";
-        default: return "sigue";
+        case vx::AsmTerm::UncondJump: return "jump";
+        case vx::AsmTerm::CondBranch: return "branch";
+        case vx::AsmTerm::Call: return "call";
+        case vx::AsmTerm::Ret: return "ret";
+        case vx::AsmTerm::Indirect: return "indirect";
+        case vx::AsmTerm::Unknown: return "unclassified";
+        default: return "fallthrough";
         }
     };
 
@@ -3246,7 +3320,8 @@ nlohmann::json Inspector::instruction(const std::string &uri, uint32_t line,
      * mueve --; lo demas queda como una micro que LLEVA su identidad en la
      * base (ISA y forma) ya resuelta.  Decir en cual de los dos casos estamos
      * es informacion, no un detalle de implementacion. */
-    std::string elevado = "ninguno";
+    // Nombre estable del caso, no texto de usuario: viaja por el protocolo.
+    std::string elevado = "none";
     std::vector<std::string> ops_ir;
     /* A que ISA se pregunta.  Si el compilador dejo micro, la lleva resuelta;
      * si no, la dice la arquitectura del bloque, que es la misma conversion que
@@ -3274,7 +3349,7 @@ nlohmann::json Inspector::instruction(const std::string &uri, uint32_t line,
                             eff_cache = m.eff;
                             elevado = "micro";
                         }
-                    } else if (elevado == "ninguno") {
+                    } else if (elevado == "none") {
                         elevado = "ir";
                         ops_ir.push_back(ir::ir_op_name(in.op));
                     }
@@ -3325,7 +3400,7 @@ nlohmann::json Inspector::instruction(const std::string &uri, uint32_t line,
     out["microarch"] = vx::instr_db::microarch_name(isa, ua_id);
     // Que hizo el compilador con ella, y de donde sale lo que se cuenta.
     out["lifted"] = elevado;
-    out["resolvedBy"] = (elevado == "micro") ? "compilador" : "texto";
+    out["resolvedBy"] = (elevado == "micro") ? "compiler" : "text";
     if (!ops_ir.empty()) out["irOps"] = ops_ir;
     out["modeled"] = sem.modeled;
     // Una barrera no se puede cruzar: es lo primero que hay que saber al mover
@@ -3670,7 +3745,7 @@ nlohmann::json Inspector::modes(const std::string &uri, const std::string &mode,
         m["warnings"] = static_cast<uint64_t>(build.warnings);
         ir::IrModule mod;
         if (build.ir_bytes.empty() ||
-            !ir::parse_ir_module_cache(build.ir_bytes, mod)) {
+            !ir::parse_ir_module_cache(build.ir_bytes.data(), build.ir_bytes.size(),mod)) {
             m["ok"] = false;
             m["compatible"] = false;
             m["note"] = "el modulo no produjo IR en modo AOT";

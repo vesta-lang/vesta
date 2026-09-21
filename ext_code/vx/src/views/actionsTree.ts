@@ -37,193 +37,224 @@ interface Grupo {
 }
 
 /**
- * Los grupos, en orden.
+ * @brief Los grupos, en orden.
  *
  * El primero es el que contesta a "que hace el compilador con esto", que es
  * para lo que existe la extension; el ultimo, el que casi nunca se toca.
+ *
+ * Se construyen al pedir el arbol y no como una constante del modulo: el texto
+ * sale del idioma del editor, y una constante lo fijaria en el que hubiera al
+ * CARGAR la extension.
+ *
+ * @return Los grupos con su texto ya traducido.
  */
-const GRUPOS: readonly Grupo[] = [
-    {
-        titulo: 'Codigo generado',
-        abierto: true,
-        acciones: [
-            {
-                titulo: 'Fuente / IR / ensamblador',
-                comando: 'vesta.showMachineView',
-                icono: 'split-horizontal',
-                ayuda: 'Las tres vistas alineadas por linea: de donde sale cada instruccion',
-            },
-            {
-                titulo: 'IR SSA',
-                comando: 'vesta.showIr',
-                icono: 'symbol-structure',
-                ayuda: 'La representacion intermedia, antes o despues de optimizar',
-            },
-            {
-                titulo: 'Que hizo el optimizador',
-                comando: 'vesta.showIrDiff',
-                icono: 'diff',
-                ayuda: 'El mismo IR antes y despues, en un diff',
-            },
-            {
-                titulo: 'Bytecode .vel',
-                comando: 'vesta.showBytecode',
-                icono: 'file-binary',
-                ayuda: 'El ensamblador de la maquina virtual',
-            },
-            {
-                titulo: 'Ensamblador del JIT',
-                comando: 'vesta.showJitAsm',
-                icono: 'zap',
-                ayuda: 'El codigo maquina que genera el JIT',
-            },
-            {
-                titulo: 'Ensamblador AOT',
-                comando: 'vesta.showAotAsm',
-                icono: 'server-process',
-                ayuda: 'El codigo maquina del binario nativo',
-            },
-            {
-                titulo: 'Bloque de ensamblador con su flujo',
-                comando: 'vesta.showAsmBlock',
-                icono: 'references',
-                ayuda: 'El bloque asm bajo el cursor, con las flechas de sus saltos y lo que se sabe de cada instruccion',
-            },
-            {
-                titulo: 'Diagrama',
-                comando: 'vesta.showDiagram',
-                icono: 'type-hierarchy',
-                ayuda: 'El AST, el IR o el flujo, dibujados',
-            },
-        ],
-    },
-    {
-        titulo: 'Lo que el compilador sabe',
-        abierto: true,
-        acciones: [
-            {
-                titulo: 'Todo lo que sabe del modulo',
-                comando: 'vesta.showAsa',
-                icono: 'lightbulb',
-                ayuda: 'Los hechos que el analisis dedujo, tal y como los cuenta la linea de ordenes',
-            },
-            {
-                titulo: 'Coste y contratos por funcion',
-                comando: 'vesta.showComplexity',
-                icono: 'graph',
-                ayuda: 'Lo que cada funcion declara -- coste, reservas, pila, pureza -- frente a lo que el compilador mide',
-            },
-            {
-                titulo: 'Compatibilidad AOT',
-                comando: 'vesta.showAotCompat',
-                icono: 'checklist',
-                ayuda: 'Que impide compilar cada funcion a nativo, si algo lo impide',
-            },
-            {
-                titulo: 'Los tres modos de ejecucion',
-                comando: 'vesta.showModes',
-                icono: 'list-tree',
-                ayuda: 'Interprete, JIT y nativo: que puede cada uno con este modulo',
-            },
-            {
-                titulo: 'Expansion de las macros',
-                comando: 'vesta.showMacroExpand',
-                icono: 'symbol-snippet',
-                ayuda: 'El fuente despues de expandir lo que se genera al compilar',
-            },
-            {
-                titulo: 'Valores comptime',
-                comando: 'vesta.showComptimeValues',
-                icono: 'symbol-constant',
-                ayuda: 'Lo que se resolvio durante la compilacion, con su valor',
-            },
-        ],
-    },
-    {
-        titulo: 'Ejecutar',
-        abierto: true,
-        acciones: [
-            {
-                titulo: 'Ejecutar lo seleccionado',
-                comando: 'vesta.runSelection',
-                icono: 'run-below',
-                ayuda: 'Compila y ejecuta solo lo que hay seleccionado',
-            },
-            {
-                titulo: 'Compilar y ejecutar el fichero',
-                comando: 'vesta.run',
-                icono: 'play',
-                ayuda: 'El fichero entero, con el modo y el nivel elegidos',
-            },
-            {
-                titulo: 'Compilar el fichero',
-                comando: 'vesta.compile',
-                icono: 'tools',
-                ayuda: 'Compila sin ejecutar',
-            },
-            {
-                titulo: 'Como se ejecuta',
-                comando: 'vesta.selectRunOptions',
-                icono: 'settings',
-                ayuda: 'Modo de ejecucion, nivel de optimizacion y depuracion',
-            },
-        ],
-    },
-    {
-        titulo: 'Para que maquina',
-        abierto: true,
-        acciones: [
-            {
-                titulo: 'Elegir objetivo',
-                comando: 'vesta.selectTarget',
-                icono: 'device-desktop',
-                ayuda: 'Sistema, arquitectura, nivel de optimizacion y microarquitectura: deciden las vistas Y los errores',
-            },
-        ],
-    },
-    {
-        titulo: 'Navegar',
-        abierto: false,
-        acciones: [
-            {
-                titulo: 'Abrir un modulo de la biblioteca',
-                comando: 'vesta.openStdlib',
-                icono: 'library',
-                ayuda: 'Buscar y abrir cualquier modulo de la biblioteca estandar',
-            },
-            {
-                titulo: 'Abrir el import bajo el cursor',
-                comando: 'vesta.openImport',
-                icono: 'go-to-file',
-                ayuda: 'Salta al fichero del modulo que se esta importando',
-            },
-        ],
-    },
-    {
-        titulo: 'Servidor',
-        abierto: false,
-        acciones: [
-            {
-                titulo: 'Rutas en uso',
-                comando: 'vesta.showPaths',
-                icono: 'folder-opened',
-                ayuda: 'Que servidor y que biblioteca se estan usando, y de donde salieron',
-            },
-            {
-                titulo: 'Registro del servidor',
-                comando: 'vesta.showServerLog',
-                icono: 'output',
-                ayuda: 'Lo que el servidor de lenguaje va contando',
-            },
-            {
-                titulo: 'Reiniciar el servidor',
-                comando: 'vesta.restartServer',
-                icono: 'debug-restart',
-                ayuda: 'Vuelve a arrancarlo con la configuracion actual',
-            },
-        ],
-    },
-];
+function groups(): readonly Grupo[] {
+    return [
+        {
+            titulo: vscode.l10n.t('Generated code'),
+            abierto: true,
+            acciones: [
+                {
+                    titulo: vscode.l10n.t('Source / IR / assembly'),
+                    comando: 'vesta.showMachineView',
+                    icono: 'split-horizontal',
+                    ayuda: vscode.l10n.t(
+                        'The three views lined up by line: where each instruction comes from'),
+                },
+                {
+                    titulo: vscode.l10n.t('SSA IR'),
+                    comando: 'vesta.showIr',
+                    icono: 'symbol-structure',
+                    ayuda: vscode.l10n.t(
+                        'The intermediate representation, before or after optimising'),
+                },
+                {
+                    titulo: vscode.l10n.t('What the optimiser did'),
+                    comando: 'vesta.showIrDiff',
+                    icono: 'diff',
+                    ayuda: vscode.l10n.t('The same IR before and after, as a diff'),
+                },
+                {
+                    titulo: vscode.l10n.t('.vel bytecode'),
+                    comando: 'vesta.showBytecode',
+                    icono: 'file-binary',
+                    ayuda: vscode.l10n.t("The virtual machine's assembly"),
+                },
+                {
+                    titulo: vscode.l10n.t('JIT assembly'),
+                    comando: 'vesta.showJitAsm',
+                    icono: 'zap',
+                    ayuda: vscode.l10n.t('The machine code the JIT generates'),
+                },
+                {
+                    titulo: vscode.l10n.t('AOT assembly'),
+                    comando: 'vesta.showAotAsm',
+                    icono: 'server-process',
+                    ayuda: vscode.l10n.t("The native binary's machine code"),
+                },
+                {
+                    titulo: vscode.l10n.t('Assembly block with its flow'),
+                    comando: 'vesta.showAsmBlock',
+                    icono: 'references',
+                    ayuda: vscode.l10n.t(
+                        'The asm block under the cursor, with the arrows of its jumps and what is known about each instruction'),
+                },
+                {
+                    titulo: vscode.l10n.t('Diagram'),
+                    comando: 'vesta.showDiagram',
+                    icono: 'type-hierarchy',
+                    ayuda: vscode.l10n.t('The AST, the IR or the flow, drawn'),
+                },
+            ],
+        },
+        {
+            titulo: vscode.l10n.t('What the compiler knows'),
+            abierto: true,
+            acciones: [
+                {
+                    titulo: vscode.l10n.t('Everything it knows about the module'),
+                    comando: 'vesta.showAsa',
+                    icono: 'lightbulb',
+                    ayuda: vscode.l10n.t(
+                        'The facts the analysis deduced, just as the command line reports them'),
+                },
+                {
+                    titulo: vscode.l10n.t('Cost and contracts per function'),
+                    comando: 'vesta.showComplexity',
+                    icono: 'graph',
+                    ayuda: vscode.l10n.t(
+                        'What each function declares -- cost, allocations, stack, purity -- against what the compiler measures'),
+                },
+                {
+                    titulo: vscode.l10n.t('AOT compatibility'),
+                    comando: 'vesta.showAotCompat',
+                    icono: 'checklist',
+                    ayuda: vscode.l10n.t(
+                        'What stops each function from compiling to native, if anything does'),
+                },
+                {
+                    titulo: vscode.l10n.t('The three execution modes'),
+                    comando: 'vesta.showModes',
+                    icono: 'list-tree',
+                    ayuda: vscode.l10n.t(
+                        'Interpreter, JIT and native: what each one can do with this module'),
+                },
+                {
+                    titulo: vscode.l10n.t('Macro expansion'),
+                    comando: 'vesta.showMacroExpand',
+                    icono: 'symbol-snippet',
+                    ayuda: vscode.l10n.t(
+                        'The source after expanding what is generated at compile time'),
+                },
+                {
+                    titulo: vscode.l10n.t('Comptime values'),
+                    comando: 'vesta.showComptimeValues',
+                    icono: 'symbol-constant',
+                    ayuda: vscode.l10n.t(
+                        'What was resolved during compilation, with its value'),
+                },
+            ],
+        },
+        {
+            titulo: vscode.l10n.t('Run'),
+            abierto: true,
+            acciones: [
+                {
+                    titulo: vscode.l10n.t('Run the selection'),
+                    comando: 'vesta.runSelection',
+                    icono: 'run-below',
+                    ayuda: vscode.l10n.t('Compiles and runs only what is selected'),
+                },
+                {
+                    titulo: vscode.l10n.t('Compile and run the file'),
+                    comando: 'vesta.run',
+                    icono: 'play',
+                    ayuda: vscode.l10n.t(
+                        'The whole file, with the chosen mode and level'),
+                },
+                {
+                    titulo: vscode.l10n.t('Compile the file'),
+                    comando: 'vesta.compile',
+                    icono: 'tools',
+                    ayuda: vscode.l10n.t('Compiles without running'),
+                },
+                {
+                    titulo: vscode.l10n.t('How it runs'),
+                    comando: 'vesta.selectRunOptions',
+                    icono: 'settings',
+                    ayuda: vscode.l10n.t(
+                        'Execution mode, optimisation level and debugging'),
+                },
+            ],
+        },
+        {
+            titulo: vscode.l10n.t('For which machine'),
+            abierto: true,
+            acciones: [
+                {
+                    titulo: vscode.l10n.t('Choose the target'),
+                    comando: 'vesta.selectTarget',
+                    icono: 'device-desktop',
+                    ayuda: vscode.l10n.t(
+                        'System, architecture, optimisation level and microarchitecture: they decide the views AND the errors'),
+                },
+            ],
+        },
+        {
+            titulo: vscode.l10n.t('Navigate'),
+            abierto: false,
+            acciones: [
+                {
+                    titulo: vscode.l10n.t('Open a library module'),
+                    comando: 'vesta.openStdlib',
+                    icono: 'library',
+                    ayuda: vscode.l10n.t(
+                        'Search for and open any module of the standard library'),
+                },
+                {
+                    titulo: vscode.l10n.t('Open the import under the cursor'),
+                    comando: 'vesta.openImport',
+                    icono: 'go-to-file',
+                    ayuda: vscode.l10n.t(
+                        'Jumps to the file of the module being imported'),
+                },
+            ],
+        },
+        {
+            titulo: vscode.l10n.t('Server'),
+            abierto: false,
+            acciones: [
+                {
+                    titulo: vscode.l10n.t('Paths in use'),
+                    comando: 'vesta.showPaths',
+                    icono: 'folder-opened',
+                    ayuda: vscode.l10n.t(
+                        'Which server and which library are in use, and where they came from'),
+                },
+                {
+                    titulo: vscode.l10n.t('Server log'),
+                    comando: 'vesta.showServerLog',
+                    icono: 'output',
+                    ayuda: vscode.l10n.t('What the language server keeps reporting'),
+                },
+                {
+                    titulo: vscode.l10n.t('Restart the server'),
+                    comando: 'vesta.restartServer',
+                    icono: 'debug-restart',
+                    ayuda: vscode.l10n.t(
+                        'Starts it again with the current configuration'),
+                },
+                {
+                    titulo: vscode.l10n.t('Stop the server'),
+                    comando: 'vesta.stopServer',
+                    icono: 'debug-stop',
+                    ayuda: vscode.l10n.t(
+                        'Leaves it stopped and frees its binary, so it can be rebuilt'),
+                },
+            ],
+        },
+    ];
+}
 
 /** Nodo del arbol: un grupo o una accion. */
 type Nodo = { clase: 'grupo'; grupo: Grupo } | { clase: 'accion'; accion: Accion };
@@ -270,7 +301,7 @@ export class VestaActionsProvider implements vscode.TreeDataProvider<Nodo> {
      */
     public getChildren(nodo?: Nodo): Nodo[] {
         if (!nodo) {
-            return GRUPOS.map(grupo => ({ clase: 'grupo', grupo } as Nodo));
+            return groups().map(grupo => ({ clase: 'grupo', grupo } as Nodo));
         }
         if (nodo.clase === 'grupo') {
             return nodo.grupo.acciones.map(

@@ -2534,7 +2534,8 @@ int main(int argc, char *argv[]) {
             return EXIT_FAILURE;
         }
         ir::IrModule asa_mod;
-        if (!ir::parse_ir_module_cache(cr.ir_module_cache_bytes, asa_mod)) {
+        if (!ir::parse_ir_module_cache(cr.ir_module_cache_bytes.data(),
+                                   cr.ir_module_cache_bytes.size(),asa_mod)) {
             std::cerr << "[asa] no se pudo leer el IR.\n";
             return EXIT_FAILURE;
         }
@@ -2584,8 +2585,9 @@ int main(int argc, char *argv[]) {
         if (show_ir) {
             ir::IrModule asa_mod_pre;
             if (!cr.ir_module_cache_bytes_preopt.empty() &&
-                ir::parse_ir_module_cache(cr.ir_module_cache_bytes_preopt,
-                                          asa_mod_pre))
+                ir::parse_ir_module_cache(
+                    cr.ir_module_cache_bytes_preopt.data(),
+                    cr.ir_module_cache_bytes_preopt.size(), asa_mod_pre))
                 print_asa_ir(asa_mod_pre, analysis::asa::kStagePreOpt);
             print_asa_ir(asa_mod, analysis::asa::kStagePostOpt);
         }
@@ -2756,7 +2758,8 @@ int main(int argc, char *argv[]) {
         // final, tras inline/loop-elim/unroll) + correr el analisis +
         // composicion interprocedural (call-graph bottom-up -> coste TOTAL).
         ir::IrModule amod_post;
-        if (!ir::parse_ir_module_cache(cr.ir_module_cache_bytes, amod_post)) {
+        if (!ir::parse_ir_module_cache(cr.ir_module_cache_bytes.data(),
+                                   cr.ir_module_cache_bytes.size(),amod_post)) {
             std::cerr << "[analyze] no se pudo deserializar el IR.\n";
             return EXIT_FAILURE;
         }
@@ -2802,8 +2805,9 @@ int main(int argc, char *argv[]) {
                         vx::compile_vx_project(c, io_opts);
                     ir::IrModule io_mod;
                     if (io_cr.ok && !io_cr.ir_module_cache_bytes.empty() &&
-                        ir::parse_ir_module_cache(io_cr.ir_module_cache_bytes,
-                                                  io_mod)) {
+                        ir::parse_ir_module_cache(
+                            io_cr.ir_module_cache_bytes.data(),
+                            io_cr.ir_module_cache_bytes.size(), io_mod)) {
                         for (auto &f : io_mod.functions)
                             if (!definidas.count(f.name))
                                 amod_post.functions.push_back(std::move(f));
@@ -2851,7 +2855,8 @@ int main(int argc, char *argv[]) {
         bool hay_build = false;
         if (!cr.ir_module_cache_bytes_inlined.empty())
             hay_build = ir::parse_ir_module_cache(
-                cr.ir_module_cache_bytes_inlined, amod_build);
+                cr.ir_module_cache_bytes_inlined.data(),
+                cr.ir_module_cache_bytes_inlined.size(), amod_build);
         us_modulo_final = tramo_us();
         const ir::IrModule &amod_efectos = hay_build ? amod_build : amod_post;
         if (!want_json)
@@ -2921,8 +2926,10 @@ int main(int argc, char *argv[]) {
         bool have_pre = !cr.ir_module_cache_bytes_preopt.empty();
         ir::IrModule amod_pre;
         analyze::ModuleCost mc_pre;
-        if (have_pre && ir::parse_ir_module_cache(
-                            cr.ir_module_cache_bytes_preopt, amod_pre)) {
+        if (have_pre &&
+            ir::parse_ir_module_cache(cr.ir_module_cache_bytes_preopt.data(),
+                                      cr.ir_module_cache_bytes_preopt.size(),
+                                      amod_pre)) {
             mc_pre = analyze::analyze_module(amod_pre, &cr.facts,
                                              analysis::asa::kStagePreOpt);
             analyze::compose_interproc(mc_pre);
@@ -3027,16 +3034,26 @@ int main(int argc, char *argv[]) {
 
         // Salida legible: por cada funcion (orden del modulo POST-opt),
         // mostrar los 4 costes: PRE/POST x PARCIAL/TOTAL.
-        std::cout << "Analisis de coste (Big-O) -- " << vx_path << "\n";
-        std::cout << "Niveles: PRE-opt (fuente) y POST-opt (codigo final O2);"
-                     " PARCIAL (cuerpo, calls=O(1)) y TOTAL (interprocedural)."
-                     "\n";
-        std::cout << "Contrato @complexity: cada dimension declarada "
-                     "(partial_pre/partial_post/total_pre/total_post) se valida"
-                     " contra su coste inferido.  @complexity(O(...)) = azucar"
-                     " de total_post.\n";
+        std::cout << vx::diag::format("VX9260", {vx_path}) << "\n";
+        std::cout << vx::diag::format("VX9261", {}) << "\n";
+        std::cout << vx::diag::format("VX9262", {}) << "\n";
         std::cout << "=================================================="
                      "===========\n";
+        /* Los textos FIJOS del informe -- los que no llevan ningun hueco --
+         * se resuelven UNA vez, no una por funcion.  Dentro del bucle, cada
+         * `format` reserva una cadena nueva para devolver siempre lo mismo, y
+         * el si/no se pedia CUATRO veces por funcion. */
+        const std::string yes = vx::diag::format("VX9278", {});
+        const std::string no = vx::diag::format("VX9279", {});
+        const std::string pre_unavailable = vx::diag::format("VX9264", {});
+        const std::string effects_partial = vx::diag::format("VX9270", {});
+        const std::string declared_header = vx::diag::format("VX9271", {});
+        const std::string dim_unavailable = vx::diag::format("VX9272", {});
+        const std::string verdict_ok = vx::diag::format("VX9282", {});
+        const std::string verdict_fails = vx::diag::format("VX9283", {});
+        const std::string verdict_unknown = vx::diag::format("VX9284", {});
+        const std::string warning_mark = vx::diag::format("VX9285", {});
+
         int mismatches = 0;
         for (const auto &rp : mc_post.functions) {
             const analyze::CostResult *pre =
@@ -3045,18 +3062,23 @@ int main(int argc, char *argv[]) {
             std::cout << "  " << rp.function << "\n";
             // PRE-opt.
             if (pre) {
-                std::cout << "      PRE-opt : parcial "
-                          << analyze::cost_class_str(pre->big_o) << "   total "
-                          << analyze::cost_class_str(pre->total_class) << "   ["
-                          << pre->detail << "]\n";
+                std::cout << "      "
+                          << vx::diag::format(
+                                 "VX9263",
+                                 {analyze::cost_class_str(pre->big_o),
+                                  analyze::cost_class_str(pre->total_class),
+                                  pre->detail})
+                          << "\n";
             } else {
-                std::cout << "      PRE-opt : (no disponible)\n";
+                std::cout << "      " << pre_unavailable << "\n";
             }
             // POST-opt.
-            std::cout << "      POST-opt: parcial "
-                      << analyze::cost_class_str(rp.big_o) << "   total "
-                      << analyze::cost_class_str(rp.total_class) << "   ["
-                      << rp.detail << "]\n";
+            std::cout << "      "
+                      << vx::diag::format(
+                             "VX9265", {analyze::cost_class_str(rp.big_o),
+                                        analyze::cost_class_str(rp.total_class),
+                                        rp.detail})
+                      << "\n";
 
             /* PRE distinto de POST: el optimizador cambio el coste.
              *
@@ -3076,24 +3098,28 @@ int main(int argc, char *argv[]) {
              * es distinto de no decir nada. */
             if (pre && pre->total_class != rp.total_class) {
                 if (rp.loops_not_understood > 0) {
-                    std::cout << "      >> sin comparar con el fuente: "
-                              << rp.loops_not_understood
-                              << " bucle(s) no se reconocen tras optimizar, "
-                                 "asi que el coste efectivo no esta medido -- "
-                                 "decir que empeoro seria acusar sin prueba\n";
+                    std::cout << "      "
+                              << vx::diag::format(
+                                     "VX9266",
+                                     {std::to_string(rp.loops_not_understood)})
+                              << "\n";
                 } else {
-                    std::cout << "      >> el optimizer cambio el coste TOTAL: "
-                              << analyze::cost_class_str(pre->total_class)
-                              << " (fuente) -> "
-                              << analyze::cost_class_str(rp.total_class)
-                              << " (efectivo)\n";
+                    std::cout << "      "
+                              << vx::diag::format(
+                                     "VX9267",
+                                     {analyze::cost_class_str(pre->total_class),
+                                      analyze::cost_class_str(rp.total_class)})
+                              << "\n";
                 }
             }
             // Resaltar cuando PARCIAL difiere de TOTAL (callees elevan).
             if (rp.big_o != rp.total_class) {
-                std::cout << "      >> callees elevan el coste: parcial "
-                          << analyze::cost_class_str(rp.big_o) << " -> total "
-                          << analyze::cost_class_str(rp.total_class) << "\n";
+                std::cout << "      "
+                          << vx::diag::format(
+                                 "VX9268",
+                                 {analyze::cost_class_str(rp.big_o),
+                                  analyze::cost_class_str(rp.total_class)})
+                          << "\n";
             }
 
             // Huella computacional (propiedades EXACTAS/sound).  allocs y stack
@@ -3103,28 +3129,29 @@ int main(int argc, char *argv[]) {
                     fp->stack_bytes_total == analyze::STACK_UNBOUNDED
                         ? std::string("inf")
                         : std::to_string(fp->stack_bytes_total);
-                std::cout << "      Huella  : allocs=" << fp->alloc_sites << "/"
-                          << fp->alloc_sites_total
-                          << " stack=" << fp->stack_bytes << "/" << st_tot
-                          << "B"
-                          << " (parcial/total)"
-                          << " pure=" << (fp->pure ? "si" : "no")
-                          << " throws=" << (fp->throws_total ? "si" : "no")
-                          << " panics=" << (fp->panics_total ? "si" : "no")
-                          << " recursion=" << (fp->recursive ? "si" : "no");
-                if (!fp->effects_known)
-                    std::cout << "  (efectos parcialmente desconocidos: "
-                                 "llamada dinamica/externa)";
+                // El si/no tambien se lee, asi que tambien sale del catalogo.
+                std::cout << "      "
+                          << vx::diag::format(
+                                 "VX9269",
+                                 {std::to_string(fp->alloc_sites),
+                                  std::to_string(fp->alloc_sites_total),
+                                  std::to_string(fp->stack_bytes), st_tot,
+                                  fp->pure ? yes : no,
+                                  fp->throws_total ? yes : no,
+                                  fp->panics_total ? yes : no,
+                                  fp->recursive ? yes : no});
+                if (!fp->effects_known) std::cout << effects_partial;
                 std::cout << "\n";
             }
 
             // Contratos de huella declarados por el usuario para esta funcion.
             for (const auto &ck : contract_checks) {
                 if (ck.function != rp.function) continue;
-                const char *mark =
-                    ck.status == analyze::ContractCheck::OK         ? "OK  "
-                    : ck.status == analyze::ContractCheck::VIOLATED ? "FALLA"
-                                                                    : "?   ";
+                const std::string &mark =
+                    ck.status == analyze::ContractCheck::OK ? verdict_ok
+                    : ck.status == analyze::ContractCheck::VIOLATED
+                        ? verdict_fails
+                        : verdict_unknown;
                 std::cout << "      " << mark << " " << ck.contract << " -> "
                           << ck.detail << "\n";
                 if (ck.status == analyze::ContractCheck::VIOLATED) ++mismatches;
@@ -3136,7 +3163,7 @@ int main(int argc, char *argv[]) {
                 !rp.decl_partial_pre.empty() || !rp.decl_partial_post.empty() ||
                 !rp.decl_total_pre.empty() || !rp.decl_total_post.empty();
             if (has_any_contract) {
-                std::cout << "      @complexity declarada:\n";
+                std::cout << "      " << declared_header << "\n";
                 // Tabla: (etiqueta, decl, inferida, confianza).  Para PRE
                 // usamos el CostResult PRE si existe.
                 struct DimRow {
@@ -3167,17 +3194,17 @@ int main(int argc, char *argv[]) {
                               << analyze::cost_class_str(
                                      analyze::parse_cost_class(*row.decl));
                     if (!row.have) {
-                        std::cout << "  (dimension no disponible; no validada)";
+                        std::cout << dim_unavailable;
                     } else if (validate_dim(*row.decl, row.inferred,
                                             row.conf)) {
-                        std::cout << "  ** DISCREPANCIA: inferida "
-                                  << analyze::cost_class_str(row.inferred)
-                                  << " **";
+                        std::cout << vx::diag::format(
+                            "VX9273",
+                            {analyze::cost_class_str(row.inferred)});
                         ++mismatches;
                     } else {
-                        std::cout << "  (ok, inferida "
-                                  << analyze::cost_class_str(row.inferred)
-                                  << ")";
+                        std::cout << vx::diag::format(
+                            "VX9274",
+                            {analyze::cost_class_str(row.inferred)});
                     }
                     std::cout << "\n";
                 }
@@ -3189,27 +3216,30 @@ int main(int argc, char *argv[]) {
         if (!cr.type_fingerprints.empty()) {
             auto type_checks = analyze::verify_type_contracts(
                 cr.type_fingerprints, cr.type_contracts);
-            std::cout << "\n--- Tipos ---\n";
+            std::cout << "\n" << vx::diag::format("VX9275", {}) << "\n";
             for (const auto &tf : cr.type_fingerprints) {
                 const char *kind =
                     tf.kind == analyze::TypeFingerprint::STRUCT  ? "struct"
                     : tf.kind == analyze::TypeFingerprint::CLASS ? "class"
                                                                  : "enum";
-                std::cout << "  " << kind << " " << tf.type_name
-                          << " : size=" << tf.size_bytes << "B"
-                          << " align=" << tf.align_bytes
-                          << " fields=" << tf.field_count
+                std::cout << "  "
+                          << vx::diag::format(
+                                 "VX9276",
+                                 {kind, tf.type_name,
+                                  std::to_string(tf.size_bytes),
+                                  std::to_string(tf.align_bytes),
+                                  std::to_string(tf.field_count)})
                           << (tf.is_pod ? " [pod]" : "")
                           << (tf.no_heap ? " [no_heap]" : "")
                           << (tf.has_destructor ? " [~dtor]" : "")
                           << (tf.is_reference ? " [ref]" : "") << "\n";
                 for (const auto &ck : type_checks) {
                     if (ck.function != tf.type_name) continue;
-                    const char *st =
-                        ck.status == analyze::ContractCheck::OK ? "OK  "
+                    const std::string &st =
+                        ck.status == analyze::ContractCheck::OK ? verdict_ok
                         : ck.status == analyze::ContractCheck::VIOLATED
-                            ? "FALLA"
-                            : "????";
+                            ? verdict_fails
+                            : verdict_unknown;
                     std::cout << "      " << st << " " << ck.contract << " -> "
                               << ck.detail << "\n";
                     if (ck.status == analyze::ContractCheck::VIOLATED)
@@ -3303,7 +3333,9 @@ int main(int argc, char *argv[]) {
                 // POST-opt (sin inline, gracias a emit_ir_preopt): el `partial`
                 // es el cuerpo propio; el `total` lo compone el call-graph.
                 ir::IrModule m2;
-                if (!ir::parse_ir_module_cache(r2.ir_module_cache_bytes, m2)) {
+                if (!ir::parse_ir_module_cache(
+                        r2.ir_module_cache_bytes.data(),
+                        r2.ir_module_cache_bytes.size(), m2)) {
                     pa.fallo = "no se pudo deserializar el IR";
                     tabla.push_back(std::move(pa));
                     continue;
@@ -3316,7 +3348,9 @@ int main(int argc, char *argv[]) {
                 analyze::ModuleCost c2_pre;
                 bool tiene_pre = !r2.ir_module_cache_bytes_preopt.empty() &&
                                  ir::parse_ir_module_cache(
-                                     r2.ir_module_cache_bytes_preopt, m2_pre);
+                                     r2.ir_module_cache_bytes_preopt.data(),
+                                     r2.ir_module_cache_bytes_preopt.size(),
+                                     m2_pre);
                 if (tiene_pre) {
                     c2_pre = analyze::analyze_module(m2_pre);
                     analyze::compose_interproc(c2_pre);
@@ -3364,12 +3398,13 @@ int main(int argc, char *argv[]) {
                             h->stack_bytes_total == analyze::STACK_UNBOUNDED
                                 ? std::string("inf")
                                 : std::to_string(h->stack_bytes_total);
-                        s += "  allocs=" + std::to_string(h->alloc_sites) +
-                             "/" + std::to_string(h->alloc_sites_total) +
-                             " stack=" + std::to_string(h->stack_bytes) + "/" +
-                             st_tot + "B" + " pure=" + (h->pure ? "si" : "no") +
-                             " throws=" + (h->throws_total ? "si" : "no") +
-                             " panics=" + (h->panics_total ? "si" : "no");
+                        s += vx::diag::format(
+                            "VX9286",
+                            {std::to_string(h->alloc_sites),
+                             std::to_string(h->alloc_sites_total),
+                             std::to_string(h->stack_bytes), st_tot,
+                             h->pure ? yes : no, h->throws_total ? yes : no,
+                             h->panics_total ? yes : no});
                     }
                     pa.resumen[f.function] = std::move(s);
                     pa.datos[f.function] = std::move(fd);
@@ -3423,7 +3458,7 @@ int main(int argc, char *argv[]) {
                     }
                 }
                 for (const auto &s : no_compilan)
-                    std::cout << "  [aviso] " << s << "\n";
+                    std::cout << warning_mark << s << "\n";
             }
 
             // --annotate: las anotaciones que cada funcion deberia llevar,
@@ -3678,10 +3713,8 @@ int main(int argc, char *argv[]) {
                                                anot_por_clave))
                         return EXIT_FAILURE;
                 } else {
-                    std::cout
-                        << "\nAnotaciones sugeridas.  Los contratos medidos"
-                           " que cada funcion deberia llevar; copialos "
-                           "delante de la definicion.\n";
+                    std::cout << "\n"
+                              << vx::diag::format("VX9277", {}) << "\n";
                     std::cout << "==========================================="
                                  "==================\n";
                     for (const auto &clave : orden_grupos) {
@@ -3698,8 +3731,10 @@ int main(int argc, char *argv[]) {
 
         std::cout << "=================================================="
                      "===========\n";
-        std::cout << "Funciones analizadas: " << mc_post.functions.size()
-                  << "; contratos con discrepancia: " << mismatches << "\n";
+        std::cout << vx::diag::format(
+                         "VX9280", {std::to_string(mc_post.functions.size())})
+                  << vx::diag::format("VX9281", {std::to_string(mismatches)})
+                  << "\n";
         return EXIT_SUCCESS;
     }
 
@@ -3711,7 +3746,7 @@ int main(int argc, char *argv[]) {
             result["dump-semantic-index"].as<std::string>();
         std::string src;
         if (!vx::leer_fuente(vx_path, src)) {
-            std::cerr << "error: no se pudo abrir '" << vx_path << "'\n";
+            std::cerr << vx::diag::format("VXW900", {vx_path}) << "\n";
             return EXIT_FAILURE;
         }
         vx::Diagnostics diags;
@@ -3772,9 +3807,8 @@ int main(int argc, char *argv[]) {
                               diag_fmt == "both" || diag_fmt == "all");
         bool emit_html = (diag_fmt == "html" || diag_fmt == "all");
         if (!emit_mermaid && !emit_graphviz && !emit_html) {
-            std::cerr << "[diagram] Formato desconocido: '" << diag_fmt
-                      << "' (usar mermaid | graphviz | html | both | all). "
-                         "Defaulting a mermaid.\n";
+            std::cerr << "[diagram] " << vx::diag::format("VX7052", {diag_fmt})
+                      << "\n";
             emit_mermaid = true;
         }
 
@@ -4730,6 +4764,77 @@ int main(int argc, char *argv[]) {
             return EXIT_SUCCESS;
         }
 
+        /* Diagramas: cada flag activo produce un fichero .mmd, .dot o .html
+         * segun el formato escogido.  Mermaid lo reconocen VS Code, GitHub y
+         * mermaid.live; Graphviz se renderiza con `dot -Tsvg foo.dot`.
+         *
+         * AQUI ARRIBA, JUNTO AL DUMP DEL IR Y POR LA MISMA RAZON: compilando a
+         * nativo no se llega al final de esta funcion, asi que escribirlos alla
+         * abajo hacia que `-m aot --diagram-all` aceptara las banderas, no
+         * escribiera nada y no lo dijera -- de las dos cosas, la segunda es la
+         * que no se puede hacer.  Lo que se dibuja es el IR, que en AOT existe
+         * igual.  Comprobado ejecutandolo, no leyendo el comentario de al
+         * lado. */
+        {
+            auto write_diagram = [&](const std::string &content,
+                                     const std::string &suffix) -> bool {
+                if (content.empty()) return true; // no se pidio; no es error
+                std::string base =
+                    out_prefix.empty() ? copts.module_name : out_prefix;
+                std::string path = base + suffix;
+                std::ofstream ofs(path);
+                if (!ofs.is_open()) {
+                    // Del catalogo, como todo lo que lee una persona: escrito
+                    // aqui existiria en un idioma para siempre.
+                    std::cerr << "[diagram] "
+                              << vx::diag::format("VX7051", {path}) << "\n";
+                    return false;
+                }
+                ofs << content;
+                vesta::scout()
+                    << "[diagram] " << vx::diag::format("VX7050", {path})
+                    << "\n";
+                return true;
+            };
+            if (emit_mermaid) {
+                if (diag_vx && !write_diagram(cr.mermaid_ast, ".ast.mmd"))
+                    return EXIT_FAILURE;
+                if (diag_ir_pre &&
+                    !write_diagram(cr.mermaid_ir_pre, ".ir.pre.mmd"))
+                    return EXIT_FAILURE;
+                if (diag_ir_post &&
+                    !write_diagram(cr.mermaid_ir_post, ".ir.post.mmd"))
+                    return EXIT_FAILURE;
+                if (diag_vel && !write_diagram(cr.mermaid_vel, ".vel.mmd"))
+                    return EXIT_FAILURE;
+            }
+            if (emit_graphviz) {
+                if (diag_vx && !write_diagram(cr.graphviz_ast, ".ast.dot"))
+                    return EXIT_FAILURE;
+                if (diag_ir_pre &&
+                    !write_diagram(cr.graphviz_ir_pre, ".ir.pre.dot"))
+                    return EXIT_FAILURE;
+                if (diag_ir_post &&
+                    !write_diagram(cr.graphviz_ir_post, ".ir.post.dot"))
+                    return EXIT_FAILURE;
+                if (diag_vel && !write_diagram(cr.graphviz_vel, ".vel.dot"))
+                    return EXIT_FAILURE;
+            }
+            if (emit_html) {
+                // Paginas autocontenidas: se abren en el navegador.
+                if (diag_vx && !write_diagram(cr.html_ast, ".ast.html"))
+                    return EXIT_FAILURE;
+                if (diag_ir_pre &&
+                    !write_diagram(cr.html_ir_pre, ".ir.pre.html"))
+                    return EXIT_FAILURE;
+                if (diag_ir_post &&
+                    !write_diagram(cr.html_ir_post, ".ir.post.html"))
+                    return EXIT_FAILURE;
+                if (diag_vel && !write_diagram(cr.html_vel, ".vel.html"))
+                    return EXIT_FAILURE;
+            }
+        }
+
         if (aot_mode) {
             // Emision AOT nativa: delegada a vesta::tc::compile_aot
             // (src/toolchain/aot_build.cpp) para no monolitizar main.cpp.  Los
@@ -5173,63 +5278,9 @@ int main(int argc, char *argv[]) {
             }
         }
 
-        // Diagramas: cada flag activo produce un archivo .mmd o .dot segun
-        // el formato escogido.  Mermaid reconocido por VS Code / GitHub /
-        // mermaid.live.  Graphviz se renderiza con `dot -Tsvg foo.dot -o
-        // foo.svg`.
-        auto write_diagram = [&](const std::string &content,
-                                 const std::string &suffix) -> bool {
-            if (content.empty()) return true; // no se solicito; no es error
-            std::string base =
-                out_prefix.empty() ? copts.module_name : out_prefix;
-            std::string path = base + suffix;
-            std::ofstream ofs(path);
-            if (!ofs.is_open()) {
-                std::cerr << "[diagram] No se puede escribir: " << path << "\n";
-                return false;
-            }
-            ofs << content;
-            vesta::scout() << "[diagram] generado: " << path << "\n";
-            return true;
-        };
-        if (emit_mermaid) {
-            if (diag_vx && !write_diagram(cr.mermaid_ast, ".ast.mmd"))
-                return EXIT_FAILURE;
-            if (diag_ir_pre && !write_diagram(cr.mermaid_ir_pre, ".ir.pre.mmd"))
-                return EXIT_FAILURE;
-            if (diag_ir_post &&
-                !write_diagram(cr.mermaid_ir_post, ".ir.post.mmd"))
-                return EXIT_FAILURE;
-            if (diag_vel && !write_diagram(cr.mermaid_vel, ".vel.mmd"))
-                return EXIT_FAILURE;
-        }
-        if (emit_graphviz) {
-            if (diag_vx && !write_diagram(cr.graphviz_ast, ".ast.dot"))
-                return EXIT_FAILURE;
-            if (diag_ir_pre &&
-                !write_diagram(cr.graphviz_ir_pre, ".ir.pre.dot"))
-                return EXIT_FAILURE;
-            if (diag_ir_post &&
-                !write_diagram(cr.graphviz_ir_post, ".ir.post.dot"))
-                return EXIT_FAILURE;
-            if (diag_vel && !write_diagram(cr.graphviz_vel, ".vel.dot"))
-                return EXIT_FAILURE;
-        }
-        if (emit_html) {
-            // Paginas HTML interactivas autocontenidas: abrir en el navegador.
-            if (diag_vx && !write_diagram(cr.html_ast, ".ast.html"))
-                return EXIT_FAILURE;
-            if (diag_ir_pre && !write_diagram(cr.html_ir_pre, ".ir.pre.html"))
-                return EXIT_FAILURE;
-            if (diag_ir_post &&
-                !write_diagram(cr.html_ir_post, ".ir.post.html"))
-                return EXIT_FAILURE;
-            if (diag_vel && !write_diagram(cr.html_vel, ".vel.html"))
-                return EXIT_FAILURE;
-        }
-
-        // (El dump --vx-emit-ir se escribe mas arriba, antes del bloque
-        // `if (aot_mode)`, para cubrir tambien el AOT que retorna antes.)
+        // (Los diagramas se escriben mas arriba, antes del bloque
+        // `if (aot_mode)`, por lo mismo que el dump --vx-emit-ir: ese bloque
+        // retorna y este punto no se alcanza compilando a nativo.)
 
         // Fase 4 interop C: escribir el header C publico (<output>.h) si
         // --emit-header esta activo.  Se hace ANTES del bloque --port (que

@@ -19,6 +19,43 @@ import { VestaLanguageClient, describeError } from '../lsp/client';
 import { AsmResponse, FunctionsResponse, VestaMethod } from '../lsp/protocol';
 import { createNonce } from '../util/html';
 import { applyTarget, aotTier, inspectTarget } from '../util/settings';
+import { embedStrings } from '../util/webviewL10n';
+
+/**
+ * @brief El texto del panel, traducido en el anfitrion.
+ *
+ * Por nombres y no por frases: dentro del panel no hay `l10n`.  Ver
+ * `util/webviewL10n.ts`.
+ *
+ * @return Los pares nombre -> texto.
+ */
+function strings(): Record<string, string> {
+    return {
+        backend: vscode.l10n.t('Backend'),
+        functionLabel: vscode.l10n.t('Function'),
+        refresh: vscode.l10n.t('Refresh'),
+        refreshHint: vscode.l10n.t('Compile and repaint it again'),
+        sourceToggleHint: vscode.l10n.t(
+            'The source is already in the editor; here only if you want to see it lined up'),
+        source: vscode.l10n.t('Source'),
+        assembly: vscode.l10n.t('Assembly'),
+
+        compiling: vscode.l10n.t('Compiling...'),
+        cannotCompile: vscode.l10n.t(
+            'The function cannot be compiled in this mode.'),
+
+        frameAndArgs: vscode.l10n.t('Stack frame and arguments'),
+        argsCount: vscode.l10n.t('{0} arg'),
+        frameBytes: vscode.l10n.t('{0} B of frame'),
+        relocCount: vscode.l10n.t('{0} reloc'),
+        argsTable: vscode.l10n.t('Arguments'),
+        frameTable: vscode.l10n.t('Stack frame'),
+        relocsTable: vscode.l10n.t('Relocations'),
+
+        irOp: vscode.l10n.t('IR operation: {0}'),
+        lineNo: vscode.l10n.t('Line {0}'),
+    };
+}
 
 /** Generador de codigo del que se pide el desensamblado. */
 export type MachineBackend = 'jit' | 'aot';
@@ -91,7 +128,7 @@ export class MachineViewPanel {
         if (!MachineViewPanel.current) {
             const panel = vscode.window.createWebviewPanel(
                 MachineViewPanel.viewType,
-                'Vesta: fuente / IR / ensamblador',
+                vscode.l10n.t('Vesta: source / IR / assembly'),
                 column,
                 { enableScripts: true, retainContextWhenHidden: true, localResourceRoots: [] },
             );
@@ -233,9 +270,10 @@ function buildHtml(webview: vscode.Webview): string {
         "default-src 'none'; " +
         `style-src ${webview.cspSource} 'unsafe-inline'; ` +
         `script-src 'nonce-${nonce}';`;
+    const T = strings();
 
     return `<!DOCTYPE html>
-<html lang="es">
+<html lang="${vscode.env.language}">
 <head>
 <meta charset="UTF-8">
 <meta http-equiv="Content-Security-Policy" content="${csp}">
@@ -348,31 +386,32 @@ function buildHtml(webview: vscode.Webview): string {
 </head>
 <body>
 <header>
-    <label for="backend">Generador</label>
+    <label for="backend">${T.backend}</label>
     <select id="backend">
         <option value="jit">JIT</option>
         <option value="aot">AOT</option>
     </select>
-    <label for="fn">Funcion</label>
+    <label for="fn">${T.functionLabel}</label>
     <select id="fn"></select>
-    <button id="reload" title="Volver a compilar y repintar">Actualizar</button>
-    <label class="toggle" title="El fuente ya esta en el editor; aqui solo si se quiere ver alineado">
-        <input type="checkbox" id="verFuente"> Fuente
+    <button id="reload" title="${T.refreshHint}">${T.refresh}</button>
+    <label class="toggle" title="${T.sourceToggleHint}">
+        <input type="checkbox" id="verFuente"> ${T.source}
     </label>
     <span id="stats"></span>
 </header>
 <div id="message" class="hidden"></div>
 <div id="columns">
-    <div class="column hidden" id="colSrc"><h2>Fuente</h2><div class="rows" id="src"></div></div>
+    <div class="column hidden" id="colSrc"><h2>${T.source}</h2><div class="rows" id="src"></div></div>
     <div class="column"><h2>IR</h2><div class="rows" id="ir"></div></div>
-    <div class="column"><h2>Ensamblador</h2><div class="rows" id="asm"></div></div>
+    <div class="column"><h2>${T.assembly}</h2><div class="rows" id="asm"></div></div>
 </div>
 <details id="detail" class="hidden">
-    <summary id="detailSummary">Marco de pila y argumentos</summary>
+    <summary id="detailSummary">${T.frameAndArgs}</summary>
     <div id="detailBody"></div>
 </details>
 <div id="footer"></div>
 <script nonce="${nonce}">
+${embedStrings(T)}
 (function () {
     var vscodeApi = acquireVsCodeApi();
     var elBackend = document.getElementById('backend');
@@ -427,7 +466,7 @@ function buildHtml(webview: vscode.Webview): string {
     window.addEventListener('message', function (event) {
         var data = event.data;
         if (data.kind === 'loading') {
-            showMessage('Compilando...', false);
+            showMessage(T.compiling, false);
             return;
         }
         if (data.kind === 'error') {
@@ -459,7 +498,7 @@ function buildHtml(webview: vscode.Webview): string {
             return;
         }
         if (payload.unsupported || payload.incompatible) {
-            showMessage(payload.reason || 'La funcion no se puede compilar en este modo.', false);
+            showMessage(payload.reason || T.cannotCompile, false);
             return;
         }
 
@@ -667,29 +706,29 @@ function buildHtml(webview: vscode.Webview): string {
          * la practica no existia.  Con las cuentas delante, se abre cuando
          * dicen algo. */
         var resumen = [];
-        if (args.length) { resumen.push(args.length + ' arg'); }
+        if (args.length) { resumen.push(tf(T.argsCount, args.length)); }
         if (frame.length) {
             var bytes = 0;
             for (var f = 0; f < frame.length; f++) { bytes += frame[f].size || 0; }
-            resumen.push(bytes + ' B de marco');
+            resumen.push(tf(T.frameBytes, bytes));
         }
-        if (relocs.length) { resumen.push(relocs.length + ' reubic'); }
-        elDetailSummary.textContent = 'Marco de pila y argumentos' +
+        if (relocs.length) { resumen.push(tf(T.relocCount, relocs.length)); }
+        elDetailSummary.textContent = T.frameAndArgs +
             (resumen.length ? '   ' + resumen.join('  |  ') : '');
 
         elDetailBody.innerHTML = '';
         if (args.length) {
-            elDetailBody.appendChild(buildTable('Argumentos', args.map(function (a) {
+            elDetailBody.appendChild(buildTable(T.argsTable, args.map(function (a) {
                 return [a.reg, a.name];
             })));
         }
         if (frame.length) {
-            elDetailBody.appendChild(buildTable('Marco de pila', frame.map(function (s) {
+            elDetailBody.appendChild(buildTable(T.frameTable, frame.map(function (s) {
                 return [s.label, s.size + ' B', s.kind, s.name];
             })));
         }
         if (relocs.length) {
-            elDetailBody.appendChild(buildTable('Reubicaciones', relocs.map(function (r) {
+            elDetailBody.appendChild(buildTable(T.relocsTable, relocs.map(function (r) {
                 return ['+' + r.offset, r.kind, r.symbol, String(r.addend)];
             })));
         }
@@ -720,9 +759,9 @@ function buildHtml(webview: vscode.Webview): string {
         row.addEventListener('mouseenter', function () {
             highlight(line);
             if (irId >= 0 && irById[String(irId)] !== undefined) {
-                elFooter.textContent = 'Operacion del IR: ' + irById[String(irId)];
+                elFooter.textContent = tf(T.irOp, irById[String(irId)]);
             } else if (line > 0) {
-                elFooter.textContent = 'Linea ' + line;
+                elFooter.textContent = tf(T.lineNo, line);
             } else {
                 elFooter.textContent = '';
             }

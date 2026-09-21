@@ -19,6 +19,81 @@ import * as vscode from 'vscode';
 import { VestaLanguageClient, describeError } from '../lsp/client';
 import { FunctionReportResponse, VestaMethod } from '../lsp/protocol';
 import { createNonce } from '../util/html';
+import { embedStrings } from '../util/webviewL10n';
+
+/**
+ * @brief El texto del panel, traducido en el anfitrion.
+ *
+ * Va por nombres y no por frases porque dentro del panel no hay `l10n`: lo que
+ * el guion ve es este objeto.  Ver `util/webviewL10n.ts`.
+ *
+ * @return Los pares nombre -> texto.
+ */
+function strings(): Record<string, string> {
+    return {
+        search: vscode.l10n.t('Search for a function...'),
+        allFunctions: vscode.l10n.t('All functions'),
+        onlyDeclaring: vscode.l10n.t('Only the ones that declare something'),
+        onlyMismatched: vscode.l10n.t('Only what does not match'),
+        onlyNotNative: vscode.l10n.t('Only what does not compile to native'),
+        onlyCostly: vscode.l10n.t('Only what is not O(1)'),
+        refresh: vscode.l10n.t('Refresh'),
+        refreshHint: vscode.l10n.t('Analyse it again'),
+        hint: vscode.l10n.t(
+            'Click a function to open it.  Click a column to sort by it.'),
+
+        analysing: vscode.l10n.t('Analysing...'),
+        noFunctions: vscode.l10n.t('The module has no functions to analyse.'),
+        count: vscode.l10n.t('{0} of {1} functions'),
+        open: vscode.l10n.t('Open {0}'),
+
+        colFunction: vscode.l10n.t('Function'),
+        colCost: vscode.l10n.t('Costs'),
+        colLoops: vscode.l10n.t('Nesting'),
+        colAlloc: vscode.l10n.t('Allocates'),
+        colStack: vscode.l10n.t('Stack'),
+        colDoes: vscode.l10n.t('Does'),
+        colDeclares: vscode.l10n.t('Declares and keeps'),
+        colNative: vscode.l10n.t('Native'),
+
+        ownCost: vscode.l10n.t('(its own {0})'),
+        declares: vscode.l10n.t('declares {0}'),
+        declaredMismatch: vscode.l10n.t(
+            'What it declares does not match what the compiler infers'),
+        declaredMatch: vscode.l10n.t('What it declares matches'),
+
+        // La confianza de la cota.  Llega como nombre estable del servidor
+        // (`exact`, `heuristic`, `unknown`) y aqui se lee.
+        confExact: vscode.l10n.t('exact'),
+        confHeuristic: vscode.l10n.t('heuristic'),
+        confUnknown: vscode.l10n.t('not known'),
+
+        unboundedCalls: vscode.l10n.t('+ calls with no bound'),
+        unboundedCallsHint: vscode.l10n.t(
+            "This is the function's own frame, which IS known.  What cannot be closed is how much stack the calls that leave the module (a native function) or the recursion spend inside."),
+
+        pure: vscode.l10n.t('pure'),
+        throws: vscode.l10n.t('throws'),
+        panics: vscode.l10n.t('panics'),
+        recursive: vscode.l10n.t('recursive'),
+        indirectCall: vscode.l10n.t('indirect call'),
+        opaqueFrame: vscode.l10n.t('opaque frame'),
+        openEffects: vscode.l10n.t('effects not closed'),
+
+        declaresNothing: vscode.l10n.t('declares nothing'),
+        keepsIt: vscode.l10n.t('keeps it'),
+        breaksIt: vscode.l10n.t('breaks it'),
+        cannotTell: vscode.l10n.t('cannot tell'),
+
+        yes: vscode.l10n.t('yes'),
+        no: vscode.l10n.t('no'),
+        issue: vscode.l10n.t('{0} ({1})'),
+
+        outOf: vscode.l10n.t('of {0}'),
+        fits: vscode.l10n.t('fits in what was declared'),
+        exceeds: vscode.l10n.t('goes past what was declared'),
+    };
+}
 
 /** Peticion que la pagina manda al editor. */
 interface PanelRequest {
@@ -82,7 +157,7 @@ export class ReportPanel {
         if (!ReportPanel.current) {
             const panel = vscode.window.createWebviewPanel(
                 ReportPanel.viewType,
-                'Vesta: coste y contratos por funcion',
+                vscode.l10n.t('Vesta: cost and contracts per function'),
                 column,
                 { enableScripts: true, retainContextWhenHidden: true, localResourceRoots: [] },
             );
@@ -172,7 +247,7 @@ async function abrirFuncion(
     const primero = (encontrados ?? [])[0];
     if (!primero) {
         void vscode.window.showInformationMessage(
-            `Vesta: no se encontro ${nombre} en el espacio de trabajo.`,
+            vscode.l10n.t('Vesta: {0} was not found in the workspace.', nombre),
         );
         return;
     }
@@ -194,8 +269,9 @@ async function abrirFuncion(
  */
 function buildHtml(): string {
     const nonce = createNonce();
+    const T = strings();
     return `<!DOCTYPE html>
-<html lang="es">
+<html lang="${vscode.env.language}">
 <head>
 <meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy"
@@ -269,21 +345,22 @@ function buildHtml(): string {
 </head>
 <body>
 <header>
-    <input type="search" id="buscar" placeholder="Buscar funcion...">
+    <input type="search" id="buscar" placeholder="${T.search}">
     <select id="filtro">
-        <option value="">Todas las funciones</option>
-        <option value="contrato">Solo las que declaran algo</option>
-        <option value="incumple">Solo lo que no cuadra</option>
-        <option value="nativo">Solo lo que no compila a nativo</option>
-        <option value="caro">Solo lo que no es O(1)</option>
+        <option value="">${T.allFunctions}</option>
+        <option value="contrato">${T.onlyDeclaring}</option>
+        <option value="incumple">${T.onlyMismatched}</option>
+        <option value="nativo">${T.onlyNotNative}</option>
+        <option value="caro">${T.onlyCostly}</option>
     </select>
-    <button id="recargar" title="Volver a analizar">Actualizar</button>
+    <button id="recargar" title="${T.refreshHint}">${T.refresh}</button>
     <span id="cuenta"></span>
 </header>
 <div id="mensaje" class="oculto"></div>
 <div id="tabla"></div>
-<div class="pista">Pulsa una funcion para abrirla.  Pulsa una columna para ordenar por ella.</div>
+<div class="pista">${T.hint}</div>
 <script nonce="${nonce}">
+${embedStrings(T)}
 (function () {
     var api = acquireVsCodeApi();
     var elBuscar = document.getElementById('buscar');
@@ -305,13 +382,13 @@ function buildHtml(): string {
 
     window.addEventListener('message', function (evento) {
         var d = evento.data;
-        if (d.kind === 'loading') { mensaje('Analizando...', false); return; }
+        if (d.kind === 'loading') { mensaje(T.analysing, false); return; }
         if (d.kind === 'error') { mensaje(d.message, true); return; }
         var p = d.payload || {};
         if (p.error) { mensaje(p.error, true); return; }
         funciones = p.functions || [];
         if (funciones.length === 0) {
-            mensaje('El modulo no tiene funciones que analizar.', false);
+            mensaje(T.noFunctions, false);
             return;
         }
         elMensaje.classList.add('oculto');
@@ -331,7 +408,7 @@ function buildHtml(): string {
         if (f.cost && f.cost.mismatch) { return true; }
         var ch = f.checks || [];
         for (var i = 0; i < ch.length; i++) {
-            if (ch[i].status === 'incumple') { return true; }
+            if (ch[i].status === 'breaks') { return true; }
         }
         return false;
     }
@@ -385,19 +462,19 @@ function buildHtml(): string {
     }
 
     var COLUMNAS = [
-        { id: 'funcion', titulo: 'Funcion' },
-        { id: 'coste',   titulo: 'Cuesta' },
-        { id: 'bucles',  titulo: 'Anidamiento' },
-        { id: 'reserva', titulo: 'Reserva' },
-        { id: 'pila',    titulo: 'Pila' },
-        { id: 'hace',    titulo: 'Hace' },
-        { id: 'declara', titulo: 'Declara y cumple' },
-        { id: 'nativo',  titulo: 'Nativo' }
+        { id: 'funcion', titulo: T.colFunction },
+        { id: 'coste',   titulo: T.colCost },
+        { id: 'bucles',  titulo: T.colLoops },
+        { id: 'reserva', titulo: T.colAlloc },
+        { id: 'pila',    titulo: T.colStack },
+        { id: 'hace',    titulo: T.colDoes },
+        { id: 'declara', titulo: T.colDeclares },
+        { id: 'nativo',  titulo: T.colNative }
     ];
 
     function pintar() {
         var lista = filtradas();
-        elCuenta.textContent = lista.length + ' de ' + funciones.length + ' funciones';
+        elCuenta.textContent = tf(T.count, lista.length, funciones.length);
 
         var tabla = document.createElement('table');
         var cab = document.createElement('tr');
@@ -431,7 +508,7 @@ function buildHtml(): string {
         var nombre = document.createElement('span');
         nombre.className = 'fn';
         nombre.textContent = f.display || f.name;
-        nombre.title = 'Abrir ' + (f.display || f.name);
+        nombre.title = tf(T.open, f.display || f.name);
         nombre.addEventListener('click', function () {
             api.postMessage({ type: 'goto', name: f.name, line: f.line });
         });
@@ -447,23 +524,23 @@ function buildHtml(): string {
         var tdC = document.createElement('td');
         var textoCoste = coste.total || '';
         if (coste.partial && coste.partial !== coste.total) {
-            textoCoste += '  (suyo ' + coste.partial + ')';
+            textoCoste += '  ' + tf(T.ownCost, coste.partial);
         }
         tdC.appendChild(document.createTextNode(textoCoste));
         if (coste.declared) {
             tdC.appendChild(document.createTextNode('  '));
             var decl = document.createElement('span');
             decl.className = coste.mismatch ? 'nocuadra' : 'cuadra';
-            decl.textContent = 'declara ' + coste.declared;
-            decl.title = coste.mismatch
-                ? 'Lo declarado no cuadra con lo que el compilador infiere'
-                : 'Lo declarado cuadra';
+            decl.textContent = tf(T.declares, coste.declared);
+            decl.title = coste.mismatch ? T.declaredMismatch : T.declaredMatch;
             tdC.appendChild(decl);
         }
-        if (coste.confidence && coste.confidence !== 'exacta') {
+        // Solo cuando la cota NO es exacta, que es lo que hay que saber.
+        // "exact" es el nombre que manda el servidor (confidence_str).
+        if (coste.confidence && coste.confidence !== 'exact') {
             var conf = document.createElement('span');
             conf.className = 'flojo';
-            conf.textContent = '  ' + coste.confidence;
+            conf.textContent = '  ' + confidenceLabel(coste.confidence);
             tdC.appendChild(conf);
         }
         tr.appendChild(tdC);
@@ -487,11 +564,8 @@ function buildHtml(): string {
                 String(medido.stackPartial || 0) + ' B  '));
             var abierta = document.createElement('span');
             abierta.className = 'flojo';
-            abierta.textContent = '+ llamadas sin acotar';
-            abierta.title = 'Este es el marco propio de la funcion, que si se '
-                          + 'sabe.  Lo que no se puede cerrar es cuanta pila '
-                          + 'gastan por dentro las llamadas que salen del '
-                          + 'modulo (una funcion nativa) o la recursion.';
+            abierta.textContent = T.unboundedCalls;
+            abierta.title = T.unboundedCallsHint;
             tdP.appendChild(abierta);
             tr.appendChild(tdP);
         } else {
@@ -502,14 +576,14 @@ function buildHtml(): string {
         // Lo que HACE, en marcas: solo lo que es cierto, para que se lea de un
         // vistazo en vez de leer cuatro "no".
         var tdH = document.createElement('td');
-        if (medido.pure) { tdH.appendChild(marca('pura', 'si')); }
-        if (medido.throws) { tdH.appendChild(marca('lanza', 'no')); }
-        if (medido.panics) { tdH.appendChild(marca('entra en panico', 'no')); }
-        if (medido.recursive) { tdH.appendChild(marca('recursiva', 'neutro')); }
-        if (medido.dynamicCall) { tdH.appendChild(marca('llamada indirecta', 'neutro')); }
-        if (medido.frameOpaque) { tdH.appendChild(marca('marco opaco', 'neutro')); }
+        if (medido.pure) { tdH.appendChild(marca(T.pure, 'si')); }
+        if (medido.throws) { tdH.appendChild(marca(T.throws, 'no')); }
+        if (medido.panics) { tdH.appendChild(marca(T.panics, 'no')); }
+        if (medido.recursive) { tdH.appendChild(marca(T.recursive, 'neutro')); }
+        if (medido.dynamicCall) { tdH.appendChild(marca(T.indirectCall, 'neutro')); }
+        if (medido.frameOpaque) { tdH.appendChild(marca(T.opaqueFrame, 'neutro')); }
         if (medido.effectsKnown === false) {
-            tdH.appendChild(marca('efectos sin cerrar', 'quiza'));
+            tdH.appendChild(marca(T.openEffects, 'quiza'));
         }
         tr.appendChild(tdH);
 
@@ -517,16 +591,20 @@ function buildHtml(): string {
         var tdD = document.createElement('td');
         var checks = f.checks || [];
         for (var i = 0; i < checks.length; i++) {
-            var estado = checks[i].status === 'cumple' ? 'si'
-                       : checks[i].status === 'incumple' ? 'no' : 'quiza';
+            // "keeps" / "breaks" / "undecided" son los nombres que manda el
+            // servidor; lo que se lee es su traduccion.
+            var estado = checks[i].status === 'keeps' ? 'si'
+                       : checks[i].status === 'breaks' ? 'no' : 'quiza';
+            var verdict = checks[i].status === 'keeps' ? T.keepsIt
+                        : checks[i].status === 'breaks' ? T.breaksIt : T.cannotTell;
             var m = marca(checks[i].contract, estado);
-            m.title = checks[i].status + (checks[i].detail ? ': ' + checks[i].detail : '');
+            m.title = verdict + (checks[i].detail ? ': ' + checks[i].detail : '');
             tdD.appendChild(m);
         }
         if (checks.length === 0) {
             var nada = document.createElement('span');
             nada.className = 'flojo';
-            nada.textContent = 'no declara nada';
+            nada.textContent = T.declaresNothing;
             tdD.appendChild(nada);
         }
         tr.appendChild(tdD);
@@ -535,12 +613,12 @@ function buildHtml(): string {
         var tdN = document.createElement('td');
         var aot = f.aot || {};
         if (aot.ok) {
-            tdN.appendChild(marca('si', 'si'));
+            tdN.appendChild(marca(T.yes, 'si'));
         } else {
             var motivos = (aot.issues || []).map(function (i) {
-                return i.reason + ' (' + i.op + ')';
+                return tf(T.issue, i.reason, i.op);
             });
-            var m2 = marca('no', 'no');
+            var m2 = marca(T.no, 'no');
             m2.title = motivos.join('\\n');
             tdN.appendChild(m2);
             var texto = document.createElement('span');
@@ -584,8 +662,8 @@ function buildHtml(): string {
         var d = document.createElement('span');
         var cumple = medido <= declarado;
         d.className = cumple ? 'cuadra' : 'nocuadra';
-        d.textContent = 'de ' + declarado + unidad;
-        d.title = cumple ? 'cabe en lo declarado' : 'se pasa de lo declarado';
+        d.textContent = tf(T.outOf, String(declarado) + unidad);
+        d.title = cumple ? T.fits : T.exceeds;
         td.appendChild(d);
         return td;
     }
@@ -596,6 +674,14 @@ function buildHtml(): string {
         s.textContent = texto;
         s.style.marginRight = '4px';
         return s;
+    }
+
+    /** La confianza de una cota, leida.  Llega como nombre estable. */
+    function confidenceLabel(confidence) {
+        if (confidence === 'exact') { return T.confExact; }
+        if (confidence === 'heuristic') { return T.confHeuristic; }
+        if (confidence === 'unknown') { return T.confUnknown; }
+        return confidence;
     }
 }());
 </script>

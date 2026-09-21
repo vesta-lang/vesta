@@ -146,7 +146,7 @@ export interface ComplexityEntry {
     /** Coste total, incluyendo lo que cuestan las llamadas. */
     total: string;
     confidence: string;
-    /** Nombre de la confianza: exacta | heuristica | desconocida. */
+    /** Nombre estable de la confianza: exact | heuristic | unknown. */
     total_confidence: string;
     max_loop_depth: number;
     recursive: boolean;
@@ -401,7 +401,7 @@ export interface AsaFact {
     site: number;
     /** En que otros analisis se apoya. */
     restsOn: string[];
-    /** demostrada | inferida | desconocida. */
+    /** Nombre estable de la certeza: proven | inferred | unknown. */
     certainty: string;
     /** estatico | ejecucion | perfil | declarado. */
     source: string;
@@ -481,10 +481,10 @@ export interface InstructionResponse extends VestaResponse {
     /**
      * Que hizo el compilador con ella: "micro" (se emite tal cual, con su
      * identidad en la base resuelta), "ir" (se elevo a operaciones del IR y se
-     * optimiza como el resto del codigo) o "ninguno".
+     * optimiza como el resto del codigo) o "none".
      */
     lifted?: string;
-    /** "compilador" o "texto": de donde sale lo que se cuenta. */
+    /** "compiler" o "text": de donde sale lo que se cuenta. */
     resolvedBy?: string;
     /** Operaciones del IR en las que quedo, cuando se elevo. */
     irOps?: string[];
@@ -546,7 +546,7 @@ export interface FunctionDeclared {
 export interface ContractCheck {
     /** "@pure", "@alloc", "@stack"... */
     contract: string;
-    /** cumple | incumple | no se puede decidir. */
+    /** Nombre estable del veredicto: keeps | breaks | undecided. */
     status: string;
     detail: string;
 }
@@ -596,7 +596,10 @@ export interface AsmBlockInsn {
     line: number;
     /** Etiquetas definidas justo antes de ella. */
     labels: string[];
-    /** sigue | salto | rama | llamada | retorno | indirecto | sin clasificar. */
+    /**
+     * Nombre estable del terminador:
+     * fallthrough | jump | branch | call | ret | indirect | unclassified.
+     */
     flow: string;
     /** Etiqueta destino, si salta. */
     target: string;

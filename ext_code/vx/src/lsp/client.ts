@@ -50,6 +50,17 @@ export class VestaLanguageClient {
     private missingReported = false;
 
     /**
+     * El servidor esta parado porque se pidio pararlo, y tiene que SEGUIR
+     * parado.
+     *
+     * Sin esta marca, cualquier cambio de ajuste lo volvia a levantar.  Y quien
+     * lo para lo hace para RECONSTRUIR el binario, asi que resucitarlo a media
+     * compilacion es exactamente el fallo del que se venia huyendo: el
+     * enlazador se encuentra el `.exe` abierto y no puede escribirlo.
+     */
+    private stoppedByUser = false;
+
+    /**
      * @brief Construye el cliente sin arrancar nada todavia.
      * @param context Contexto de la extension, para resolver rutas propias.
      */
@@ -66,6 +77,17 @@ export class VestaLanguageClient {
     /** @brief Ubicacion del binario en uso, si el servidor esta levantado. */
     public get binaryLocation(): BinaryLocation | undefined {
         return this.location;
+    }
+
+    /**
+     * @brief Si esta parado porque alguien lo paro, y no por otra razon.
+     *
+     * Lo pregunta quien podria arrancarlo por su cuenta -- el observador de
+     * ajustes --, para distinguirlo de "no arranco porque no encuentro el
+     * binario", donde volver a intentarlo SI es lo correcto.
+     */
+    public get isStoppedByUser(): boolean {
+        return this.stoppedByUser;
     }
 
     /**
@@ -101,10 +123,9 @@ export class VestaLanguageClient {
 
         const config = vscode.workspace.getConfiguration('vesta');
         if (!config.get<boolean>('server.enable', true)) {
-            this.output.appendLine(
-                'El servidor de lenguaje esta desactivado (vesta.server.enable). ' +
-                'Solo queda el resaltado por gramatica.',
-            );
+            this.output.appendLine(vscode.l10n.t(
+                'The language server is disabled ({0}).  Only grammar highlighting remains.',
+                'vesta.server.enable'));
             return false;
         }
 
@@ -117,9 +138,8 @@ export class VestaLanguageClient {
             return false;
         }
         this.location = location;
-        this.output.appendLine(
-            `Servidor de lenguaje: ${location.path}  (origen: ${location.origin})`,
-        );
+        this.output.appendLine(vscode.l10n.t(
+            'Language server: {0}  (found via: {1})', location.path, location.origin));
 
         const args = config.get<string[]>('server.arguments', []);
 
@@ -132,12 +152,12 @@ export class VestaLanguageClient {
         const env = { ...process.env };
         if (this.stdlib) {
             env.VX_STDLIB_DIR = this.stdlib;
-            this.output.appendLine(`Biblioteca estandar: ${this.stdlib}`);
-        } else {
             this.output.appendLine(
-                'No se localizo la biblioteca estandar en Vesta; los import std.* ' +
-                'pueden quedar sin resolver.  Se puede fijar con vesta.stdlibPath.',
-            );
+                vscode.l10n.t('Standard library: {0}', this.stdlib));
+        } else {
+            this.output.appendLine(vscode.l10n.t(
+                'The Vesta standard library was not located; the std.* imports may stay unresolved.  It can be set with {0}.',
+                'vesta.stdlibPath'));
         }
 
         const serverOptions: ServerOptions = {
@@ -164,19 +184,21 @@ export class VestaLanguageClient {
 
         this.client = new LanguageClient(
             'vesta',
-            'Servidor de lenguaje de Vesta',
+            vscode.l10n.t('Vesta language server'),
             serverOptions,
             clientOptions,
         );
 
         try {
             await this.client.start();
-            this.output.appendLine('Servidor de lenguaje arrancado.');
+            this.output.appendLine(vscode.l10n.t('Language server started.'));
             return true;
         } catch (err) {
-            this.output.appendLine(`No se pudo arrancar el servidor: ${describeError(err)}`);
+            this.output.appendLine(
+                vscode.l10n.t('The server could not be started: {0}', describeError(err)));
             void vscode.window.showErrorMessage(
-                `Vesta: no se pudo arrancar el servidor de lenguaje (${describeError(err)}).`,
+                vscode.l10n.t('Vesta: the language server could not be started ({0}).',
+                              describeError(err)),
             );
             this.client = undefined;
             this.location = undefined;
@@ -196,8 +218,38 @@ export class VestaLanguageClient {
         try {
             await client.stop();
         } catch (err) {
-            this.output.appendLine(`Fallo al detener el servidor: ${describeError(err)}`);
+            this.output.appendLine(
+                vscode.l10n.t('Stopping the server failed: {0}', describeError(err)));
         }
+    }
+
+    /**
+     * @brief Lo para y lo DEJA parado, soltando el binario que tenia abierto.
+     *
+     * Existe porque pararlo y que nadie lo resucite son dos cosas, y hasta
+     * ahora solo estaba la primera: el editor mantiene el `vesta_lsp.exe`
+     * abierto mientras corre, asi que reconstruirlo fallaba con un permiso
+     * denegado, y matar el proceso a mano no servia -- el cliente lo levanta
+     * otra vez en cuanto se le muere, que es lo que tiene que hacer cuando la
+     * muerte NO se pidio.
+     *
+     * Vuelve con "Reiniciar el servidor", que limpia la marca.
+     *
+     * @return Ruta del binario que queda libre, o undefined si no habia
+     *         servidor levantado -- que se distingue a proposito de "lo pare",
+     *         porque quien va a reconstruir necesita saber si de verdad se
+     *         solto algo.
+     */
+    public async stopForRebuild(): Promise<string | undefined> {
+        const released = this.location?.path;
+        this.stoppedByUser = true;
+        await this.stop();
+        this.output.appendLine(
+            released
+                ? vscode.l10n.t('Server stopped on request; {0} is now free', released)
+                : vscode.l10n.t('Server stopped on request; none was running'),
+        );
+        return released;
     }
 
     /**
@@ -215,13 +267,21 @@ export class VestaLanguageClient {
         });
     }
 
-    /** @brief Detiene el servidor y lo vuelve a levantar con la configuracion actual. */
+    /**
+     * @brief Detiene el servidor y lo vuelve a levantar con la configuracion
+     *        actual.
+     *
+     * Es tambien la forma de traerlo de vuelta despues de pararlo: se pide a
+     * mano, asi que limpia la marca de "dejalo parado".
+     */
     public async restart(): Promise<void> {
+        this.stoppedByUser = false;
         await this.stop();
         this.missingReported = false;
         const started = await this.start();
         if (started) {
-            void vscode.window.showInformationMessage('Vesta: servidor de lenguaje reiniciado.');
+            void vscode.window.showInformationMessage(
+                vscode.l10n.t('Vesta: language server restarted.'));
         }
     }
 
@@ -239,10 +299,9 @@ export class VestaLanguageClient {
      */
     public async request<T>(method: string, params: Record<string, unknown>): Promise<T> {
         if (!this.client || !this.isRunning) {
-            throw new Error(
-                'el servidor de lenguaje de Vesta no esta corriendo; ' +
-                'revisa el ajuste vesta.server.path',
-            );
+            throw new Error(vscode.l10n.t(
+                'the Vesta language server is not running; check the {0} setting',
+                'vesta.server.path'));
         }
         return this.client.sendRequest<T>(method, params);
     }
@@ -285,21 +344,19 @@ export class VestaLanguageClient {
 
     /** @brief Avisa una sola vez de que el binario del servidor no aparece. */
     private reportMissingServer(): void {
-        this.output.appendLine(
-            'No se encontro el ejecutable vesta_lsp.  Se ha buscado en el ajuste ' +
-            'vesta.server.path, la variable de entorno VESTA_LSP, el PATH, las rutas ' +
-            'de instalacion y los directorios de compilacion del repositorio.',
-        );
+        this.output.appendLine(vscode.l10n.t(
+            'The vesta_lsp executable was not found.  It was looked for in the {0} setting, the VESTA_LSP environment variable, the PATH, the install roots and the repository build directories.',
+            'vesta.server.path'));
         if (this.missingReported) {
             return;
         }
         this.missingReported = true;
-        const configure = 'Configurar la ruta';
-        const showLog = 'Ver el registro';
+        const configure = vscode.l10n.t('Set the path');
+        const showLog = vscode.l10n.t('Show the log');
         void vscode.window
             .showWarningMessage(
-                'Vesta: no se encontro el servidor de lenguaje (vesta_lsp). ' +
-                'El resaltado por gramatica sigue funcionando.',
+                vscode.l10n.t(
+                    'Vesta: the language server (vesta_lsp) was not found.  Grammar highlighting keeps working.'),
                 configure,
                 showLog,
             )

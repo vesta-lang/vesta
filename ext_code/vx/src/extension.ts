@@ -103,6 +103,22 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const activeClient = client;
     context.subscriptions.push(
         vscode.commands.registerCommand('vesta.restartServer', () => activeClient.restart()),
+        vscode.commands.registerCommand('vesta.stopServer', async () => {
+            const released = await activeClient.stopForRebuild();
+            /* El binario que queda libre va como DATO, no pegado al texto: es
+             * lo que permite traducir la frase sin tocar la ruta, igual que los
+             * `{0}` del catalogo del compilador. */
+            const message = released
+                ? vscode.l10n.t('Vesta: language server stopped.  {0} is now free.', released)
+                : vscode.l10n.t('Vesta: no language server was running.');
+            const startAgain = vscode.l10n.t('Start it again');
+            void vscode.window.showInformationMessage(message, startAgain)
+                .then(choice => {
+                    if (choice === startAgain) {
+                        void activeClient.restart();
+                    }
+                });
+        }),
         vscode.commands.registerCommand('vesta.showServerLog', () => activeClient.showLog()),
         vscode.commands.registerCommand('vesta.compile', () => compileActiveFile(activeClient)),
         vscode.commands.registerCommand('vesta.run', () => runActiveFile(activeClient)),
@@ -133,7 +149,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
     context.subscriptions.push(
         vscode.workspace.onDidChangeConfiguration(async event => {
-            if (RESTART_SETTINGS.some(setting => event.affectsConfiguration(setting))) {
+            /* Un servidor que se paro A PROPOSITO no revive por un ajuste: se
+             * para para reconstruir su binario, y levantarlo a media
+             * compilacion vuelve a dejar el `.exe` abierto.  Se distingue de
+             * "no arranco porque no encuentro el binario", donde reintentar al
+             * cambiar la ruta es justo lo que hay que hacer. */
+            if (RESTART_SETTINGS.some(setting => event.affectsConfiguration(setting)) &&
+                !activeClient.isStoppedByUser) {
                 await activeClient.restart();
             }
             if (event.affectsConfiguration('vesta.inlayHints.parameterNames')) {

@@ -24,6 +24,55 @@ import { VestaLanguageClient, describeError } from '../lsp/client';
 import { AsmBlockResponse, VestaMethod } from '../lsp/protocol';
 import { createNonce } from '../util/html';
 import { inspectTarget } from '../util/settings';
+import { embedStrings } from '../util/webviewL10n';
+
+/**
+ * @brief El texto del panel, traducido en el anfitrion.
+ *
+ * Por nombres y no por frases: dentro del panel no hay `l10n`.  Ver
+ * `util/webviewL10n.ts`.
+ *
+ * @return Los pares nombre -> texto.
+ */
+function strings(): Record<string, string> {
+    return {
+        refresh: vscode.l10n.t('Refresh'),
+        refreshHint: vscode.l10n.t('Read the block again'),
+
+        reading: vscode.l10n.t('Reading the block...'),
+        outsideBlock: vscode.l10n.t(
+            'The cursor is not inside an assembly block.'),
+        summary: vscode.l10n.t('{0} instructions, lines {1}-{2}'),
+
+        warnIndirect: vscode.l10n.t(
+            'there is an indirect jump: its target is unknown, so arrows are missing'),
+        warnUnresolved: vscode.l10n.t(
+            'there is a jump to a label that is not in the block'),
+        warnUnclassified: vscode.l10n.t('unclassified: {0}'),
+
+        cost: vscode.l10n.t('lat {0}  every {1}  {2} uops'),
+        pickInstruction: vscode.l10n.t(
+            'Click an instruction to see what is known about it.'),
+        barrier: vscode.l10n.t('barrier: nothing crosses it'),
+        notModelled: vscode.l10n.t('operands not modelled'),
+
+        keyDatabase: vscode.l10n.t('the database'),
+        valueUnknownInstr: vscode.l10n.t('does not know this instruction'),
+        keyClass: vscode.l10n.t('class'),
+        keyFlow: vscode.l10n.t('flow'),
+        keyLatency: vscode.l10n.t('latency'),
+        keyThroughput: vscode.l10n.t('repeats every'),
+        keyUops: vscode.l10n.t('uops'),
+        keyReads: vscode.l10n.t('reads'),
+        keyWrites: vscode.l10n.t('writes'),
+        keyMemory: vscode.l10n.t('memory'),
+        valueReadsIt: vscode.l10n.t('reads it'),
+        valueWritesIt: vscode.l10n.t('writes it'),
+        keyReadsFlags: vscode.l10n.t('reads flags'),
+        keyLeavesFlags: vscode.l10n.t('leaves flags'),
+        keyLabels: vscode.l10n.t('labels'),
+    };
+}
 
 /** Peticion que la pagina manda al editor. */
 interface PanelRequest {
@@ -94,7 +143,7 @@ export class AsmBlockPanel {
         if (!AsmBlockPanel.current) {
             const panel = vscode.window.createWebviewPanel(
                 AsmBlockPanel.viewType,
-                'Vesta: el bloque de ensamblador',
+                vscode.l10n.t('Vesta: the assembly block'),
                 column,
                 { enableScripts: true, retainContextWhenHidden: true, localResourceRoots: [] },
             );
@@ -171,8 +220,9 @@ export class AsmBlockPanel {
  */
 function buildHtml(): string {
     const nonce = createNonce();
+    const T = strings();
     return `<!DOCTYPE html>
-<html lang="es">
+<html lang="${vscode.env.language}">
 <head>
 <meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy"
@@ -257,7 +307,7 @@ function buildHtml(): string {
 </head>
 <body>
 <header>
-    <button id="recargar" title="Volver a leer el bloque">Actualizar</button>
+    <button id="recargar" title="${T.refreshHint}">${T.refresh}</button>
     <span id="resumen"></span>
     <span id="maquina"></span>
 </header>
@@ -269,6 +319,7 @@ function buildHtml(): string {
     <div id="detalle"></div>
 </div>
 <script nonce="${nonce}">
+${embedStrings(T)}
 (function () {
     var api = acquireVsCodeApi();
     var elRecargar = document.getElementById('recargar');
@@ -309,19 +360,19 @@ function buildHtml(): string {
 
     window.addEventListener('message', function (evento) {
         var d = evento.data;
-        if (d.kind === 'loading') { mensaje('Leyendo el bloque...', false); return; }
+        if (d.kind === 'loading') { mensaje(T.reading, false); return; }
         if (d.kind === 'error') { mensaje(d.message, true); return; }
         var p = d.payload || {};
         if (p.error) { mensaje(p.error, true); return; }
         if (!p.found) {
-            mensaje('El cursor no esta dentro de un bloque de ensamblador.', false);
+            mensaje(T.outsideBlock, false);
             return;
         }
         instrucciones = p.instructions || [];
         elMensaje.classList.add('oculto');
         elCuerpo.classList.remove('oculto');
-        elResumen.textContent = instrucciones.length + ' instrucciones, lineas ' +
-            p.firstLine + '-' + p.lastLine;
+        elResumen.textContent = tf(T.summary, instrucciones.length,
+                                   p.firstLine, p.lastLine);
         elMaquina.textContent = p.isa + '  ' + (p.microarch || '');
         pintarAviso(p);
         calcularCarriles();
@@ -341,14 +392,13 @@ function buildHtml(): string {
     function pintarAviso(p) {
         var partes = [];
         if (p.hasIndirect) {
-            partes.push('hay un salto indirecto: su destino no se sabe, asi que ' +
-                        'faltan flechas');
+            partes.push(T.warnIndirect);
         }
         if (p.hasUnresolved) {
-            partes.push('hay un salto a una etiqueta que no esta en el bloque');
+            partes.push(T.warnUnresolved);
         }
         if ((p.unknownTerminators || []).length) {
-            partes.push('sin clasificar: ' + p.unknownTerminators.join(', '));
+            partes.push(tf(T.warnUnclassified, p.unknownTerminators.join(', ')));
         }
         if (partes.length === 0) { elAviso.classList.add('oculto'); return; }
         elAviso.classList.remove('oculto');
@@ -472,9 +522,8 @@ function buildHtml(): string {
         if (in_.cost) {
             var c = document.createElement('span');
             c.className = 'coste';
-            c.textContent = 'lat ' + in_.cost.latency +
-                '  cada ' + in_.cost.reciprocalThroughput +
-                '  ' + in_.cost.uops + ' uops';
+            c.textContent = tf(T.cost, in_.cost.latency,
+                               in_.cost.reciprocalThroughput, in_.cost.uops);
             t.appendChild(c);
         }
         div.appendChild(t);
@@ -525,7 +574,7 @@ function buildHtml(): string {
         if (i < 0 || i >= instrucciones.length) {
             var p = document.createElement('div');
             p.style.opacity = '.6';
-            p.textContent = 'Pulsa una instruccion para ver lo que se sabe de ella.';
+            p.textContent = T.pickInstruction;
             elDetalle.appendChild(p);
             return;
         }
@@ -535,30 +584,34 @@ function buildHtml(): string {
         h.textContent = in_.text;
         elDetalle.appendChild(h);
 
-        if (in_.barrier) { elDetalle.appendChild(marca('barrera: nada la cruza', 'barrera')); }
+        if (in_.barrier) { elDetalle.appendChild(marca(T.barrier, 'barrera')); }
         if (in_.modeled === false) {
-            elDetalle.appendChild(marca('operandos sin modelar', 'nomod'));
+            elDetalle.appendChild(marca(T.notModelled, 'nomod'));
         }
 
         var filas = [];
         if (!in_.known) {
-            filas.push(['la base', 'no conoce esta instruccion']);
+            filas.push([T.keyDatabase, T.valueUnknownInstr]);
         } else if (in_.iclass) {
-            filas.push(['clase', in_.iclass]);
+            filas.push([T.keyClass, in_.iclass]);
         }
-        filas.push(['flujo', in_.flow + (in_.target ? ' -> ' + in_.target : '')]);
+        filas.push([T.keyFlow, in_.flow + (in_.target ? ' -> ' + in_.target : '')]);
         if (in_.cost) {
-            filas.push(['latencia', String(in_.cost.latency)]);
-            filas.push(['se repite cada', String(in_.cost.reciprocalThroughput)]);
-            filas.push(['uops', String(in_.cost.uops)]);
+            filas.push([T.keyLatency, String(in_.cost.latency)]);
+            filas.push([T.keyThroughput, String(in_.cost.reciprocalThroughput)]);
+            filas.push([T.keyUops, String(in_.cost.uops)]);
         }
-        if ((in_.reads || []).length) { filas.push(['lee', in_.reads.join(', ')]); }
-        if ((in_.writes || []).length) { filas.push(['escribe', in_.writes.join(', ')]); }
-        if (in_.readsMemory) { filas.push(['memoria', 'la lee']); }
-        if (in_.writesMemory) { filas.push(['memoria', 'la escribe']); }
-        if ((in_.flagsRead || []).length) { filas.push(['lee banderas', in_.flagsRead.join(', ')]); }
-        if ((in_.flagsWritten || []).length) { filas.push(['deja banderas', in_.flagsWritten.join(', ')]); }
-        if ((in_.labels || []).length) { filas.push(['etiquetas', in_.labels.join(', ')]); }
+        if ((in_.reads || []).length) { filas.push([T.keyReads, in_.reads.join(', ')]); }
+        if ((in_.writes || []).length) { filas.push([T.keyWrites, in_.writes.join(', ')]); }
+        if (in_.readsMemory) { filas.push([T.keyMemory, T.valueReadsIt]); }
+        if (in_.writesMemory) { filas.push([T.keyMemory, T.valueWritesIt]); }
+        if ((in_.flagsRead || []).length) {
+            filas.push([T.keyReadsFlags, in_.flagsRead.join(', ')]);
+        }
+        if ((in_.flagsWritten || []).length) {
+            filas.push([T.keyLeavesFlags, in_.flagsWritten.join(', ')]);
+        }
+        if ((in_.labels || []).length) { filas.push([T.keyLabels, in_.labels.join(', ')]); }
 
         var tabla = document.createElement('table');
         for (var k = 0; k < filas.length; k++) {

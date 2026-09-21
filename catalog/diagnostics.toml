@@ -595,6 +595,74 @@ es = "CALLSUPER: la clase '{0}' no tiene tabla de metodos (indice {1})"
 en = "CALLSUPER: index {0} is outside the table of '{1}', which has {2} methods"
 es = "CALLSUPER: el indice {0} esta fuera de la tabla de '{1}', que tiene {2} metodos"
 
+# --- el intermedio que trae un artefacto no se pudo usar (VX7035-VX7036) ---
+#
+# Que no se pueda leer NO impide ejecutar: el bytecode sigue ahi y el
+# interprete tira de el.  Por eso se descartaba en silencio, y por eso hacia
+# falta decirlo: el programa da el mismo resultado pero SIN compilar a codigo
+# nativo -- del orden de diecisiete veces mas lento --, y un artefacto que
+# rinde como el interprete despues de haberlo compilado parece que funciona.
+#
+# Un codigo por MOTIVO, no uno con el motivo metido dentro: lo de la version se
+# arregla recompilando y lo otro no, asi que son dos cosas que decir y no una
+# con un detalle.  Y el motivo es texto que lee una persona, o sea que tiene
+# que estar en el catalogo como todo lo demas.
+
+[VX7035]
+en = "{0} carries compiled code from another version of the compiler (it says {1}, this one reads {2}); the program still runs, interpreted and without the JIT -- recompile it"
+es = "{0} trae codigo compilado de otra version del compilador (dice {1} y este lee {2}); el programa sigue ejecutandose, interpretado y sin JIT -- recompilalo"
+
+[VX7036]
+en = "the compiled code {0} carries could not be read; the program still runs, interpreted and without the JIT"
+es = "el codigo compilado que trae {0} no se ha podido leer; el programa sigue ejecutandose, interpretado y sin JIT"
+
+# Como se NOMBRA un artefacto que no salio de ningun fichero, para poder
+# decirlo en los dos de arriba.  Uno que si vino de disco lo nombra su ruta,
+# que es un dato y no se traduce; estos no tienen ruta, asi que lo que los
+# nombra es una frase -- y una frase la lee una persona, luego sale de aqui
+# como cualquier otra.
+[VX7037]
+en = "the artifact the compiler emitted to run something at compile time"
+es = "el artefacto que el compilador emitio para ejecutar algo al compilar"
+
+[VX7038]
+en = "the artifact that arrived over the debugger connection"
+es = "el artefacto que llego por la conexion del depurador"
+
+[VX7039]
+en = "the artifact that arrived over the network from another node"
+es = "el artefacto que llego por la red desde otro nodo"
+
+[VX7040]
+en = "the link script, compiled on the fly"
+es = "el guion de enlace, compilado al vuelo"
+
+[VX7041]
+en = "the support program the test assembled for itself"
+es = "el programa de apoyo que la prueba armo para si misma"
+
+[VX7042]
+en = "an artifact of unknown origin"
+es = "un artefacto de origen desconocido"
+
+[VX7043]
+en = "the artifact handed in by the program embedding the VM"
+es = "el artefacto que entrego el programa que empotra la VM"
+
+# --- diagramas (VX7050-VX7059) ---
+
+[VX7050]
+en = "diagram written: {0}"
+es = "diagrama generado: {0}"
+
+[VX7051]
+en = "the diagram could not be written to '{0}'"
+es = "no se pudo escribir el diagrama en '{0}'"
+
+[VX7052]
+en = "unknown diagram format '{0}'; use mermaid, graphviz, html, both or all. Falling back to mermaid"
+es = "formato de diagrama desconocido '{0}'; usa mermaid, graphviz, html, both o all. Se usa mermaid"
+
 # ---------------------------------------------------------------------------
 # VX9xxx -- texto de las herramientas (CLI y servidor de lenguaje).
 #
@@ -2025,6 +2093,201 @@ es = "el marco de '{0}' no se puede describir en `.xdata`: su prologo no cabe en
 [VX9258]
 en = "symbols with no provider: {0}.  They are not defined in the image, and no `extern` block or plugin declares which library they come from, so there is no import to emit -- and none is invented, because a made-up one only moves the failure to load time on someone else's machine.  Every runtime service is a hook: it is provided by the stdlib module that covers it by default, by a function of your own marked `@Provides(<builtin>)`, by an `extern` naming the library, or by you under `--freestanding`."
 es = "simbolos sin proveedor: {0}.  No estan definidos en la imagen, y ningun bloque `extern` ni plugin declara de que biblioteca salen, asi que no hay ningun import que emitir -- y no se inventa uno, porque inventarlo solo mueve el fallo al momento de CARGAR en la maquina de otro.  Cada servicio de runtime es un gancho: lo provee el modulo de la stdlib que lo cubre por defecto, una funcion tuya marcada `@Provides(<builtin>)`, un `extern` que diga la biblioteca, o tu mismo con `--freestanding`."
+
+# --- el informe de coste de `--analyze` (VX9260-VX9281) ---
+#
+# Estaba escrito a mano en `main.cpp`, que es justo lo que la regla del
+# proyecto prohibe: un informe que lee una PERSONA sale del catalogo.  Y no era
+# solo una cuestion de idioma -- obligaba a que el test que lo cubre se atara a
+# la grafia de las frases, que es como se rompio ya el smoke del servidor.
+#
+# Lo que NO se traduce y por eso va fuera de estos textos: la notacion `O(n^2)`
+# y los nombres de fase `PRE-opt`/`POST-opt`, que son terminos del compilador
+# igual que `partial_pre` en la tabla de dimensiones -- traducirlos seria
+# renombrar una fase, no traducir una frase.
+
+[VX9260]
+en = "Cost analysis (Big-O) -- {0}"
+es = "Analisis de coste (Big-O) -- {0}"
+
+[VX9261]
+en = "Levels: PRE-opt (source) and POST-opt (final O2 code); PARTIAL (body, calls=O(1)) and TOTAL (interprocedural)."
+es = "Niveles: PRE-opt (fuente) y POST-opt (codigo final O2); PARCIAL (cuerpo, calls=O(1)) y TOTAL (interprocedural)."
+
+[VX9262]
+en = "@complexity contract: each declared dimension (partial_pre/partial_post/total_pre/total_post) is checked against its inferred cost.  @complexity(O(...)) is sugar for total_post."
+es = "Contrato @complexity: cada dimension declarada (partial_pre/partial_post/total_pre/total_post) se valida contra su coste inferido.  @complexity(O(...)) = azucar de total_post."
+
+# {0} coste parcial, {1} coste total, {2} el detalle que lo explica.
+[VX9263]
+en = "PRE-opt : partial {0}   total {1}   [{2}]"
+es = "PRE-opt : parcial {0}   total {1}   [{2}]"
+
+[VX9264]
+en = "PRE-opt : (not available)"
+es = "PRE-opt : (no disponible)"
+
+[VX9265]
+en = "POST-opt: partial {0}   total {1}   [{2}]"
+es = "POST-opt: parcial {0}   total {1}   [{2}]"
+
+# No poder comparar NO es lo mismo que callarse: se dice, y se dice por que.
+[VX9266]
+en = ">> not compared against the source: {0} loop(s) are no longer recognised after optimising, so the effective cost is not measured -- saying it got worse would be an accusation with no proof"
+es = ">> sin comparar con el fuente: {0} bucle(s) no se reconocen tras optimizar, asi que el coste efectivo no esta medido -- decir que empeoro seria acusar sin prueba"
+
+[VX9267]
+en = ">> the optimiser changed the TOTAL cost: {0} (source) -> {1} (effective)"
+es = ">> el optimizer cambio el coste TOTAL: {0} (fuente) -> {1} (efectivo)"
+
+[VX9268]
+en = ">> callees raise the cost: partial {0} -> total {1}"
+es = ">> callees elevan el coste: parcial {0} -> total {1}"
+
+# {0}/{1} reservas propias/totales, {2}/{3} pila propia/total, {4}..{7} si o no.
+[VX9269]
+en = "Footprint: allocs={0}/{1} stack={2}/{3}B (partial/total) pure={4} throws={5} panics={6} recursion={7}"
+es = "Huella  : allocs={0}/{1} stack={2}/{3}B (parcial/total) pure={4} throws={5} panics={6} recursion={7}"
+
+[VX9270]
+en = "  (effects partly unknown: dynamic/external call)"
+es = "  (efectos parcialmente desconocidos: llamada dinamica/externa)"
+
+[VX9271]
+en = "@complexity declared:"
+es = "@complexity declarada:"
+
+[VX9272]
+en = "  (dimension not available; not checked)"
+es = "  (dimension no disponible; no validada)"
+
+[VX9273]
+en = "  ** MISMATCH: inferred {0} **"
+es = "  ** DISCREPANCIA: inferida {0} **"
+
+[VX9274]
+en = "  (ok, inferred {0})"
+es = "  (ok, inferida {0})"
+
+[VX9275]
+en = "--- Types ---"
+es = "--- Tipos ---"
+
+# {0} struct/class/enum, {1} el nombre, {2} tamano, {3} alineacion, {4} campos.
+[VX9276]
+en = "{0} {1} : size={2}B align={3} fields={4}"
+es = "{0} {1} : size={2}B align={3} fields={4}"
+
+[VX9277]
+en = "Suggested annotations.  The measured contracts each function should carry; copy them in front of the definition."
+es = "Anotaciones sugeridas.  Los contratos medidos que cada funcion deberia llevar; copialos delante de la definicion."
+
+# Los dos valores de una propiedad de la huella.  Van aparte porque se leen, y
+# el informe entero es para leerlo.
+[VX9278]
+en = "yes"
+es = "si"
+
+[VX9279]
+en = "no"
+es = "no"
+
+[VX9280]
+en = "Functions analysed: {0}"
+es = "Funciones analizadas: {0}"
+
+[VX9281]
+en = "; contracts with a mismatch: {0}"
+es = "; contratos con discrepancia: {0}"
+
+# El veredicto de un contrato en el informe.  Van del mismo ANCHO en cada
+# idioma porque el informe los pone en columna; si una traduccion no cabe, se
+# acorta ella, no se descuadra la columna.
+[VX9282]
+en = "OK   "
+es = "OK   "
+
+[VX9283]
+en = "FAILS"
+es = "FALLA"
+
+[VX9284]
+en = "?    "
+es = "?    "
+
+[VX9285]
+en = "  [warning] "
+es = "  [aviso] "
+
+# El resumen por arquitectura: {0}/{1} reservas, {2}/{3} pila, {4}..{6} si/no.
+[VX9286]
+en = "  allocs={0}/{1} stack={2}/{3}B pure={4} throws={5} panics={6}"
+es = "  allocs={0}/{1} stack={2}/{3}B pure={4} throws={5} panics={6}"
+
+# --- el detalle que EXPLICA cada cota (VX9287-VX9296) ---
+#
+# Es el `[entre corchetes]` de cada linea del informe, y es la parte que de
+# verdad se lee: la cota dice cuanto y esto dice POR QUE.  Se quedo fuera de
+# la primera pasada y solo se vio al MIRAR la salida ya traducida -- el
+# informe salia en ingles con el motivo en espanol --, que es exactamente para
+# lo que sirve ejecutar en vez de revisar.
+#
+# El singular y el plural son dos entradas y no un "(s)": cada idioma pluraliza
+# a su manera, y meter la forma en el texto obliga al que traduce a aceptar la
+# del castellano.
+
+[VX9287]
+en = "an asm block moves control through a path that cannot be followed (indirect jump, `ret`, call or missing label): it is not established that it does not loop"
+es = "un bloque asm mueve el control por una via que no se puede seguir (salto indirecto, `ret`, llamada o etiqueta ausente): no consta que no de vueltas"
+
+[VX9288]
+en = "{0} loop(s) inside an asm (the number of iterations is not bounded here; declare it with @complexity if you know it)"
+es = "{0} bucle(s) dentro de un asm (el numero de vueltas no se acota aqui; declaralo con @complexity si lo sabes)"
+
+[VX9289]
+en = "no loops, no recursion"
+es = "sin loops ni recursion"
+
+[VX9290]
+en = "{0} loop(s), max nesting {1}"
+es = "{0} loop(s), anidamiento max {1}"
+
+# Que parte del anidamiento crece despacio: sin decirlo, "O(n log n)" junto a
+# "anidamiento max 2" se lee como un error de cuenta.
+[VX9291]
+en = " ({0} of them multiplicative: log n)"
+es = " ({0} de ellos multiplicativo: log n)"
+
+[VX9292]
+en = " ({0} of them multiplicative: log n)"
+es = " ({0} de ellos multiplicativos: log n)"
+
+[VX9293]
+en = "recursive ({0} self-call)"
+es = "recursiva ({0} self-call)"
+
+[VX9294]
+en = "recursive ({0} self-calls)"
+es = "recursiva ({0} self-calls)"
+
+[VX9295]
+en = " divide-and-conquer"
+es = " divide-y-venceras"
+
+# La estrategia con la que el backend despacha un match/switch.  No cambia la
+# clase en n -- k casos fijos son O(1) respecto a la entrada -- pero dice lo
+# que cuesta el despacho en numero de CASOS.
+[VX9296]
+en = "switch O(1) jump table (dense)"
+es = "switch O(1) jump table (denso)"
+
+[VX9297]
+en = "switch O(log k) BST (k cases)"
+es = "switch O(log k) BST (k casos)"
+
+[VX9298]
+en = "switch O(k) linear (k cases)"
+es = "switch O(k) lineal (k casos)"
 
 # --- la ayuda del propio subcomando y las familias (VXW903-VXW911) ---
 #
@@ -3780,3 +4043,34 @@ es = "la cadena de definiciones era demasiado larga para seguirla"
 [VX2134]
 en = "[fnaddr] addresses={0} crossing={1} (native-call={2} inline-asm={3} store={4} return={5} via-callee={6})"
 es = "[fnaddr] direcciones={0} cruzan={1} (llamada-nativa={2} asm={3} almacen={4} retorno={5} por-callee={6})"
+
+# Una convencion de llamada DECLARADA que no se puede cumplir.  No se apana ni
+# se devuelve un valor cualquiera: para el nucleo NT el cero es STATUS_SUCCESS,
+# asi que media convencion no daria un error, daria otro resultado.
+[VXE936]
+en = "this architecture has no thunk generator, so a declared calling convention cannot be honoured when calling."
+es = "esta arquitectura no tiene generador de thunk, asi que no se puede cumplir una convencion de llamada declarada al llamar."
+
+[VXE937]
+en = "no assembler backend is registered, so the thunk for the declared calling convention cannot be built."
+es = "no hay ensamblador registrado, asi que no se puede construir el thunk de la convencion declarada."
+
+[VXE938]
+en = "the assembler rejected the thunk for the declared calling convention."
+es = "el ensamblador rechazo el thunk de la convencion declarada."
+
+[VXE939]
+en = "the thunk for the declared calling convention does not fit in the code cache."
+es = "el thunk de la convencion declarada no cabe en el cache de codigo."
+
+[VXE940]
+en = "the declared calling convention asks for a register that does not exist in this architecture."
+es = "la convencion declarada pide un registro que no existe en esta arquitectura."
+
+[VXE941]
+en = "the declared calling convention asks to pass an argument in the stack pointer."
+es = "la convencion declarada pide pasar un argumento en el puntero de pila."
+
+[VXE942]
+en = "a call with a declared calling convention got no target or no argument block."
+es = "una llamada con convencion declarada llego sin destino o sin bloque de argumentos."

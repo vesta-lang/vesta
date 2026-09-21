@@ -93,7 +93,12 @@ export class CompilerFactsProvider implements vscode.InlayHintsProvider {
             if (hecho.line <= 0 || !hecho.label) {
                 continue;
             }
-            if (!mostrarDesconocidos && hecho.certainty === 'desconocida') {
+            /* `unknown` es el nombre que manda el servidor (`certainty_name`
+             * del ASA).  Decia `desconocida` y no coincidia con nada, asi que
+             * el ajuste no filtraba NADA: lo que viene apagado por defecto se
+             * ensenaba siempre, y tapando en cada linea lo que si se sabe --
+             * que es justo la razon de que venga apagado. */
+            if (!mostrarDesconocidos && hecho.certainty === 'unknown') {
                 continue;
             }
             const indice = hecho.line - 1;
@@ -204,19 +209,40 @@ function deQue(hecho: AsaFact): string {
     if (hecho.subjectText) {
         return hecho.subjectText;
     }
-    if (hecho.subject === 'funcion') {
-        return `la funcion ${hecho.functionDisplay || hecho.function || ''}`;
+    // Los nombres son los que manda el servidor (`subject_kind_name`).
+    if (hecho.subject === 'function') {
+        return vscode.l10n.t('the function {0}',
+                             hecho.functionDisplay || hecho.function || '');
     }
-    if (hecho.subject === 'modulo') {
-        return 'el modulo entero';
+    if (hecho.subject === 'module') {
+        return vscode.l10n.t('the whole module');
     }
-    if (hecho.subject === 'bloque') {
-        return `el bloque #${hecho.subjectId}`;
+    if (hecho.subject === 'block') {
+        return vscode.l10n.t('block #{0}', hecho.subjectId ?? '');
     }
-    if (hecho.subject === 'valor') {
-        return `el valor %${hecho.subjectId}`;
+    if (hecho.subject === 'value') {
+        return vscode.l10n.t('value %{0}', hecho.subjectId ?? '');
     }
     return hecho.subject ?? '';
+}
+
+/**
+ * @brief La certeza de un hecho, leida.
+ *
+ * Lo que llega es el nombre estable del ASA (`proven`, `inferred`, `unknown`);
+ * lo que se ensena es su traduccion.  Un valor que no se conozca sale TAL
+ * CUAL: inventarle una traduccion esconderia que el servidor mando algo nuevo.
+ *
+ * @param certainty Nombre que mando el servidor.
+ * @return El texto a mostrar.
+ */
+function certaintyLabel(certainty: string): string {
+    switch (certainty) {
+        case 'proven': return vscode.l10n.t('proven');
+        case 'inferred': return vscode.l10n.t('inferred');
+        case 'unknown': return vscode.l10n.t('not known');
+        default: return certainty;
+    }
 }
 
 /**
@@ -241,17 +267,22 @@ function componerDetalle(hechos: AsaFact[]): vscode.MarkdownString {
 
         const de = deQue(hecho);
         if (de) {
-            md.appendMarkdown(`- de: \`${de}\`\n`);
+            md.appendMarkdown('- ' + vscode.l10n.t('from: `{0}`', de) + '\n');
         }
-        // Solo lo que NO es lo de siempre.  Que algo este demostrado por
-        // analisis estatico es el caso normal y decirlo en cada mensaje es
-        // ruido; que sea inferido o desconocido es un aviso.
-        if (hecho.certainty && hecho.certainty !== 'demostrada') {
-            md.appendMarkdown(`- ${hecho.certainty}\n`);
+        /* Solo lo que NO es lo de siempre.  Que algo este demostrado por
+         * analisis estatico es el caso normal y decirlo en cada mensaje es
+         * ruido; que sea inferido o desconocido es un aviso.
+         *
+         * Se compara con `proven`, que es lo que manda el servidor.  Decia
+         * `demostrada` y no coincidia nunca, asi que la linea salia SIEMPRE --
+         * el ruido que este `if` existe para quitar, en todos los mensajes. */
+        if (hecho.certainty && hecho.certainty !== 'proven') {
+            md.appendMarkdown('- ' + certaintyLabel(hecho.certainty) + '\n');
         }
         const ambito = [hecho.isa, hecho.os, hecho.backend].filter(p => p);
         if (ambito.length > 0) {
-            md.appendMarkdown(`- solo en ${ambito.join(' / ')}\n`);
+            md.appendMarkdown(
+                '- ' + vscode.l10n.t('only on {0}', ambito.join(' / ')) + '\n');
         }
         if (hecho.rule) {
             md.appendMarkdown(`- por ${hecho.rule}\n`);

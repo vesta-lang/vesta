@@ -52,7 +52,7 @@ async function openStdlibModule(client: VestaLanguageClient): Promise<void> {
     const files = collectVestaFiles(stdlib);
     if (files.length === 0) {
         void vscode.window.showWarningMessage(
-            `Vesta: no hay ningun modulo .vx en ${stdlib}.`,
+            vscode.l10n.t('Vesta: there is no .vx module in {0}.', stdlib),
         );
         return;
     }
@@ -72,7 +72,7 @@ async function openStdlibModule(client: VestaLanguageClient): Promise<void> {
     items.sort((a, b) => a.label.localeCompare(b.label));
 
     const choice = await vscode.window.showQuickPick(items, {
-        placeHolder: `Modulos de ${stdlib}`,
+        placeHolder: vscode.l10n.t('Modules of {0}', stdlib),
         matchOnDescription: true,
     });
     if (choice) {
@@ -97,7 +97,7 @@ async function openImportUnderCursor(client: VestaLanguageClient): Promise<void>
     const moduleRef = parseImportLine(line);
     if (!moduleRef) {
         void vscode.window.showInformationMessage(
-            'Vesta: el cursor no esta sobre una linea de importacion.',
+            vscode.l10n.t('Vesta: the cursor is not on an import line.'),
         );
         return;
     }
@@ -105,7 +105,7 @@ async function openImportUnderCursor(client: VestaLanguageClient): Promise<void>
     const resolved = resolveModuleFile(moduleRef, editor.document.uri.fsPath, client.stdlibPath);
     if (!resolved) {
         void vscode.window.showWarningMessage(
-            `Vesta: no se encontro el fichero del modulo "${moduleRef.name}".`,
+            vscode.l10n.t('Vesta: the file of module "{0}" was not found.', moduleRef.name),
         );
         return;
     }
@@ -126,34 +126,40 @@ async function showPaths(client: VestaLanguageClient): Promise<void> {
         /** Orden a ejecutar en lugar de revelar la ruta en el sistema. */
         command?: string;
     }
+    const notFound = vscode.l10n.t('not found');
     const items: Item[] = [
         {
-            label: 'Servidor de lenguaje',
-            description: server ? server.path : 'no encontrado',
-            detail: server ? `Origen: ${server.origin}` : 'Se puede fijar con vesta.server.path',
+            label: vscode.l10n.t('Language server'),
+            description: server ? server.path : notFound,
+            detail: server
+                ? vscode.l10n.t('Found via: {0}', server.origin)
+                : vscode.l10n.t('It can be set with {0}', 'vesta.server.path'),
             target: server?.path,
         },
         {
-            label: 'Biblioteca estandar',
-            description: stdlib ?? 'no encontrada',
+            label: vscode.l10n.t('Standard library'),
+            description: stdlib ?? notFound,
             detail: stdlib
-                ? 'Es la que resuelve los import std.* y a la que salta ir a la definicion'
-                : 'Se puede fijar con vesta.stdlibPath',
+                ? vscode.l10n.t(
+                    'The one that resolves the std.* imports and that go-to-definition jumps into')
+                : vscode.l10n.t('It can be set with {0}', 'vesta.stdlibPath'),
             target: stdlib,
             // Sobre la biblioteca lo util no es abrir su carpeta, sino elegir
             // uno de sus modulos.
             command: stdlib ? 'vesta.openStdlib' : undefined,
         },
         {
-            label: 'Maquina virtual',
-            description: vm ? vm.path : 'no encontrada',
-            detail: vm ? `Origen: ${vm.origin}` : 'Se puede fijar con vesta.vmPath',
+            label: vscode.l10n.t('Virtual machine'),
+            description: vm ? vm.path : notFound,
+            detail: vm
+                ? vscode.l10n.t('Found via: {0}', vm.origin)
+                : vscode.l10n.t('It can be set with {0}', 'vesta.vmPath'),
             target: vm?.path,
         },
     ];
 
     const choice = await vscode.window.showQuickPick(items, {
-        placeHolder: 'Rutas en uso; elige una para abrirla',
+        placeHolder: vscode.l10n.t('Paths in use; pick one to open it'),
     });
     if (!choice?.target) {
         return;
@@ -299,10 +305,10 @@ async function openFile(file: string): Promise<void> {
 
 /** @brief Explica que no hay biblioteca y ofrece configurarla. */
 async function reportMissingStdlib(): Promise<void> {
-    const configure = 'Configurar la ruta';
+    const configure = vscode.l10n.t('Set the path');
     const choice = await vscode.window.showWarningMessage(
-        'Vesta: no se localizo la biblioteca estandar. Se busca en VX_STDLIB_DIR, ' +
-        'junto al servidor de lenguaje y en el arbol del repositorio.',
+        vscode.l10n.t(
+            'Vesta: the standard library was not located.  It is looked for in VX_STDLIB_DIR, next to the language server and in the repository tree.'),
         configure,
     );
     if (choice === configure) {

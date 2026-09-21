@@ -41,6 +41,63 @@ except ImportError as exc:  # pragma: no cover - solo si falta el repositorio
     sys.exit(2)
 
 
+_CATALOG = os.path.join(_REPO, "catalog", "diagnostics.toml")
+_catalog_cache: Optional[Dict[str, Any]] = None
+
+
+def catalog_text(code: str) -> List[str]:
+    """Lo que dice un diagnostico, en TODOS sus idiomas.
+
+    Un mensaje del servidor sale del catalogo multi-idioma, asi que buscar su
+    grafia en el test es atarse al idioma que ese dia sea el de respaldo.  Ya
+    mordio: la comprobacion del hover buscaba "no compila" y el servidor, que
+    funcionaba perfectamente, contestaba en ingles -- el primero de
+    `languages`.  Un fallo que no es del producto cuesta lo mismo de
+    investigar que uno que si.
+
+    Se lee el catalogo y se compara contra CUALQUIERA de sus idiomas: lo que
+    el test fija es que el servidor dice ESE diagnostico, que es el hecho;
+    como se escriba, y en que idioma, es cosa del catalogo.
+
+    @param code Codigo del diagnostico (`VX9157`).
+    @return Sus textos, uno por idioma; vacio si el codigo no existe.
+    """
+    global _catalog_cache
+    if _catalog_cache is None:
+        try:
+            import tomllib
+            with open(_CATALOG, "rb") as fh:
+                _catalog_cache = tomllib.load(fh)
+        except Exception:  # noqa: BLE001 -- sin catalogo se dice, no se traga
+            _catalog_cache = {}
+    entry = (_catalog_cache or {}).get(code)
+    if not isinstance(entry, dict):
+        return []
+    return [v for v in entry.values() if isinstance(v, str)]
+
+
+def says_diagnostic(text: str, code: str) -> Tuple[bool, str]:
+    """Si un texto trae el diagnostico @p code, en el idioma que sea.
+
+    Se compara sobre el trozo FIJO del mensaje: los que llevan huecos (`{0}`)
+    se parten por ellos y basta con que aparezca el fragmento mas largo, que
+    es el que no cambia con los datos.
+
+    @param text Texto a mirar.
+    @param code Codigo del diagnostico.
+    @return Si aparece, y el motivo cuando no -- que distingue "el servidor
+            dijo otra cosa" de "ese codigo no esta en el catalogo".
+    """
+    variants = catalog_text(code)
+    if not variants:
+        return False, f"{code} no esta en {os.path.relpath(_CATALOG, _REPO)}"
+    for variant in variants:
+        chunk = max(variant.split("{0}"), key=len).strip()
+        if chunk and chunk in text:
+            return True, ""
+    return False, f"no dice {code}: {text[:100]}"
+
+
 # Metodos propios que la extension invoca; deben seguir anunciandose.
 METODOS_ESPERADOS = [
     "vesta/ir",
@@ -169,8 +226,22 @@ def comprobar_formato(lsp: VestaLspClient, c: Comprobaciones) -> None:
         return
     texto = ediciones[0].get("newText", "")
     c.exigir("i32 f() {" in texto, "quita el espacio de mas en la firma")
-    c.exigir("	i32 a  = 1;" in texto, "indenta con tabulador y alinea el `=`")
     c.exigir("return a + bb;" in texto, "separa los operadores")
+
+    # La indentacion y la alineacion se comprueban por DONDE cae el `=`, no
+    # por como quede escrita la linea entera.  Lo de antes exigia
+    # `\ti32 a  = 1;` y se cayo el dia que el formateador empezo a hacer
+    # explicito el tipo del literal (`1_i32`) -- un cambio que no tiene nada
+    # que ver con lo que esta comprobacion mira, y que ya esta aplicado a 404
+    # ficheros del corpus.
+    body = [l for l in texto.splitlines() if "=" in l]
+    c.exigir(all(l.startswith("\t") for l in body),
+             "indenta el cuerpo con tabulador",
+             str(body)[:120])
+    columns = {l.index("=") for l in body}
+    c.exigir(len(body) > 1 and len(columns) == 1,
+             "alinea el `=` de las declaraciones seguidas",
+             str(body)[:120])
 
 
 def comprobar_navegacion(lsp: VestaLspClient, uri: str, texto: str,
@@ -529,8 +600,26 @@ def comprobar_campos_y_opt(c: Comprobaciones, binario: str) -> None:
     with VestaLspClient(binario, root_uri=os.path.dirname(fuente)) as lsp:
         uri = lsp.open(fuente, text=texto)
 
-        def hover_de(n: int, aguja: str) -> str:
-            col = lineas[n - 1].index(aguja) + 1
+        def hover_at(from_line: int, needle: str) -> str:
+            """El hover sobre @p needle, buscandola desde la linea @p from_line.
+
+            Se busca hacia adelante y no en la linea de la declaracion: como se
+            reparten los campos en lineas es cosa del FORMATEADOR, no del
+            lenguaje, asi que anclar en la misma linea ataba la prueba a la
+            grafia del ejemplo.  Y ya mordio: `vm fmt` expandio
+            `struct Small { u8 a; u8 b; u8 c; }` a cinco lineas y esto murio con
+            un traceback de Python -- que no dice cual de las dos cosas paso, si
+            el campo se movio o si el servidor dejo de contestar.
+            """
+            n = 0
+            for i in range(max(from_line - 1, 0), len(lineas)):
+                if needle in lineas[i]:
+                    n = i + 1
+                    break
+            if n == 0:
+                return (f"(no hay ninguna linea con `{needle.strip()}` "
+                        f"desde la {from_line}: el ejemplo cambio de forma)")
+            col = lineas[n - 1].index(needle) + 1
             r = lsp.request("textDocument/hover",
                             {"textDocument": {"uri": uri},
                              "position": {"line": n - 1, "character": col}})
@@ -544,15 +633,16 @@ def comprobar_campos_y_opt(c: Comprobaciones, binario: str) -> None:
                       if l.strip().startswith(prefijo)), 0)
             if n == 0:
                 continue
-            md = hover_de(n, " b;")
+            md = hover_at(n, " b;")
             c.exigir(f"`{contenedor}`" in md,
                      f"el campo de {contenedor} dice que es de {contenedor}",
                      md.replace("\n", " | ")[:120])
             c.exigir("+1" in md,
                      f"el campo de {contenedor} dice donde cae en memoria",
                      md.replace("\n", " | ")[:120])
-        md16 = hover_de(next(i + 1 for i, l in enumerate(lineas)
-                             if l.strip().startswith("struct Aligned16")), " b;")
+        n16 = next((i + 1 for i, l in enumerate(lineas)
+                    if l.strip().startswith("struct Aligned16")), 0)
+        md16 = hover_at(n16, " b;") if n16 else "(no esta `struct Aligned16`)"
         c.exigir("16" in md16,
                  "el struct alineado a 16 lo dice en su campo",
                  md16.replace("\n", " | ")[:120])
@@ -624,9 +714,14 @@ def comprobar_stdlib_analiza(c: Comprobaciones, binario: str) -> None:
                              "position": {"line": n - 1, "character": col}})
             cont = (h or {}).get("contents") or {}
             md = (cont.get("value") if isinstance(cont, dict) else str(cont)) or ""
-            c.exigir("no compila" in md or "+" in md,
+            # O dice en que byte cae -- "+8" --, o dice POR QUE no lo sabe con
+            # el diagnostico del catalogo.  Lo que no vale es callarse: un
+            # hover sin la una ni el otro deja "no se sabe" indistinguible de
+            # "no tiene disposicion".
+            says, why = says_diagnostic(md, "VX9157")
+            c.exigir("+" in md or says,
                      "el hover dice donde cae el campo, o por que no lo sabe",
-                     md.replace("\n", " | ")[:140])
+                     why or md.replace("\n", " | ")[:140])
 
 
 def comprobar_objetivo_del_analisis(c: Comprobaciones, binario: str) -> None:
@@ -1008,6 +1103,143 @@ def comprobar_informe_por_funcion(c: Comprobaciones, binario: str) -> None:
                  "cada funcion dice si compila a nativo")
 
 
+# El vocabulario que el protocolo usa como DATO, por campo.  Son nombres
+# estables, no texto: el servidor los manda en ingles y el que los ENSENA los
+# traduce.  Esta tabla es el contrato entre las dos partes.
+PROTOCOL_VOCABULARY: Dict[str, List[str]] = {
+    "flow": ["fallthrough", "jump", "branch", "call", "ret", "indirect",
+             "unclassified"],
+    "certainty": ["proven", "inferred", "unknown"],
+    "subject": ["module", "function", "value", "block", "instruction", "symbol"],
+    "status": ["keeps", "breaks", "undecided"],
+    "confidence": ["exact", "heuristic", "unknown"],
+}
+
+# Como compara cada campo el codigo de la extension.  Se busca el literal
+# porque es lo unico que importa: si el servidor manda `proven` y el cliente
+# compara con `demostrada`, la comparacion no falla -- simplemente no se
+# cumple nunca --, y eso no lo ve nadie.
+_COMPARISON_PATTERNS: Dict[str, str] = {
+    "flow": r"case '([^']*)'",           # el switch de `articulo()`
+    "certainty": r"certainty\s*[!=]==\s*'([^']*)'",
+    "subject": r"subject\s*===\s*'([^']*)'",
+    "status": r"status\s*===\s*'([^']*)'",
+    "confidence": r"confidence\s*[!=]==\s*'([^']*)'",
+}
+
+# Donde vive la comparacion de cada campo.  Acotarlo evita que un `case` de
+# cualquier otro switch entre como si fuera vocabulario del protocolo.
+_COMPARISON_FILES: Dict[str, List[str]] = {
+    "flow": ["src/features/flowArrows.ts"],
+    "certainty": ["src/features/compilerFacts.ts", "src/views/asaPanel.ts"],
+    "subject": ["src/features/compilerFacts.ts", "src/views/asaPanel.ts"],
+    "status": ["src/views/reportPanel.ts"],
+    "confidence": ["src/views/reportPanel.ts"],
+}
+
+
+def check_protocol_vocabulary(c: Comprobaciones, observed: Dict[str, set]) -> None:
+    """Que servidor y extension hablen del MISMO vocabulario.
+
+    Es la red que faltaba, y lo que costo no tenerla: el servidor mandaba
+    `proven` y `function` -- ya en ingles, con `certainty_name` diciendolo por
+    escrito -- mientras la extension comparaba con `demostrada` y `funcion`.
+    Ninguna de esas comparaciones se cumplia jamas, y nada fallaba: el filtro
+    de certeza del panel del ASA vaciaba la tabla en vez de filtrar, los
+    distintivos salian sin color porque la clase CSS no existia, y el ajuste
+    que esconde lo que el compilador no supo no escondia nada.  Tres cosas
+    rotas a la vez, todas en silencio.
+
+    Se comprueba en las dos direcciones, que son dos fallos distintos:
+
+      - lo que el servidor MANDA cabe en el vocabulario  -> caza que alguien
+        renombre un valor en el servidor y se olvide del cliente;
+      - lo que el cliente COMPARA esta en el vocabulario -> caza justo lo que
+        paso, un cliente que se quedo hablando otro idioma.
+
+    @param c        Contador de comprobaciones.
+    @param observed Valores vistos de verdad en las respuestas, por campo.
+    """
+    import re
+
+    print(chr(10) + "[vocabulario del protocolo]")
+    ext = os.path.dirname(_HERE)
+
+    for field, allowed in PROTOCOL_VOCABULARY.items():
+        seen = observed.get(field) or set()
+        extra = sorted(v for v in seen if v not in allowed)
+        c.exigir(not extra,
+                 "lo que el servidor manda en '" + field + "' esta en el vocabulario",
+                 "sobra: " + str(extra))
+
+        compared: set = set()
+        for rel in _COMPARISON_FILES.get(field, []):
+            path = os.path.join(ext, rel.replace("/", os.sep))
+            if not os.path.isfile(path):
+                continue
+            with open(path, encoding="utf-8") as fh:
+                compared |= set(re.findall(_COMPARISON_PATTERNS[field], fh.read()))
+        unknown = sorted(v for v in compared if v not in allowed)
+        c.exigir(not unknown,
+                 "lo que la extension compara en '" + field + "' existe",
+                 "nunca se cumple: " + str(unknown))
+
+
+def collect_protocol_vocabulary(binario: str) -> Dict[str, set]:
+    """Los valores que el servidor manda DE VERDAD, por campo.
+
+    Se observan sobre respuestas reales en vez de darlos por supuestos: la
+    tabla dice lo que deberia mandar, y esto lo que manda.
+
+    @param binario Ejecutable del servidor.
+    @return Por campo, el conjunto de valores vistos.
+    """
+    seen: Dict[str, set] = {k: set() for k in PROTOCOL_VOCABULARY}
+    root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.dirname(os.path.abspath(__file__)))))
+
+    facts_src = os.path.join(root, "examples_codes_vx", "306_align_struct.vx")
+    if os.path.isfile(facts_src):
+        with VestaLspClient(binario, root_uri=os.path.dirname(facts_src)) as lsp:
+            uri = lsp.open(facts_src, text=open(facts_src, encoding="utf-8").read())
+            for f in (lsp.request("vesta/asaFacts", {"uri": uri}) or {}).get(
+                    "facts") or []:
+                for field in ("certainty", "subject"):
+                    if f.get(field):
+                        seen[field].add(f[field])
+
+    report_src = os.path.join(root, "examples_codes_vx", "analyze", "contracts.vx")
+    if os.path.isfile(report_src):
+        with VestaLspClient(binario, root_uri=os.path.dirname(report_src)) as lsp:
+            uri = lsp.open(report_src,
+                           text=open(report_src, encoding="utf-8").read())
+            for f in (lsp.request("vesta/functionReport", {"uri": uri}) or {}).get(
+                    "functions") or []:
+                conf = (f.get("cost") or {}).get("confidence")
+                if conf:
+                    seen["confidence"].add(conf)
+                for ck in f.get("checks") or []:
+                    if ck.get("status"):
+                        seen["status"].add(ck["status"])
+
+    asm_src = os.path.join(root, "examples_codes_vx", "asm_loop.vx")
+    if os.path.isfile(asm_src):
+        text = open(asm_src, encoding="utf-8").read()
+        lines = text.splitlines()
+        inside = next((i + 1 for i, l in enumerate(lines)
+                       if l.strip().startswith("add ")), 0)
+        if inside:
+            with VestaLspClient(binario, root_uri=os.path.dirname(asm_src)) as lsp:
+                uri = lsp.open(asm_src, text=text)
+                r = lsp.request("vesta/asmBlock",
+                                {"uri": uri, "line": inside,
+                                 "arch": "x86-64"}) or {}
+                for i in r.get("instructions") or []:
+                    if i.get("flow"):
+                        seen["flow"].add(i["flow"])
+    return seen
+
+
 def comprobar_bloque_asm(c: Comprobaciones, binario: str) -> None:
     """Que un bloque de asm venga con su FLUJO resuelto.
 
@@ -1063,7 +1295,7 @@ def comprobar_bloque_asm(c: Comprobaciones, binario: str) -> None:
                  str(len(bien)) + " de " + str(len(insns)))
 
         # Y el salto tiene que estar RESUELTO: sin eso no hay flecha que pintar.
-        saltos = [i for i in insns if i["flow"] in ("salto", "rama")]
+        saltos = [i for i in insns if i["flow"] in ("jump", "branch")]
         c.exigir(len(saltos) > 0, "el bloque tiene algun salto con el que probar")
         if saltos:
             c.exigir(all(0 <= i["targetIndex"] < len(insns) for i in saltos),
@@ -1163,6 +1395,7 @@ def main() -> int:
     comprobar_nombres_y_navegacion(c, binario)
     comprobar_informe_por_funcion(c, binario)
     comprobar_bloque_asm(c, binario)
+    check_protocol_vocabulary(c, collect_protocol_vocabulary(binario))
 
     print(f"\n{c.pasadas} comprobaciones pasadas, {len(c.fallos)} fallidas")
     for fallo in c.fallos:

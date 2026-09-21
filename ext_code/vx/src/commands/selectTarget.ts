@@ -37,7 +37,8 @@ export function registerTargetCommand(
             try {
                 await elegirObjetivo(client);
             } catch (err) {
-                void vscode.window.showErrorMessage(`Vesta: ${describeError(err)}`);
+                void vscode.window.showErrorMessage(
+                    vscode.l10n.t('Vesta: {0}', describeError(err)));
             }
         }),
     );
@@ -50,13 +51,13 @@ export function registerTargetCommand(
 async function elegirObjetivo(client: VestaLanguageClient): Promise<void> {
     const catalogo = await client.request<TargetsResponse>(VestaMethod.Targets, {});
     if (catalogo.error) {
-        void vscode.window.showErrorMessage(`Vesta: ${catalogo.error}`);
+        void vscode.window.showErrorMessage(vscode.l10n.t('Vesta: {0}', catalogo.error));
         return;
     }
     const arquitecturas = catalogo.architectures ?? [];
     if (arquitecturas.length === 0) {
         void vscode.window.showWarningMessage(
-            'Vesta: el compilador no declaro ninguna arquitectura.',
+            vscode.l10n.t('Vesta: the compiler declared no architecture at all.'),
         );
         return;
     }
@@ -90,12 +91,15 @@ async function elegirObjetivo(client: VestaLanguageClient): Promise<void> {
     await cfg.update('inspect.opt', nivel, destino);
 
     const partes = [
-        arch || 'arquitectura por defecto',
-        micro || 'sin microarquitectura fijada',
-        isa || 'coma flotante por defecto',
-        nivel === POR_DEFECTO ? 'optimizacion por defecto' : `optimizacion O${nivel}`,
+        arch || vscode.l10n.t('default architecture'),
+        micro || vscode.l10n.t('no microarchitecture pinned'),
+        isa || vscode.l10n.t('default floating point'),
+        nivel === POR_DEFECTO
+            ? vscode.l10n.t('default optimisation')
+            : vscode.l10n.t('optimisation O{0}', nivel),
     ];
-    void vscode.window.showInformationMessage(`Vesta: ${partes.join(' | ')}`);
+    void vscode.window.showInformationMessage(
+        vscode.l10n.t('Vesta: {0}', partes.join(' | ')));
 }
 
 /**
@@ -110,7 +114,11 @@ async function elegirArquitectura(
         value: string;
     }
     const items: Item[] = [
-        { label: 'La del anfitrion', detail: 'Sin fijar ninguna', value: POR_DEFECTO },
+        {
+            label: vscode.l10n.t("The host's"),
+            detail: vscode.l10n.t('Without pinning any'),
+            value: POR_DEFECTO,
+        },
     ];
     for (const a of arquitecturas) {
         items.push({
@@ -119,13 +127,14 @@ async function elegirArquitectura(
             // Decir cuando solo se conoce el juego de instrucciones evita
             // ofrecer una vista que despues no puede responder.
             detail: a.codegen
-                ? `${a.microarchs.length} microarquitectura(s) cronometrada(s)`
-                : 'sin generador de codigo: solo se conoce su juego de instrucciones',
+                ? vscode.l10n.t('{0} microarchitecture(s) with timings', a.microarchs.length)
+                : vscode.l10n.t(
+                    'no code generator: only its instruction set is known'),
             value: a.id,
         });
     }
     const elegido = await vscode.window.showQuickPick(items, {
-        placeHolder: 'Para que arquitectura',
+        placeHolder: vscode.l10n.t('For which architecture'),
     });
     return elegido?.value;
 }
@@ -149,14 +158,14 @@ async function elegirMicroarquitectura(
     }
     const items: Item[] = [
         {
-            label: 'Ninguna en concreto',
-            detail: 'Lo que se deduzca del juego de instrucciones',
+            label: vscode.l10n.t('None in particular'),
+            detail: vscode.l10n.t('Whatever follows from the instruction set'),
             value: POR_DEFECTO,
         },
         ...disponibles.map(m => ({ label: m, value: m })),
     ];
     const elegido = await vscode.window.showQuickPick(items, {
-        placeHolder: 'Que microarquitectura',
+        placeHolder: vscode.l10n.t('Which microarchitecture'),
         matchOnDescription: true,
     });
     return elegido?.value;
@@ -174,11 +183,11 @@ async function elegirIsaFlotante(
         value: string;
     }
     const items: Item[] = [
-        { label: 'El de por defecto', value: POR_DEFECTO },
+        { label: vscode.l10n.t('The default one'), value: POR_DEFECTO },
         ...disponibles.map(i => ({ label: i, value: i })),
     ];
     const elegido = await vscode.window.showQuickPick(items, {
-        placeHolder: 'Que coma flotante',
+        placeHolder: vscode.l10n.t('Which floating point'),
     });
     return elegido?.value;
 }
@@ -194,13 +203,13 @@ async function elegirNivel(niveles: number[]): Promise<string | undefined> {
         value: string;
     }
     const explicacion: Record<number, string> = {
-        0: 'sin optimizar: el codigo tal y como se bajo',
-        1: 'lo basico',
-        2: 'el nivel con el que se compila normalmente',
-        3: 'todo lo que hay',
+        0: vscode.l10n.t('unoptimised: the code just as it was lowered'),
+        1: vscode.l10n.t('the basics'),
+        2: vscode.l10n.t('the level things are normally compiled at'),
+        3: vscode.l10n.t('everything there is'),
     };
     const items: Item[] = [
-        { label: 'El de por defecto', value: POR_DEFECTO },
+        { label: vscode.l10n.t('The default one'), value: POR_DEFECTO },
         ...niveles.map(n => ({
             label: `O${n}`,
             detail: explicacion[n] ?? '',
@@ -208,7 +217,7 @@ async function elegirNivel(niveles: number[]): Promise<string | undefined> {
         })),
     ];
     const elegido = await vscode.window.showQuickPick(items, {
-        placeHolder: 'Con que nivel de optimizacion',
+        placeHolder: vscode.l10n.t('At which optimisation level'),
     });
     return elegido?.value;
 }

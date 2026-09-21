@@ -53,7 +53,7 @@ export function registerCellCommands(
     context: vscode.ExtensionContext,
     client: VestaLanguageClient,
 ): void {
-    salida = vscode.window.createOutputChannel('Vesta: ejecucion');
+    salida = vscode.window.createOutputChannel(vscode.l10n.t('Vesta: execution'));
     context.subscriptions.push(salida);
 
     context.subscriptions.push(
@@ -100,7 +100,9 @@ class CellLensProvider implements vscode.CodeLensProvider {
                 new vscode.CodeLens(
                     new vscode.Range(marcas[k], 0, marcas[k], 0),
                     {
-                        title: titulo ? `Ejecutar: ${titulo}` : 'Ejecutar celda',
+                        title: titulo
+                            ? vscode.l10n.t('Run: {0}', titulo)
+                            : vscode.l10n.t('Run cell'),
                         command: 'vesta.runCell',
                         arguments: [inicio, fin],
                     },
@@ -124,7 +126,8 @@ async function ejecutarCelda(
 ): Promise<void> {
     const editor = vscode.window.activeTextEditor;
     if (!editor || editor.document.languageId !== VESTA_LANGUAGE_ID) {
-        void vscode.window.showWarningMessage('Vesta: el fichero activo no es un .vx.');
+        void vscode.window.showWarningMessage(
+            vscode.l10n.t('Vesta: the active file is not a .vx.'));
         return;
     }
     const desde = inicio ?? 0;
@@ -140,13 +143,14 @@ async function ejecutarCelda(
 async function ejecutarSeleccion(client: VestaLanguageClient): Promise<void> {
     const editor = vscode.window.activeTextEditor;
     if (!editor || editor.document.languageId !== VESTA_LANGUAGE_ID) {
-        void vscode.window.showWarningMessage('Vesta: el fichero activo no es un .vx.');
+        void vscode.window.showWarningMessage(
+            vscode.l10n.t('Vesta: the active file is not a .vx.'));
         return;
     }
     const seleccion = editor.selection;
     if (seleccion.isEmpty) {
         void vscode.window.showInformationMessage(
-            'Vesta: selecciona el codigo que quieres ejecutar.',
+            vscode.l10n.t('Vesta: select the code you want to run.'),
         );
         return;
     }
@@ -177,12 +181,12 @@ async function ejecutarTrozo(
     canal.appendLine(
         `\n--- ${new Date().toLocaleTimeString()} | ${nombreDeModo(modo)}` +
         (nivel === undefined ? '' : ` | O${nivel}`) +
-        (depurar ? ' | con depuracion' : '') +
+        (depurar ? ' | ' + vscode.l10n.t('with debug info') : '') +
         ' ---',
     );
 
     await vscode.window.withProgress(
-        { location: vscode.ProgressLocation.Window, title: 'Vesta: ejecutando...' },
+        { location: vscode.ProgressLocation.Window, title: vscode.l10n.t('Vesta: running...') },
         async () => {
             const programa = componerPrograma(document.getText(), trozo);
             const resultado = await compilarYEjecutar(
@@ -372,12 +376,15 @@ async function compilarYEjecutar(
         }
         if (!compilacion.ok || !compilacion.output) {
             const diags = (compilacion.diagnostics ?? [])
-                .map(d => `${d.line !== undefined ? `linea ${d.line}: ` : ''}${d.message ?? ''}`)
+                .map(d => (d.line !== undefined
+                    ? vscode.l10n.t('line {0}: {1}', d.line, d.message ?? '')
+                    : (d.message ?? '')))
                 .filter(t => t.trim().length > 0);
             return {
                 texto: diags.length > 0
                     ? diags.join('\n')
-                    : (compilacion.message ?? 'la compilacion no produjo nada'),
+                    : (compilacion.message
+                        ?? vscode.l10n.t('the compilation produced nothing')),
                 ok: false,
             };
         }
@@ -390,7 +397,8 @@ async function compilarYEjecutar(
         const vm = discoverVestaVm(vmPathSetting(), raicesDeBusqueda());
         if (!vm) {
             return {
-                texto: 'No se encontro la maquina virtual.  Se fija con vesta.vmPath.',
+                texto: vscode.l10n.t(
+                    'The virtual machine was not found.  It is set with {0}.', 'vesta.vmPath'),
                 ok: false,
             };
         }
@@ -427,7 +435,10 @@ function lanzar(exe: string, args: string[]): Promise<{ texto: string; ok: boole
         hijo.stderr.on('data', d => (err += d.toString()));
         hijo.on('error', e => {
             clearTimeout(alarma);
-            resolve({ texto: `no se pudo ejecutar: ${e.message}`, ok: false });
+            resolve({
+                texto: vscode.l10n.t('could not run it: {0}', e.message),
+                ok: false,
+            });
         });
         hijo.on('close', codigo => {
             clearTimeout(alarma);
@@ -435,14 +446,15 @@ function lanzar(exe: string, args: string[]): Promise<{ texto: string; ok: boole
             if (cortado) {
                 resolve({
                     texto:
-                        texto +
-                        `\n[cortado tras ${limite} ms; se cambia con vesta.run.timeout]`,
+                        texto + '\n[' +
+                        vscode.l10n.t('cut off after {0} ms; changed with {1}',
+                                      limite, 'vesta.run.timeout') + ']',
                     ok: false,
                 });
                 return;
             }
             resolve({
-                texto: texto.length > 0 ? texto : '(sin salida)',
+                texto: texto.length > 0 ? texto : vscode.l10n.t('(no output)'),
                 ok: codigo === 0,
             });
         });
@@ -459,49 +471,60 @@ async function elegirOpciones(): Promise<void> {
     const modo = await vscode.window.showQuickPick<Item>(
         [
             {
-                label: 'Interprete',
-                detail: 'La maquina virtual ejecuta el bytecode sin compilar a nativo',
+                label: vscode.l10n.t('Interpreter'),
+                detail: vscode.l10n.t(
+                    'The virtual machine runs the bytecode without compiling to native'),
                 value: 'vm',
             },
             {
                 label: 'JIT',
-                detail: 'La maquina virtual compila a nativo lo que se calienta',
+                detail: vscode.l10n.t(
+                    'The virtual machine compiles to native whatever gets hot'),
                 value: 'jit',
             },
             {
-                label: 'Nativo',
-                detail: 'Se compila a un ejecutable y se lanza',
+                label: vscode.l10n.t('Native'),
+                detail: vscode.l10n.t('It is compiled to an executable and launched'),
                 value: 'aot',
             },
         ],
-        { placeHolder: 'Como se ejecuta' },
+        { placeHolder: vscode.l10n.t('How it runs') },
     );
     if (!modo) {
         return;
     }
     const nivel = await vscode.window.showQuickPick<Item>(
         [
-            { label: 'El de por defecto', value: '' },
-            { label: 'O0', detail: 'sin optimizar: el codigo tal y como se bajo', value: '0' },
-            { label: 'O1', detail: 'lo basico', value: '1' },
-            { label: 'O2', detail: 'el nivel con el que se compila normalmente', value: '2' },
-            { label: 'O3', detail: 'todo lo que hay', value: '3' },
+            { label: vscode.l10n.t('The default one'), value: '' },
+            {
+                label: 'O0',
+                detail: vscode.l10n.t('unoptimised: the code just as it was lowered'),
+                value: '0',
+            },
+            { label: 'O1', detail: vscode.l10n.t('the basics'), value: '1' },
+            {
+                label: 'O2',
+                detail: vscode.l10n.t('the level things are normally compiled at'),
+                value: '2',
+            },
+            { label: 'O3', detail: vscode.l10n.t('everything there is'), value: '3' },
         ],
-        { placeHolder: 'Con que nivel de optimizacion' },
+        { placeHolder: vscode.l10n.t('At which optimisation level') },
     );
     if (!nivel) {
         return;
     }
     const depurar = await vscode.window.showQuickPick<Item>(
         [
-            { label: 'Sin informacion de depuracion', value: 'no' },
+            { label: vscode.l10n.t('Without debug information'), value: 'no' },
             {
-                label: 'Con informacion de depuracion',
-                detail: 'Permite parar por linea y ver el fuente al depurar',
+                label: vscode.l10n.t('With debug information'),
+                detail: vscode.l10n.t(
+                    'Lets you stop by line and see the source while debugging'),
                 value: 'si',
             },
         ],
-        { placeHolder: 'Informacion de depuracion' },
+        { placeHolder: vscode.l10n.t('Debug information') },
     );
     if (!depurar) {
         return;
@@ -513,9 +536,9 @@ async function elegirOpciones(): Promise<void> {
     await cfg.update('run.opt', nivel.value, destino);
     await cfg.update('run.debug', depurar.value === 'si', destino);
     void vscode.window.showInformationMessage(
-        `Vesta: ${nombreDeModo(modo.value)}` +
+        vscode.l10n.t('Vesta: {0}', nombreDeModo(modo.value)) +
         (nivel.value ? ` | O${nivel.value}` : '') +
-        (depurar.value === 'si' ? ' | con depuracion' : ''),
+        (depurar.value === 'si' ? ' | ' + vscode.l10n.t('with debug info') : ''),
     );
 }
 
@@ -525,9 +548,9 @@ function nombreDeModo(modo: string): string {
         return 'JIT';
     }
     if (modo === 'aot') {
-        return 'nativo';
+        return vscode.l10n.t('native');
     }
-    return 'interprete';
+    return vscode.l10n.t('interpreter');
 }
 
 /**

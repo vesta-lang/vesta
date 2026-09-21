@@ -199,7 +199,8 @@ export function activeVestaDocument(): vscode.TextDocument | undefined {
     }
 
     void vscode.window.showWarningMessage(
-        'Vesta: abre un fichero .vx para poder mirar lo que hace el compilador con el.',
+        vscode.l10n.t(
+            'Vesta: open a .vx file to be able to look at what the compiler does with it.'),
     );
     return undefined;
 }

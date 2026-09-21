@@ -144,8 +144,8 @@ function main() {
      *     7   '---   de donde sale la rama
      */
     const saltos = dibujo.repartirCarriles([
-        { fromLine: 8, toLine: 3, flow: 'rama' },
-        { fromLine: 5, toLine: 6, flow: 'salto' },
+        { fromLine: 8, toLine: 3, flow: 'branch' },
+        { fromLine: 5, toLine: 6, flow: 'jump' },
     ]);
     exigir(saltos.length === 2, 'se reparten los dos saltos');
     exigir(new Set(saltos.map(s => s.carril)).size === 2,
@@ -158,12 +158,12 @@ function main() {
      * acababan en el mismo punto sin que nada lo dijera.  Aqui, seis saltos a
      * dos etiquetas tienen que salir en DOS trazos, no en seis. */
     const converge = dibujo.repartirCarriles([
-        { fromLine: 10, toLine: 40, flow: 'rama' },
-        { fromLine: 20, toLine: 40, flow: 'rama' },
-        { fromLine: 30, toLine: 40, flow: 'salto' },
-        { fromLine: 11, toLine: 50, flow: 'rama' },
-        { fromLine: 21, toLine: 50, flow: 'rama' },
-        { fromLine: 31, toLine: 50, flow: 'salto' },
+        { fromLine: 10, toLine: 40, flow: 'branch' },
+        { fromLine: 20, toLine: 40, flow: 'branch' },
+        { fromLine: 30, toLine: 40, flow: 'jump' },
+        { fromLine: 11, toLine: 50, flow: 'branch' },
+        { fromLine: 21, toLine: 50, flow: 'branch' },
+        { fromLine: 31, toLine: 50, flow: 'jump' },
     ]);
     exigir(converge.length === 2,
            'los saltos a una misma etiqueta comparten trazo',
@@ -196,7 +196,7 @@ function main() {
      * carril 0 tapaba la vertical de un salto que pasara por esa linea y
      * partia la flecha en dos. */
     const conSalto = dibujo.repartirCarriles(
-        [{ fromLine: 2, toLine: 9, flow: 'rama' }]);
+        [{ fromLine: 2, toLine: 9, flow: 'branch' }]);
     const anchoConSalida = dibujo.carrilesUsados(conSalto, true);
     exigir(anchoConSalida === dibujo.carrilesUsados(conSalto) + 1,
            'la salida se lleva su propia columna');

@@ -3318,7 +3318,11 @@ fails_case("berr115", "borrow R2: mut tras shared activo", "115_borrow_err_mut_d
 fails_case("berr116", "borrow R3: move while borrowed", "116_borrow_err_move_while_borrowed.vx", "VX2034", line=2076)
 fails_case("berr116b", "borrow R3: reasignar el owner prestado", "116_borrow_err_move_while_borrowed.vx", "VX2031", line=2076)
 r0_case("borrow117", "borrow F2+F4: param escape + lifetime elision regla 1", "117_borrow_param_elision.vx", 42, line=2082)
-r0_case("borrow118", "borrow F1: NLL libera borrow tras ultimo uso (move OK)", "118_borrow_nll.vx", 42, line=2084)
+r0_case("borrow118", "borrow F1: la liberacion temprana suelta el prestamo tras su ultimo uso (mover al dueno es correcto), y la MISMA regla para el que NO tiene nombre -- `lee(lend(u))`, con el lend en el sitio de la llamada --, que no se soltaba nunca porque el comprobador indexa por nombre y ese no tiene: sin clave no hay ultimo uso y sin ultimo uso nadie lo suelta, asi que vivia hasta el RET y bloqueaba cualquier prestamo posterior del mismo sitio.  Incluye las dos grafias de la misma llamada, que daban resultados distintos: por el punto el receptor se mira mas de una vez y cada visita tomaba OTRO prestamo, asi que `lend_mut(u).pon(9)` chocaba consigo mismo mientras `pon(lend_mut(u), 9)` compilaba", "118_borrow_nll.vx", 42, line=2084)
+# Y la otra mitad, en su propio fichero: un negativo solo guarda lo que haria
+# compilar el fichero ENTERO, asi que al lado de otro caso que tambien falla
+# este podria empezar a colarse con la prueba en verde.
+fails_case("banon599", "un prestamo sin nombre SIGUE contando dentro de su sentencia: compartido y exclusivo del mismo dueno en la misma llamada es error, que es el lado al que se puede pasar uno al hacer que los anonimos mueran con su sentencia", "599_borrow_anon_misma_sentencia_err.vx", "VX2027")
 r0_case("borrow119", "borrow F3: shared reborrow lend(borrow_shared)", "119_borrow_reborrow.vx", 42, line=2086)
 r0_case("borrow120", "borrow F3 ext: lend_mut(borrow_mut) reborrow con suspend", "120_borrow_reborrow_mut.vx", 42, line=2088)
 r0_case("borrow121", "borrow F3 ext: lend(borrow_mut) shared reborrow con suspend", "121_borrow_shared_reborrow_of_mut.vx", 42, line=2090)
@@ -3489,6 +3493,169 @@ def _(ctx):
                  log)
         return
     ctx.ok("reflexion/FFI: opacidad fundamental reportada, sin lagunas de cobertura")
+
+
+_CATALOG_CACHE = {}
+
+
+def catalog_regex(code, groups):
+    """La plantilla de un diagnostico, como expresion regular.
+
+    El informe de `--analyze` sale del catalogo multi-idioma, asi que buscar
+    sus frases aqui seria atarse al idioma que ese dia sea el de respaldo --
+    el mismo fallo que se arreglo en el smoke del servidor de lenguaje --.  Se
+    construye el patron DESDE la plantilla: lo fijo se escapa y cada `{n}` se
+    convierte en un grupo, con lo que la comprobacion vale en cualquier idioma
+    y sobrevive a que alguien reescriba la frase.
+
+    @param code   Codigo del diagnostico (`VX9265`).
+    @param groups Cuantos huecos tiene la plantilla.
+    @return Una regex por idioma; vacio si el codigo no esta en el catalogo.
+    """
+    if not _CATALOG_CACHE:
+        root = os.path.dirname(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__))))
+        try:
+            import tomllib
+            with open(os.path.join(root, "catalog", "diagnostics.toml"),
+                      "rb") as fh:
+                _CATALOG_CACHE.update(tomllib.load(fh))
+        except Exception:  # noqa: BLE001 -- sin catalogo se dice, no se traga
+            _CATALOG_CACHE["__empty__"] = True
+    entry = _CATALOG_CACHE.get(code)
+    if not isinstance(entry, dict):
+        return []
+    out = []
+    for template in entry.values():
+        if not isinstance(template, str):
+            continue
+        pattern = re.escape(template)
+        for i in range(groups):
+            pattern = pattern.replace(re.escape("{%d}" % i), "(.+?)")
+        out.append(re.compile(pattern))
+    return out
+
+
+def h_verify_cost(ctx, label, src, expected, mismatched=()):
+    """Que `--analyze` infiera las cotas que el ejemplo documenta.
+
+    Un `r0_case` sobre estos ejemplos no cubre nada: los tres devuelven 0 fijo
+    y lo que tienen dentro es lo que el ANALISIS debe decir de ellos.  Sin
+    esto, el dia que el analizador dejara de reconocer una recursion
+    divide-y-venceras nadie se enteraria -- el programa seguiria compilando,
+    ejecutando y devolviendo 0.
+
+    Se ancla en la NOTACION, no en la prosa: `O(n^2)` se escribe igual en
+    cualquier idioma, mientras que el resto del informe esta escrito a mano en
+    `main.cpp` y el dia que pase al catalogo multi-idioma cambiaria de forma.
+    Por eso la discrepancia tampoco se busca por su palabra: se comprueba que
+    la linea NOMBRA las dos cotas -- la declarada y la inferida --, que es el
+    hecho.
+
+    @param ctx        Contexto del caso.
+    @param label      Nombre legible del caso.
+    @param src        Ejemplo, relativo al corpus.
+    @param expected   Pares (funcion, coste total POST-opt).
+    @param mismatched Funciones cuya @complexity NO cuadra con lo inferido.
+    """
+    code, log = ctx.run([VM_EXE, "--analyze", ctx.src(src)])
+    if code != 0:
+        ctx.fail("%s: --analyze salio con codigo %d" % (label, code), log)
+        return
+
+    # El informe por funcion: `  nombre` y debajo sus lineas, mas indentadas.
+    # El nombre de la funcion no es texto traducible, asi que se busca tal cual.
+    blocks, current = {}, None
+    for raw in log.splitlines():
+        head = re.match(r"^  ([A-Za-z_][A-Za-z0-9_]*)\s*$", raw)
+        if head:
+            current = head.group(1)
+            blocks[current] = []
+        elif current and raw.startswith("    "):
+            blocks[current].append(raw)
+
+    # VX9265 = la linea POST-opt, con (parcial, total, detalle).
+    post_opt = catalog_regex("VX9265", 3)
+    if not post_opt:
+        ctx.fail("%s: VX9265 no esta en catalog/diagnostics.toml" % label, "")
+        return
+
+    for fn, cost in expected:
+        if fn not in blocks:
+            ctx.fail("%s: el informe no habla de %s" % (label, fn), log)
+            return
+        total = None
+        for line in blocks[fn]:
+            for pattern in post_opt:
+                m = pattern.search(line)
+                if m:
+                    total = m.group(2)
+                    break
+            if total is not None:
+                break
+        if total is None:
+            ctx.fail("%s: %s no trae su coste POST-opt" % (label, fn),
+                     "\n".join(blocks[fn]))
+            return
+        if total.strip() != cost:
+            ctx.fail("%s: %s cuesta total %s, se esperaba %s"
+                     % (label, fn, total.strip(), cost), log)
+            return
+    ctx.ok("%s: las %d cotas inferidas" % (label, len(expected)))
+
+    for fn in mismatched:
+        dims = [l for l in blocks.get(fn, [])
+                if "->" in l and re.search(r"(partial|total)_(pre|post)", l)]
+        if not dims:
+            ctx.fail("%s: %s no trae su @complexity validada" % (label, fn), log)
+            return
+        # Basta con que UNA dimension no cuadre, y no se dice cual: el ejemplo
+        # documenta que una declaracion equivocada se DICE, y en
+        # `dim_incorrecta` la que falla son las parciales, no las totales.
+        # Fijar la dimension aqui seria fijar el ejemplo, no la regla.
+        says_both = any(len(set(re.findall(r"O\([^)]*\)", l))) >= 2
+                        for l in dims)
+        if not says_both:
+            ctx.fail("%s: %s declara una cota que no cuadra y el informe no "
+                     "dice la inferida" % (label, fn), "\n".join(dims))
+            return
+    if mismatched:
+        ctx.ok("%s: la @complexity que no cuadra dice las DOS cotas" % label)
+
+
+@case("cost_bigo")
+def _(ctx):
+    """Las cinco clases que el nivel 1 del analizador debe reconocer, y que
+    una @complexity mal declarada se DIGA en vez de pasar."""
+    h_verify_cost(ctx, "cost_examples", "analyze/cost_examples.vx",
+                  [("constante", "O(1)"), ("lineal", "O(n)"),
+                   ("cuadratico", "O(n^2)"), ("factorial", "O(n)"),
+                   ("suma_binaria", "O(n log n)"),
+                   ("anotada_ok", "O(n)"), ("anotada_mal", "O(n^2)")],
+                  mismatched=["anotada_mal"])
+
+
+@case("cost_dims")
+def _(ctx):
+    """Las CUATRO dimensiones por separado: parcial/total y pre/post.  Que
+    `usa_helper` sea O(n) de cuerpo y O(n^3) contando a quien llama es lo que
+    distingue una dimension de la otra."""
+    h_verify_cost(ctx, "cost_four_dims", "analyze/cost_four_dims.vx",
+                  [("suma_lineal", "O(n)"), ("cuadr_helper", "O(n^2)"),
+                   ("usa_helper", "O(n^3)")],
+                  mismatched=["dim_incorrecta"])
+
+
+@case("cost_interproc")
+def _(ctx):
+    """El coste INTERPROCEDURAL: el cuerpo de `agregador` es O(n) y su total
+    O(n^2) porque llama a uno lineal, y la cadena f -> g -> h propaga."""
+    h_verify_cost(ctx, "cost_interproc", "analyze/cost_interproc.vx",
+                  [("trabajo_lineal", "O(n)"), ("agregador", "O(n^2)"),
+                   ("nivel_h", "O(n)"), ("nivel_g", "O(n)"),
+                   ("nivel_f", "O(n^2)")])
+
+
 modes3_case("uf210", "unique<T> como campo de contenedor (RAII, deleter al destruir)", "210_unique_en_campo.vx", 42, line=3657)
 modes3_case("ur211", "reasignacion de campo unique<T> (libera el anterior, sin fuga)", "211_unique_reassign.vx", 42, line=3658)
 r0_case("sf212", "shared<T> en campo de contenedor (refcount no-GC, inc-on-store + dec-on-dtor)", "212_shared_en_campo.vx", 42, line=3659)
@@ -3655,7 +3822,8 @@ r0_case("dtorvirt477", "destructor por tabla (clase extendida) vs directo (clase
 r0_case("finales478", "clases final: las dos formas, con visibilidad, y una final que SI hereda", "478_clases_finales.vx", 42, line=3754)
 fails_case("finalher479", "heredar de una clase final es error de compilacion", "479_final_hereda_err.vx", "declarada final", line=3756)
 r0_case("parmet480", "un metodo acepta lo mismo que una funcion suelta: puntero a funcion y no-nulo", "480_params_metodo.vx", 42, line=3758)
-r0_case("varmet481", "variadico en los SEIS contextos: funcion, metodo, ctor, struct, interfaz y lambda", "481_variadicos_todos.vx", 42, line=3760)
+r0_case("varmet481", "variadico en los SEIS contextos: funcion, metodo, ctor, struct, interfaz y lambda; y CRUZADO con las otras dos formas de pasar argumentos -- el hueco `_` marca una posicion y de ahi se empaqueta como siempre, el nombre `.xs = v` manda ese valor al paquete (tambien fuera de orden y junto al hueco), y con nombres una variadica no compite en la seleccion, asi que gana la cerrada", "481_variadicos_todos.vx", 42, line=3760)
+fails_case("varnombre595", "y nombrar el PAQUETE mandando ahi el receptor deja la ranura fija sin dar: se dice por lo que es, una ranura sin argumento, no con un caso especial del variadico", "595_variadico_nombre_err.vx", "VX2076")
 r0_case("matrizparam482", "matriz COMPLETA de parametros: cada forma en cada contexto (funcion, comptime, metodo, ctor, struct, interfaz, lambda)", "482_matriz_parametros.vx", 42, line=3762)
 r0_case("params_modo483", "cuantos argumentos caben segun el modo: doce en nativo, repartidos en bytecode (@Target)", "483_params_limite_por_modo.vx", 42, line=3764)
 r0_case("dtorslot484", "destructores: hueco cero de la tabla, override, y la CADENA hacia la base en orden", "484_dtor_slot_cero.vx", 42, line=3766)
@@ -3665,6 +3833,22 @@ r0_case("companchos487", "un tipo estrecho sigue siendolo al ejecutar en compila
 r0_case("extimpl488", "impl: metodos anadidos desde fuera con 0..3 parametros, sobre struct y sobre clase, con y sin concepto", "488_impl_metodos.vx", 42, line=3774)
 r0_case("arguni489", "la MISMA expresion como argumento en las siete formas de llamar (funcion, ctor, metodo, estatico, struct, closure, variante)", "489_argumentos_uniformes.vx", 42, line=3776)
 fails_case("ctornomet490", "un constructor no se puede llamar como metodo de instancia (viven en la misma lista)", "490_ctor_no_es_metodo.vx", "VX2069", line=3778)
+for _tag, _nombre in (
+    ("simple", "Caja<i64>"),
+    ("anidado", "Caja<Caja<i64>>"),
+    ("varios", "Par<i64, Caja<u8>>"),
+    ("conns", "col.Caja<i64>"),
+):
+    fails_case(
+        "genesc598_" + _tag,
+        "un mensaje cita el tipo COMO SE ESCRIBIO y no como se guarda: "
+        "`%s`.  El de namespace es el que fallaba -- los dos ejes se ACUMULAN "
+        "en el mismo nombre (`col__Caja_i64`) y se aplicaban como excluyentes, "
+        "asi que salia `col.Caja_i64`: medio traducido, y la mitad sin "
+        "traducir era justo la que no existe en el fichero" % _nombre,
+        "598_generico_nombre_escrito_err.vx",
+        _nombre,
+    )
 fails_case("extret491", "'extension' esta retirada y el error dice con que se sustituye", "491_extension_retirada_err.vx", "ya no existe", line=3780)
 r0_case("vecall492", "todas las formas que el vectorizador reconoce, y las dos que no: la salida es la misma con y sin vectorizar, asi que lo que se comprueba es el IR (tools/verify_vectorize.sh idiomas)", "492_vectorizador_completo.vx", 42, line=3782)
 r0_case("stdnum493", "std.numeric desde fuera: las diez operaciones, con el segundo import que rompia la instanciacion de plantillas cross-module", "493_std_numeric.vx", 42, line=3784)
@@ -3923,6 +4107,81 @@ modes3_case("sobrecarga_builtin572", "sobrecargar un BUILTIN: una funcion del us
 fails_case("sobrecarga_builtin_err573", "y la llamada posicional que no dice de cual de las dos habla: error que cita las dos, no un ganador a escondidas", "573_sobrecarga_builtin_err.vx", "VX2077")
 modes3_case("write_sumidero574", "`write(ptr, len)`, el sumidero de bytes: de QUE memoria es el puntero lo dice el IR y no el modo de ejecucion -- una direccion de la maquina virtual y una del anfitrion van por caminos distintos alli, y en nativo son la misma --, asi que los tres modos tienen que escribir lo mismo.  Y convive con `std.os.write`, que toma (stream, buf, count): misma palabra, otra firma, cada llamada a la suya.  Antes el `import only` SUSTITUIA al builtin y lo dejaba inalcanzable, que era el caso que motivaba poder sobrecargarlos", "574_write_sumidero.vx", 42)
 modes3_case("ssn_map568", "el mapa de numeros de servicio de Windows, derivado del ORDEN de los stubs: recorre los exports de ntdll y win32u con `std.binary.pe`, filtra los `Nt*` (menos los `Ntdll*`, que no son syscalls), los ordena por direccion y el puesto que ocupa cada uno ES su numero.  Lo que se comprueba es que los tres modos lleguen al final -- la tabla depende de la version de Windows de la maquina, asi que fijar sus valores seria fijar los de ESTE equipo", "568_syscall_ssn_map.vx", 42)
+modes3_case(
+    "ufcs_stdlib593",
+    "la misma llamada por las dos grafias con la funcion en OTRO PAQUETE: "
+    "`memcpy_c` de `std.memory` toma `usize` y recibe un literal sin sufijo, "
+    "que es `i64`.  La conversion lo coloca -- por eso la llamada libre "
+    "siempre compilo --, pero la seleccion de sobrecarga no la ve, y el punto "
+    "se daba por no encontrado con un consejo que mandaba a importar lo que "
+    "el fichero ya importaba.  Incluye la forma con hueco, donde el sujeto es "
+    "la FUENTE y el destino va primero en la firma",
+    "593_ufcs_stdlib_literal.vx",
+    42,
+)
+modes3_case(
+    "dir_funcion594",
+    "cual de las homonimas es `&f`: en una llamada lo deciden los argumentos, "
+    "en una referencia no hay ninguno, asi que decide el tipo que el contexto "
+    "ESPERA.  Antes se cogia la ultima declarada, o sea que intercambiar dos "
+    "lineas decidia si el programa compilaba; por eso hay dos pares en ORDEN "
+    "CONTRARIO y un trio, para que no valga ni la primera ni la ultima.  Por "
+    "ejes: los cinco CONTEXTOS que deciden (declaracion, asignacion, ranura de "
+    "un parametro, cast -- la escapatoria, que elige la otra, en las dos "
+    "grafias -- y RETORNO, que daba CERO porque el bajado trataba todo retorno "
+    "de tipo funcion como un lambda de dieciseis bytes); las tres GRAFIAS del "
+    "tipo (`cfn(i64) -> i64`, la de C `i64 (*g)(i64)` y el lambda "
+    "`fn(i64) -> i64`, que va con el nombre desnudo porque `&f` son ocho bytes "
+    "y un lambda dieciseis); las dos del VALOR (`&f` y el nombre desnudo, que "
+    "eligen lo mismo); y que separa a las candidatas -- la aridad, el tipo con "
+    "la misma aridad (exacta: un f64 no entra por un i64) y estar en medio.  "
+    "Mas las otras dos capas: las RANURAS (`&rango(.min, .max)`), que es el "
+    "desempate cuando dos homonimas tienen el MISMO tipo y lo unico que las "
+    "separa es como se llaman -- algo que C++ no puede hacer de ninguna "
+    "manera --, y el NAMESPACE (`&medida.escala`), que antes no llegaba a "
+    "ningun sitio ni sobrecargado ni sin sobrecargar: salia un `fn() -> void*` "
+    "que nadie habia escrito.  Y por el TIPO, las dos cosas que el punto "
+    "alcanza: el metodo con el receptor DELANTE (`cfn(Punto*)`, el this "
+    "explicito) y la libre con su propia firma (`cfn(Punto)`), que antes no "
+    "llegaba a ningun sitio -- el mensaje negaba que el tipo existiera --.  "
+    "Los ejes se componen entre si",
+    "594_direccion_de_funcion.vx",
+    42,
+)
+fails_case(
+    "dirranura597a",
+    "y sin escribir las ranuras, cuando el tipo NO PUEDE decidir porque dos "
+    "candidatas lo tienen igual, no se manda a escribir el tipo -- seria "
+    "mandar a hacer lo que ya esta hecho --: se manda a nombrarlas y se cita "
+    "la forma exacta",
+    "597_direccion_ranuras_err.vx",
+    "VX2125",
+)
+fails_case(
+    "dirranura597b",
+    "y con ranuras que ninguna candidata declara, se dice eso y se citan las "
+    "que hay CON sus nombres: sin ellos se imprimiria dos veces la misma linea",
+    "597_direccion_ranuras_err.vx",
+    "VX2124",
+)
+fails_case(
+    "dirtipo597c",
+    "y `&Tipo.nombre` donde el tipo declara un METODO asi y ademas hay una "
+    "libre de ese nombre alcanzable por ese receptor: las dos responden al "
+    "punto, asi que nombrar el tipo no elige -- la misma ambiguedad que "
+    "denuncia `p.nombre()`, contestada igual",
+    "597_direccion_ranuras_err.vx",
+    "VX2126",
+)
+fails_case(
+    "dirsintipo596",
+    "y cuando NADA decide -- `auto f = &doble`, donde el contexto pide que lo "
+    "diga la expresion y la expresion que lo diga el contexto -- se para y "
+    "ENUMERA las candidatas con su firma escrita.  Antes cogia la ultima "
+    "declarada y compilaba en silencio",
+    "596_direccion_sin_tipo_err.vx",
+    "VX2121",
+)
 # Sin anclas `^...$`: el log puede traer CRLF y el `$` no casaria.
 EXPECT582 = [
     r"a=<0x7>",
@@ -4030,6 +4289,7 @@ def _(ctx):
 modes3_case("comptime_struct_return336","una funcion `comptime` que devuelve un `struct` por valor, plano y anidado, materializado en el binario.  Llevaba mes y medio SIN COMPILAR y nadie se entero: el ejemplo no estaba registrado aqui.  Declaraba sus metodos `comptime` sin `static` y los llamaba por el tipo (`Punto.punto(...)`), que es lo que hace un estatico; el compilador contestaba `nombre no declarado: 'Punto'` -- sobre un struct escrito dos lineas mas arriba -- porque al fallar esa via el receptor se evalua como un VALOR.  Ahora eso lo dice VX2117 por su nombre", "336_comptime_struct_return.vx", 42)
 modes3_case("malloc_generico584","`malloc<T>(n)` son n ELEMENTOS de T y devuelve `T*`.  El tipo entre los angulos no hacia NINGUNA de las dos cosas: se consumia sin efecto, asi que `malloc<i64>(4)` reservaba cuatro bytes para treinta y dos -- y eso no daba un error, daba memoria ajena pisada al escribir el segundo elemento, apareciendo lejos y sin relacion aparente --, y ademas devolvia `void*`, obligando a repetir con un cast lo que ya se habia dicho entre los angulos.  Cero usos en todo el corpus, que es por lo que duro: la forma estaba documentada y no la ejercitaba nadie", "584_malloc_generico.vx", 42)
 fails_case("provides_builtin_err583","y proveerlo con OTRA firma no compila: quien llama sigue viendo la del builtin, asi que sin comprobar el contrato al declararlo la llamada PASA EL TIPADO y aterriza en algo que espera otra cosa", "583_provides_builtin_err.vx", "VX2097")
+fails_case("anotacion_erratada592","una anotacion mal escrita es un error, y dice cual querias.  Lo que va tras el `@` y el parser no reconocia se DESCARTABA sin una palabra, y el vocabulario ni siquiera estaba en un sitio -- repartido por siete lugares, cada uno con su lista --: `@Ovrride` no redefinia sino que anyadia una sobrecarga, `@Provdes` dejaba el binario reservando con el asignador de la biblioteca.  Ninguno daba un error donde se escribio", "592_anotacion_erratada_err.vx", "VXP092")
 fails_case("gancho_retirado591","las dos anotaciones de gancho VIEJAS ya no valen, y decirlo es el punto: el parser descarta en silencio lo que no conoce, asi que cuando los consumidores pasaron a leer `@Provides` estas dejaron de leerse y nadie lo dijo -- el fichero compilaba, salia con codigo cero, y el binario reservaba con el asignador de la biblioteca, que en freestanding es justo el que no hay", "591_gancho_retirado_err.vx", "VXP091")
 modes3_case("bounds_check_elim", "el optimizador quita comprobaciones de limites que ya sabe ciertas", "315_bounds_check_elim.vx", 55)
 modes3_case("sync_tiny", "sincronizacion en su forma minima", "35b_sync_tiny.vx", 1)
@@ -6196,6 +6456,13 @@ fails_case("generica_infer_llamada",
 fails_case("ufcs_out_no_es_receptor",
            "un parametro `out` como receptor de un punto: es un hueco de salida, no el sujeto",
            "577_ufcs_receptores_err.vx", "VX2098")
+# El DUENYO donde se pide un PRESTAMO.  De un `unique<T>` a un `borrow<T>` no
+# se llega con un cast -- no son dos vistas del mismo valor --, se llega
+# prestandolo, y el punto no lo hace solo porque esa es justo la operacion con
+# reglas.  El mensaje generico negaba una funcion escrita dos lineas mas arriba.
+fails_case("ufcs_duenyo_no_es_prestamo",
+           "el duenyo como receptor donde la candidata pide un prestamo: se dice que preste, no que no existe",
+           "577_ufcs_receptores_err.vx", "VX2127")
 
 fails_case("generica_homonima_sin_primaria",
            "un nombre de tipo entre <>: son argumentos, y no hay plantilla que especializar",

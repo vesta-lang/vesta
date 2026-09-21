@@ -40,19 +40,28 @@ interface CompileMode {
     mode: 'vm' | 'jit' | 'aot';
 }
 
-/** Modos ofrecidos por el comando de compilacion. */
-const COMPILE_MODES: CompileMode[] = [
-    {
-        label: 'Bytecode de la maquina virtual',
-        detail: 'Genera un .velb; lo ejecuta el interprete o el JIT.',
-        mode: 'vm',
-    },
-    {
-        label: 'Ejecutable nativo',
-        detail: 'Compilacion anticipada al formato y la arquitectura configurados.',
-        mode: 'aot',
-    },
-];
+/**
+ * @brief Modos ofrecidos por el comando de compilacion.
+ *
+ * Se construyen al preguntar y no como una constante del modulo: el texto sale
+ * del idioma, y una constante lo fijaria en el que hubiera al CARGAR.
+ *
+ * @return Los modos con su texto ya en el idioma del editor.
+ */
+function compileModes(): CompileMode[] {
+    return [
+        {
+            label: vscode.l10n.t('Virtual machine bytecode'),
+            detail: vscode.l10n.t('Produces a .velb; the interpreter or the JIT runs it.'),
+            mode: 'vm',
+        },
+        {
+            label: vscode.l10n.t('Native executable'),
+            detail: vscode.l10n.t('Ahead-of-time compilation to the configured format and architecture.'),
+            mode: 'aot',
+        },
+    ];
+}
 
 /**
  * @brief Olvida el terminal cuando el usuario lo cierra a mano.
@@ -75,8 +84,8 @@ export async function compileActiveFile(client: VestaLanguageClient): Promise<vo
     }
 
     const choice = await vscode.window.showQuickPick(
-        COMPILE_MODES.map(m => ({ label: m.label, detail: m.detail, mode: m.mode })),
-        { placeHolder: 'Como compilar el fichero' },
+        compileModes().map(m => ({ label: m.label, detail: m.detail, mode: m.mode })),
+        { placeHolder: vscode.l10n.t('How to compile the file') },
     );
     if (!choice) {
         return;
@@ -110,9 +119,9 @@ export async function runActiveFile(client: VestaLanguageClient): Promise<void> 
 
     const vm = discoverVestaVm(vmPathSetting(), searchRoots());
     if (!vm) {
-        const configure = 'Configurar la ruta';
+        const configure = vscode.l10n.t('Set the path');
         const choice = await vscode.window.showErrorMessage(
-            'Vesta: no se encontro el ejecutable de la maquina virtual.',
+            vscode.l10n.t('Vesta: the virtual machine executable was not found.'),
             configure,
         );
         if (choice === configure) {
@@ -167,12 +176,13 @@ async function compile(
     }
 
     return vscode.window.withProgress(
-        { location: vscode.ProgressLocation.Window, title: 'Vesta: compilando...' },
+        { location: vscode.ProgressLocation.Window, title: vscode.l10n.t('Vesta: compiling...') },
         async () => {
             try {
                 return await client.request<CompileResponse>(VestaMethod.Compile, params);
             } catch (err) {
-                void vscode.window.showErrorMessage(`Vesta: ${describeError(err)}`);
+                void vscode.window.showErrorMessage(
+                    vscode.l10n.t('Vesta: {0}', describeError(err)));
                 return undefined;
             }
         },
@@ -185,27 +195,40 @@ async function compile(
  */
 function reportCompileResult(result: CompileResponse): void {
     if (result.error) {
-        void vscode.window.showErrorMessage(`Vesta: ${result.error}`);
+        void vscode.window.showErrorMessage(vscode.l10n.t('Vesta: {0}', result.error));
         return;
     }
+    /* Cada combinacion es una frase ENTERA, no un tronco al que se le pegan
+     * trozos.  Un fragmento suelto ("con 3 diagnosticos") no se puede traducir
+     * sin saber donde cae en la frase, y el orden no es el mismo en todos los
+     * idiomas; ademas el trozo pegado se cuela sin pasar por el catalogo. */
     if (!result.ok) {
         const errors = (result.diagnostics ?? []).length;
-        const detail = result.message ? `: ${result.message}` : '';
-        void vscode.window.showErrorMessage(
-            errors > 0
-                ? `Vesta: la compilacion fallo con ${errors} diagnostico(s)${detail}.`
-                : `Vesta: la compilacion fallo${detail}.`,
-        );
+        const detail = result.message ?? '';
+        let message: string;
+        if (errors > 0 && detail) {
+            message = vscode.l10n.t(
+                'Vesta: the compilation failed with {0} diagnostic(s): {1}.', errors, detail);
+        } else if (errors > 0) {
+            message = vscode.l10n.t(
+                'Vesta: the compilation failed with {0} diagnostic(s).', errors);
+        } else if (detail) {
+            message = vscode.l10n.t('Vesta: the compilation failed: {0}.', detail);
+        } else {
+            message = vscode.l10n.t('Vesta: the compilation failed.');
+        }
+        void vscode.window.showErrorMessage(message);
         return;
     }
 
-    const millis = result.frontend_us !== undefined
-        ? ` en ${(result.frontend_us / 1000).toFixed(1)} ms`
-        : '';
     const output = result.output ?? '';
-    const reveal = 'Mostrar el artefacto';
+    const done = result.frontend_us !== undefined
+        ? vscode.l10n.t('Vesta: compiled in {0} ms -> {1}',
+                        (result.frontend_us / 1000).toFixed(1), output)
+        : vscode.l10n.t('Vesta: compiled -> {0}', output);
+    const reveal = vscode.l10n.t('Show the artefact');
     void vscode.window
-        .showInformationMessage(`Vesta: compilado${millis} -> ${output}`, reveal)
+        .showInformationMessage(done, reveal)
         .then(choice => {
             if (choice === reveal && output) {
                 void vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(output));
@@ -223,7 +246,7 @@ function acquireTerminal(): vscode.Terminal {
     }
     sharedTerminal = vscode.window.createTerminal({
         name: 'Vesta',
-        message: 'Ejecucion de programas Vesta',
+        message: vscode.l10n.t('Running Vesta programs'),
     });
     return sharedTerminal;
 }
