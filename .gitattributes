@@ -33,3 +33,45 @@ configure     text eol=lf
 # -- sin que ningun fichero tenga nada mal.  Aqui se veia en cuentagotas, solo
 # en los pocos que alguien habia vuelto a sacar del historial.
 *.vx          text eol=lf
+
+
+# ---------------------------------------------------------------------------
+# QUE CODIGO ES NUESTRO, para quien mire el repositorio desde fuera.
+# ---------------------------------------------------------------------------
+#
+# GitHub clasifica el repositorio con Linguist, que por defecto cuenta TODO lo
+# versionado.  Lo unico que ahi sobra es el codigo de OTROS, que esta dentro
+# del arbol y pesa mas que nada nuestro:
+#
+#     sqlite ................... 319.433 lineas
+#     json + miniz + cxxopts ...  40.599
+#
+# Keystone, capstone y el asignador no hacen falta marcarlos: son SUBMODULOS y
+# viven en su propio repositorio, asi que Linguist no los cuenta.  Estos cuatro
+# si estan dentro.
+#
+# LO GENERADO NO SE MARCA, y es una decision, no un olvido.  `src/vx/gen`,
+# `src/lsp/gen` e `instr_db_vm_gen.cpp` son C++ de Vesta: se compilan dentro
+# del compilador y se versionan a proposito.  Que salgan de un guion no los
+# hace de otro.
+#
+# Y ademas `linguist-generated` los COLAPSA en el diff de una revision, que es
+# justo donde tienen que verse: la base de instrucciones dice que toca cada
+# opcode, y una entrada equivocada ahi no da un error -- reordena dos
+# instrucciones que si dependian y da OTRO RESULTADO --.  Es el ultimo fichero
+# del repositorio que conviene esconderle a quien revisa.
+#
+# NO se marca `.vx` con `linguist-language`: ese atributo solo acepta lenguajes
+# que Linguist YA conoce, asi que poner `Vesta` no hace nada, y poner `C` o
+# `Rust` para aranar coloreado seria afirmar en la portada que el proyecto es
+# algo que no es.  Que lo reconozca de verdad pide entrar en su `languages.yml`,
+# y eso pide dos cosas: la gramatica TextMate -- que YA existe, en
+# `ext_code/vx/syntaxes/vesta.tmLanguage.json`, aunque tendria que vivir en un
+# repositorio propio porque Linguist las toma como submodulo -- y que el
+# lenguaje se use en un numero significativo de repositorios publicos, que es
+# el requisito que no depende de nosotros.
+
+libs/SourceCode/sqlite/**  linguist-vendored
+libs/SourceCode/json/**    linguist-vendored
+libs/SourceCode/cxxopts/** linguist-vendored
+libs/SourceCode/miniz/**   linguist-vendored
