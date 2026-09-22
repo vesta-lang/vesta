@@ -213,13 +213,13 @@ int run_driver(const std::string &folder, int threads,
 int run_worker_from_source(
     std::string code, const std::string &file_name,
     const std::string &output_prefix, bool skip_preprocessor, bool keep_labels,
-    const std::vector<uint8_t> *ir_section_bytes = nullptr,
+    const util::ByteBuffer *ir_section_bytes = nullptr,
     bool emit_map = false, emmit::NodeStream *nodes = nullptr,
     const std::string &debug_source_file = std::string());
 
 int run_worker(const std::string &file_name, const std::string &output_prefix,
                bool skip_preprocessor = false, bool keep_labels = false,
-               const std::vector<uint8_t> *ir_section_bytes = nullptr,
+               const util::ByteBuffer *ir_section_bytes = nullptr,
                bool emit_map = false);
 
 /**

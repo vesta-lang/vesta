@@ -112,6 +112,75 @@ inline void throw_error_at(ErrorKind kind, const std::string &msg,
 // (incluido arriba), dentro de namespace loader.
 
 /**
+ * @struct ArtifactOrigin
+ * @brief De donde salio un artefacto que se carga, para poder NOMBRARLO.
+ *
+ * Hace falta porque un programa puede cargar mas modulos en marcha: decir que
+ * uno de ellos trae codigo compilado inservible sin decir CUAL no sirve de
+ * nada.
+ *
+ * No es una cadena libre, y eso es lo importante: un artefacto o vino de un
+ * FICHERO -- y entonces lo nombra su ruta, que es un dato y no se traduce -- o
+ * no vino de ninguno, y entonces lo que hay que decir de el ("lo emitio el
+ * compilador para ejecutarlo al compilar", "llego por la conexion del
+ * depurador") es texto que LEE una persona, asi que sale del catalogo como
+ * cualquier otro.  Escribirlo a mano en el sitio de la llamada seria dejar
+ * media frase del diagnostico sin traducir.
+ *
+ * Los dos campos son excluyentes: si hay ruta, manda la ruta.
+ */
+struct ArtifactOrigin {
+    /**
+     * @brief La ruta, INTERNADA (@c util::intern_name), si vino de un fichero.
+     *
+     * Internada porque las rutas ya viven en el pool: asi no se copia nada y
+     * es el mismo puntero que usa cualquier otra parte que hable de ese
+     * fichero.  Se paga una vez por artefacto cargado, no por nodo.
+     *
+     * No se guarda en @c Executable::source_path, que tiene otro dueno y otro
+     * significado -- se deja vacio a proposito en el ejecutable principal --.
+     */
+    const std::string *path = nullptr;
+
+    /// Y si no vino de un fichero, QUE es: un codigo del catalogo, nunca una
+    /// frase.  Nulo solo si de verdad no se sabe.
+    const char *kind_code = nullptr;
+
+    /// Nombra un artefacto que vino de @p interned_path.
+    static ArtifactOrigin from_file(const std::string *interned_path) {
+        ArtifactOrigin o;
+        o.path = interned_path;
+        return o;
+    }
+    /// Nombra uno que no salio de ningun fichero, por su @p code de catalogo.
+    static ArtifactOrigin from_kind(const char *code) {
+        ArtifactOrigin o;
+        o.kind_code = code;
+        return o;
+    }
+};
+
+/// @name Codigos con los que se nombra un artefacto sin fichero
+/// Van aqui y no en cada sitio de carga para que la lista se pueda leer de un
+/// golpe, igual que el resto de vocabularios del proyecto.
+/// @{
+/// Lo emitio el compilador para ejecutar algo al compilar.
+constexpr const char *kOriginComptime = "VX7037";
+/// Llego por la conexion del depurador, sin pasar por disco.
+constexpr const char *kOriginDebugger = "VX7038";
+/// Llego por la red desde otro nodo.
+constexpr const char *kOriginRemoteNode = "VX7039";
+/// Es el guion de enlace, compilado al vuelo.
+constexpr const char *kOriginLinkScript = "VX7040";
+/// Lo armo una prueba para si misma.
+constexpr const char *kOriginTestHarness = "VX7041";
+/// Lo entrego un programa que empotra la VM, por la API en C.
+constexpr const char *kOriginEmbedder = "VX7043";
+/// Y no se sabe de donde vino, que tambien hay que poder decirlo.
+constexpr const char *kOriginUnknown = "VX7042";
+/// @}
+
+/**
  * @struct Executable
  * @brief Representa un ejecutable VELB completamente enlazado y listo para
  * cargar en la VM.
@@ -254,8 +323,37 @@ typedef struct Executable {
     /**
      * @brief Bytecode cargado con header y demas datos incluidos.
      *
+     * VIVE SOLO MIENTRAS DURA LA CARGA.  Lo que viene despues -- comprobar
+     * una capacidad en cada instruccion, copiar el codigo a un proceso hijo,
+     * descargar un modulo -- no mira los bytes: mira @ref bytecode_size y
+     * @ref code_end, que se calculan aqui una vez.
      */
     std::vector<uint8_t> bytecode{};
+
+    /**
+     * @brief Cuantos bytes tenia el artefacto.
+     *
+     * Se guarda porque @ref bytecode se suelta al acabar de cargar y hay
+     * quien sigue necesitando el tamanyo -- no el contenido -- para acotar
+     * una seccion.
+     */
+    size_t bytecode_size = 0;
+
+    /**
+     * @brief Donde acaba el CoDIGO dentro del artefacto.
+     *
+     * Es el tamanyo recortado por la primera tabla que venga detras (reloc o
+     * imports), porque @c Section::size_real viene a cero con el formato
+     * actual y hay que derivarlo.
+     *
+     * Se calcula UNA vez, al cargar.  Antes lo recalculaban por su cuenta
+     * @c load_module_dynamic, @c unload_module_dynamic y @c check_cap_at_pc
+     * -- la ultima en CADA instruccion con capacidad --, con el mismo codigo
+     * copiado tres veces y un comentario en dos de ellas diciendo "mismo
+     * razonamiento que en la otra".  Tres copias de una cuenta es una que
+     * cambia y dos que no.
+     */
+    uint64_t code_end = 0;
 
     /**
      * Offset al bytecode real dentro del archivo, este campo
@@ -496,14 +594,21 @@ class Loader {
      * spawn se llama una sola vez por hijo.
      *
      * @param dest Proceso destino que recibira la copia del codigo.
-     * @param parent Proceso padre del que copiar el estado actual de
-     *               @c vm_mem (no el bytecode crudo). Si es @c nullptr,
-     *               copia desde @c exe->bytecode original. Para spawn
-     *               se debe pasar el padre para heredar el state de
-     *               @c __module_init (cache slots de @c ClassInfo*, etc.).
+     * @param parent Proceso padre del que copiar el estado actual de su
+     *               @c vm_mem -- no el artefacto crudo --, para que el hijo
+     *               herede lo que el padre ya hizo: las ranuras de cache de
+     *               @c __module_init, las globales modificadas.
+     *
+     *               OBLIGATORIO.  Antes admitia nulo y entonces copiaba del
+     *               artefacto, pero de los tres sitios que llaman aqui
+     *               ninguno lo hacia: era una rama que nadie ejecutaba y la
+     *               UNICA razon por la que el artefacto entero tenia que
+     *               seguir en memoria despues de cargarlo.  Como valor por
+     *               defecto ademas era una trampa -- olvidarse del padre
+     *               compilaba y daba un hijo sin el estado del suyo --.
      */
     void copy_executables_to(runtime::ProcessVM &dest,
-                             runtime::ProcessVM *parent = nullptr);
+                             runtime::ProcessVM &parent);
 
     /**
      * Permite obtener una cadena de la seccion strings, en base a su offset
@@ -561,7 +666,16 @@ class Loader {
      */
     void parser_import_table(Executable &exe, ByteReader &reader);
 
-    std::unique_ptr<Executable> parse_velb(std::vector<uint8_t> bytecode);
+    /**
+     * @brief Reconstruye un @c Executable a partir de los bytes de un `.velb`.
+     *
+     * @param bytecode Los bytes del artefacto.
+     * @param origin De donde salieron, SOLO para poder nombrarlo si hay algo
+     *        que reprocharle.  Ver @ref ArtifactOrigin.
+     * @return El ejecutable, o nulo si los bytes no lo son.
+     */
+    std::unique_ptr<Executable> parse_velb(std::vector<uint8_t> bytecode,
+                                           ArtifactOrigin origin);
 
     /**
      * Permite crear un proceso en una VM cargado su codigo en este proceso.
@@ -577,10 +691,16 @@ class Loader {
      * La VM debe haber sido inicializada usando el metodo `start`
      * @param vm instancia virtual inicializada donde crear el nuevo proceso
      * @param raw_bytecode_file bytecocde a cargar
+     * @param origin Que identifica al artefacto si hay algo que reprocharle
+     *        (@ref ArtifactOrigin).  No tiene valor por defecto A PROPOSITO:
+     *        quien carga sabe de donde lo saco, y un defecto vacio
+     *        convertiria un aviso util en uno que no dice de que artefacto
+     *        habla.
      * @return proceso creado en la maquina virtual
      */
     runtime::ProcessVM *load_executable(runtime::VM &vm,
-                                        std::vector<uint8_t> raw_bytecode_file);
+                                        std::vector<uint8_t> raw_bytecode_file,
+                                        ArtifactOrigin origin);
 
     /**
      * @brief carga DINAMICA de un .velb adicional en una VM ya corriendo.
@@ -600,11 +720,15 @@ class Loader {
      *
      * @param vm Instancia VM activa donde cargar el modulo.
      * @param raw_bytecode_file Bytes del archivo .velb a cargar.
+     * @param origin Que identifica al artefacto si hay algo que reprocharle
+     *        (@ref ArtifactOrigin).  Sin valor por defecto, por lo mismo que
+     *        en @c load_executable.
      * @return @c init_pc (entry point) del modulo cargado, o 0 si el
      *         parse falla o el archivo esta vacio.
      */
     uint64_t load_module_dynamic(runtime::VM &vm,
-                                 std::vector<uint8_t> raw_bytecode_file);
+                                 std::vector<uint8_t> raw_bytecode_file,
+                                 ArtifactOrigin origin);
 
     /**
      * @brief  M.sandbox: comprueba si el codigo en @p pc tiene

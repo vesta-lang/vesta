@@ -971,8 +971,12 @@ bool ComptimeRuntime::load_macros_from_bytes(
          * el header, valida magic/version, mapea las secciones al
          * vm_mem de un nuevo ProcessVM y devuelve el handle.  Cero
          * file I/O: todo se hace sobre el buffer ya en memoria. */
-        runtime::ProcessVM *proc =
-            impl_->mgr.loader.load_executable(impl_->vm, std::move(bytecode));
+        /* El origen no es un fichero: son los bytes que acaba de emitir el
+         * propio compilador para ejecutar algo AL COMPILAR.  Es lo que hay que
+         * decir si luego se le reprocha algo a ese artefacto. */
+        runtime::ProcessVM *proc = impl_->mgr.loader.load_executable(
+            impl_->vm, std::move(bytecode),
+            loader::ArtifactOrigin::from_kind(loader::kOriginComptime));
         if (!proc) return false;
         impl_->proc = proc;
         impl_->proc_pid = proc->pid;

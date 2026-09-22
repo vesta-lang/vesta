@@ -172,11 +172,15 @@ int main() {
     {
         std::vector<IrFunction> fns;
         fns.push_back(make_factorial());
-        const auto bytes = emit_ir_section(fns);
-        check(!bytes.empty(), "factorial serializes to bytes");
+        /* Sin ficheros de origen: la funcion se arma aqui a mano, no
+         * viene de ningun fuente. */
+        const util::SmallVector<const std::string *, 4> no_files;
+        util::ByteBuffer bytes;
+        emit_ir_section(fns, no_files, bytes);
+        check(bytes.size != 0, "factorial serializes to bytes");
 
         std::vector<IrFunction> loaded;
-        const bool ok_parse = parse_ir_section(bytes, 0, bytes.size(), loaded);
+        const bool ok_parse = parse_ir_section(bytes.data, bytes.size, loaded);
         check(ok_parse, "factorial parses back");
         check(loaded.size() == 1, "factorial round-trip count");
         if (!loaded.empty()) {

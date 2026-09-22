@@ -41,6 +41,8 @@
 #include <string>
 #include <vector>
 
+#include "util/byte_buffer.h" // el intermedio viaja como buffer, no como vector
+
 namespace ir {
 struct IrModule;
 struct EmitOptions;
@@ -113,7 +115,7 @@ CompiledIr compile_ir_to_bytecode(const ir::IrModule &mod,
  */
 std::unique_ptr<ComptimeRuntime>
 compile_ir_and_load(const ir::IrModule &mod, const ir::EmitOptions &emit_opts,
-                    const std::vector<uint8_t> *ir_section,
+                    const util::ByteBuffer *ir_section,
                     const std::string &diag_name, CompiledIr *out = nullptr);
 
 } // namespace vx

@@ -465,25 +465,34 @@ IrFragment extract_ir_fragment(const ir::IrModule &mod,
 }
 
 std::vector<uint8_t> serialize_ir_fragment(const IrFragment &frag) {
-    std::vector<uint8_t> out;
-    ir::write_u32(out, VXFRAG_MAGIC);
-    ir::write_u16(out, VXFRAG_VERSION);
-    ir::write_u16(out, 0); // reservado.
-    ir::serialize_function(frag.fn, out);
-    ir::serialize_static_data(frag.blobs, out);
+    /* Un fragmento es intermedio, asi que se construye con la clase de la
+     * seccion @c @ir: sus reservas cuentan donde cuentan las demas de esa
+     * cadena.  La copia final al vector es la misma costura que en el
+     * compilador -- ver alli --, y se va con ella. */
+    util::ByteBuffer buf;
+    util::byte_buffer_init(buf, &ir::kIrSectionKind);
+    ir::write_u32(buf, VXFRAG_MAGIC);
+    ir::write_u16(buf, VXFRAG_VERSION);
+    ir::write_u16(buf, 0); // reservado.
+    ir::serialize_function(frag.fn, buf);
+    ir::serialize_static_data(frag.blobs, buf);
+    std::vector<uint8_t> out(buf.data, buf.data + buf.size);
+    util::byte_buffer_release(buf);
     return out;
 }
 
 bool parse_ir_fragment(const std::vector<uint8_t> &bytes, IrFragment &out) {
-    size_t off = 0;
+    const util::ByteBuffer borrowed =
+        util::byte_buffer_borrow(bytes.data(), bytes.size());
+    util::ByteCursor c = util::byte_cursor_at_start(borrowed);
     uint32_t magic = 0;
     uint16_t ver = 0, pad = 0;
-    if (!ir::read_u32(bytes, off, magic) || magic != VXFRAG_MAGIC) return false;
-    if (!ir::read_u16(bytes, off, ver) || ver != VXFRAG_VERSION) return false;
-    if (!ir::read_u16(bytes, off, pad)) return false;
+    if (!ir::read_u32(c, magic) || magic != VXFRAG_MAGIC) return false;
+    if (!ir::read_u16(c, ver) || ver != VXFRAG_VERSION) return false;
+    if (!ir::read_u16(c, pad)) return false;
     out = IrFragment{};
-    if (!ir::deserialize_function(bytes, off, out.fn)) return false;
-    if (!ir::deserialize_static_data(bytes, off, out.blobs)) return false;
+    if (!ir::deserialize_function(c, out.fn)) return false;
+    if (!ir::deserialize_static_data(c, out.blobs)) return false;
     return true;
 }
 

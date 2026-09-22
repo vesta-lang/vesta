@@ -109,10 +109,12 @@ uint32_t first_source_line(const ir::IrFunction &fn) {
 void attach_complexity_warnings(vx::CompileResult &result,
                                 const std::string &filename,
                                 analyze::ModuleCost &out_cost) {
-    if (result.ir_module_cache_bytes.empty()) return;
+    if (result.ir_module_cache_bytes.buf.size == 0) return;
     try {
         ir::IrModule mod;
-        if (!ir::parse_ir_module_cache(result.ir_module_cache_bytes, mod))
+        if (!ir::parse_ir_module_cache(result.ir_module_cache_bytes.buf.data,
+                                       result.ir_module_cache_bytes.buf.size,
+                                       mod))
             return;
         // Coste PARCIAL + composicion interprocedural (coste efectivo real).
         analyze::ModuleCost mc = analyze::analyze_module(mod);

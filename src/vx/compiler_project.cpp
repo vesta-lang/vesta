@@ -36,11 +36,17 @@
 namespace emmit {
 class NodeStream;
 }
+/* Declarada a mano y no por su cabecera: `util/assembler_multiprocess.h`
+ * arrastra aqui definiciones que chocan con `vx/types.h`.  El riesgo conocido
+ * de repetir una firma es que diverja, y ya paso -- esta se quedo pidiendo un
+ * `std::vector<uint8_t>` cuando el intermedio dejo de viajar asi --, pero al
+ * menos eso no compila en vez de colar. */
+#include "util/byte_buffer.h"
 namespace asm_multi_process {
 int run_worker_from_source(std::string code, const std::string &file_name,
                            const std::string &output_prefix,
                            bool skip_preprocessor, bool keep_labels,
-                           const std::vector<uint8_t> *ir_section_bytes,
+                           const util::ByteBuffer *ir_section_bytes,
                            bool emit_map, emmit::NodeStream *nodes,
                            const std::string &debug_source_file);
 } // namespace asm_multi_process
@@ -2074,7 +2080,10 @@ static const ir::IrModule *asignador_del_lenguaje_(const CompileOptions &opts,
             if (!r.ok || r.aot_alloc_sym.empty() || r.aot_free_sym.empty())
                 break;
             std::unique_ptr<ir::IrModule> mm(new ir::IrModule());
-            if (!ir::parse_ir_module_cache(r.ir_module_cache_bytes, *mm)) break;
+            if (!ir::parse_ir_module_cache(r.ir_module_cache_bytes.buf.data,
+                                           r.ir_module_cache_bytes.buf.size,
+                                           *mm))
+                break;
             c.mod = std::move(mm);
             c.alloc = r.aot_alloc_sym;
             c.libera = r.aot_free_sym;
@@ -2190,6 +2199,23 @@ void traer_asignador_del_lenguaje(ir::IrModule &mod, const CompileOptions &opts,
      * cuando el asignador YA esta dentro: el puente comprueba que existe a
      * quien llamar antes de ponerse, asi que antes de copiarlo no encontraba
      * nada.  Aqui pasan los dos caminos de compilacion. */
+}
+
+/**
+ * @brief Traduce un indice de fichero de la tabla de un modulo a la de otro.
+ *
+ * Al fusionar, los indices que traen las funciones de una dependencia se leen
+ * contra la tabla del modulo fusionado, que es otra.  Fuera de rango se
+ * devuelve "no consta" en vez de un indice cualquiera: citar el fichero
+ * equivocado es peor que no citar ninguno.
+ *
+ * @param remap Correspondencia indice-del-dep -> indice-del-fusionado.
+ * @param idx Indice tal como venia en la dependencia.
+ * @return El indice equivalente, o @c ir::IR_NO_SOURCE_FILE.
+ */
+static uint32_t remap_source_file(const util::SmallVector<uint32_t, 4> &remap,
+                                  uint32_t idx) {
+    return idx < remap.size() ? remap[idx] : ir::IR_NO_SOURCE_FILE;
 }
 
 CompileResult compile_vx_project(
@@ -2566,7 +2592,7 @@ CompileResult compile_vx_project(
                 if (asm_multi_process::run_worker_from_source(
                         std::string(cr_ct.vel_text), pref + ".vel.tmp", pref,
                         /*skip_preprocessor=*/true, /*keep_labels=*/false,
-                        &cr_ct.ir_section_bytes,
+                        &cr_ct.ir_section_bytes.buf,
                         /*emit_map=*/false, /*nodes=*/nullptr,
                         /*debug_source_file=*/std::string()) == EXIT_SUCCESS) {
                     if (util::read_whole_file(pref + ".velb",
@@ -3212,7 +3238,7 @@ CompileResult compile_vx_project(
                 if (cas_unpack_module_(blob, vb, ib)) {
                     auto pr = vxi_parse(vb.data(), vb.size());
                     ir::IrModule dep_mod;
-                    if (pr.ok && ir::parse_ir_module_cache(ib, dep_mod)) {
+                    if (pr.ok && ir::parse_ir_module_cache(ib.data(), ib.size(),dep_mod)) {
                         /* Lo que sale del almacen se comprueba igual que lo
                          * recien construido.  Es el sitio donde un IR mal
                          * guardado deja de ser un problema de quien lo guardo
@@ -3416,7 +3442,7 @@ CompileResult compile_vx_project(
                                 }
                             }
                             if (par_coherente &&
-                                ir::parse_ir_module_cache(ibytes, dep_mod)) {
+                                ir::parse_ir_module_cache(ibytes.data(), ibytes.size(),dep_mod)) {
                                 pm.vxi = std::move(pr.module_);
                                 /* v20: ver el otro camino de acierto. */
                                 pm.has_classes = pm.vxi.declares_classes;
@@ -4175,6 +4201,14 @@ CompileResult compile_vx_project(
             return;
         }
 
+        /* De que fichero salio cada funcion.  Aqui y no mas tarde: este es el
+         * ultimo punto en que el modulo y su fuente se ven a la vez -- despues
+         * se fusiona con los demas y dentro conviven funciones de muchos --.
+         *
+         * Este camino, el de PROYECTO, es justamente el que lo necesita: el de
+         * fichero suelto tiene un fichero y ya. */
+        pm.ir.assign_source_file(pm.canonical_path);
+
         // Grafo de conocimiento del programa, por modulo.  Cada uno aporta sus
         // tipos y los simbolos que emitio; el mapa del artefacto se compone
         // despues con lo de todos, porque el ejecutable final los contiene a
@@ -4334,7 +4368,7 @@ CompileResult compile_vx_project(
             // static_data + globals) para que un dep cache-hit aporte sus
             // slots `code.s_*` al merge.  emit_ir_section (solo functions)
             // los perdia.
-            auto ibytes = ir::emit_ir_module_cache(pm.ir);
+            auto ibytes = ir::emit_ir_module_cache_vec(pm.ir);
             (void)write_file_atomic_(ip, ibytes);
             (void)write_file_atomic_(vp, vbytes);
             /* Y queda apuntado que el intermedio de este modulo, TAL COMO ESTA
@@ -4925,12 +4959,29 @@ CompileResult compile_vx_project(
                 }
             }
         }
+        /* Los indices de fichero del dep son de SU tabla, y al pasar sus
+         * funciones a la fusionada pasan a leerse contra OTRA.  Es el mismo
+         * problema que los literales de arriba, y falla igual de callado: el
+         * indice sigue siendo valido, asi que nadie da un error -- se cita un
+         * fichero que no tiene nada que ver.
+         *
+         * Se traduce una vez por dep, no una por funcion: son las mismas pocas
+         * rutas para todas. */
+        util::SmallVector<uint32_t, 4> file_remap;
+        file_remap.reserve(dep_ir.source_files.size());
+        for (const std::string *p : dep_ir.source_files)
+            file_remap.push_back(merged.intern_source_file(p));
         for (auto &fn : dep_ir.functions) {
             // #cross-module-generics: dedup -- saltar funciones cuyo nombre
             // ya existe (monomorphizaciones identicas de otro modulo).  Las
             // synteticas por-modulo (`__module_init_<mod>`) ya son unicas.
             if (!fn.name.empty() && !merged_fn_names.insert(fn.name).second)
                 continue;
+            fn.source_file = remap_source_file(file_remap, fn.source_file);
+            /* Y los de dentro: una funcion que ya traia codigo inlinado lleva
+             * el fichero de donde vino CADA trozo, que es de otro modulo. */
+            for (ir::InlineSite &s : fn.inline_sites)
+                s.source_file = remap_source_file(file_remap, s.source_file);
             merged.functions.push_back(std::move(fn));
         }
         // M.staticdata-pool: el storage canonico es ahora un pool unico
@@ -5364,8 +5415,8 @@ CompileResult compile_vx_project(
              * que guarda son punteros a instrucciones.  Nadie lo habria visto:
              * lo saca la firma, no una revision. */
             (void)ir::applied(ir::ir_pass_sroa_stack_structs(fn));
-        res.ir_module_cache_bytes_preopt =
-            ir::emit_ir_module_cache(pre_snapshot);
+        ir::emit_ir_module_cache(pre_snapshot,
+                                 res.ir_module_cache_bytes_preopt.buf);
 
         /* Y los HECHOS de ese momento, si quien compila los pidio.  Por la
          * MISMA puerta que los de despues: es el mismo conocimiento sobre otro
@@ -5455,8 +5506,8 @@ CompileResult compile_vx_project(
                             util::flag_on(util::FlagId::Times));
         ir::ir_optimize(para_inline, opt_level_from_int_(opts.opt_level),
                         /*allow_inline=*/true);
-        res.ir_module_cache_bytes_inlined =
-            ir::emit_ir_module_cache(para_inline);
+        ir::emit_ir_module_cache(para_inline,
+                                 res.ir_module_cache_bytes_inlined.buf);
     }
 
     /* El asignador del lenguaje queda DENTRO del modulo (sin tocar las
@@ -5841,7 +5892,8 @@ CompileResult compile_vx_project(
                             "\n@InitPc(\"__module_init\")\n";
                     /* La seccion @ir del conjunto: la del programa entero no
                      * vale, describe otras funciones. */
-                    res.comptime_ir_section_bytes.clear();
+                    util::byte_buffer_release(
+                        res.comptime_ir_section_bytes.buf);
                 }
                 if (util::flag_on(util::FlagId::PruebaIrComptime)) {
                     /* QUE se queda fuera: es lo que hay que mirar cuando el
@@ -5922,12 +5974,13 @@ CompileResult compile_vx_project(
     }
     // El intermedio que viaja dentro del artefacto: sin artefacto, sobra.
     if (!opts.ir_only)
-        res.ir_section_bytes = ir::emit_ir_section(merged.functions);
+        ir::emit_ir_section(merged.functions, merged.source_files,
+                            res.ir_section_bytes.buf);
     //  AOT multi-modulo: exponer el IR mergeado (functions + static_data
     // + globals) como module_cache para que el path -m aot lo consuma.  El
     // single-file lo rellena en compile_vx_source; aqui lo rellenamos desde
     // el modulo mergeado de todos los .vx del proyecto.
-    res.ir_module_cache_bytes = ir::emit_ir_module_cache(merged);
+    ir::emit_ir_module_cache(merged, res.ir_module_cache_bytes.buf);
 
     /* Lo que queda del frontend, que NO es enlazar: se llamaba asi porque era
      * la ultima marca y se comia todo lo que viniera detras -- la cola de esta

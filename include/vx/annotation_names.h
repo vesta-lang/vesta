@@ -32,6 +32,27 @@
 namespace vx {
 
 /**
+ * @brief Las anotaciones que el CODIGO nombra, no solo valida.
+ *
+ * Quien escribe `@Override` en un texto -- un diagrama, un informe, el servidor
+ * de lenguaje -- necesita la grafia, y la tabla de abajo solo responde "existe"
+ * o "se parece a".  Escribirla otra vez en el punto de uso es abrir la misma
+ * puerta que cerro este fichero: dos grafias de la misma anotacion, y la que no
+ * se mira se queda atras sin dar error.
+ *
+ * La tabla se CONSTRUYE con estas, asi que hay una sola.
+ */
+namespace ann {
+constexpr const char *kAfter = "After";
+constexpr const char *kAround = "Around";
+constexpr const char *kAspect = "Aspect";
+constexpr const char *kAsync = "Async";
+constexpr const char *kBefore = "Before";
+constexpr const char *kInline = "Inline";
+constexpr const char *kOverride = "Override";
+} // namespace ann
+
+/**
  * @brief Dice si @p name es una anotacion del lenguaje.
  *
  * @param name Nombre TAL CUAL se escribio, sin el `@`.

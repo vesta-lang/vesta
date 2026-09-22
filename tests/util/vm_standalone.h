@@ -180,7 +180,11 @@ inline void vm_standalone_build(VmStandalone &s, const std::string &source,
 
     s.vm = s.manager.loader.create_vm_instance(1);
     try {
-        s.proc = s.manager.loader.load_executable(*s.vm, std::move(executable));
+        /* El origen es el programa de apoyo que la propia prueba acaba de
+         * ensamblar y enlazar: no hay fichero suyo en disco. */
+        s.proc = s.manager.loader.load_executable(
+            *s.vm, std::move(executable),
+            loader::ArtifactOrigin::from_kind(loader::kOriginTestHarness));
     } catch (const std::exception &e) {
         s.error = e.what();
         s.proc = nullptr;

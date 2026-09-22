@@ -778,6 +778,15 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
     ins.op = ir::IrOp::CALL;
     ins.type = callee_is_sret ? ir::IrType::VOID : ret_ir;
     ins.dst = dst;
+    /* La CONVENCION viaja en la instruccion, no en el nombre.
+     *
+     * Ya lo hacia la llamada por puntero, donde sale del tipo del `cfn`; una
+     * llamada por NOMBRE a la misma funcion se quedaba sin ella, y entonces el
+     * backend no tenia como saber que esa funcion pide sus argumentos en otros
+     * registros.  Que el backend tenga que ir a buscar la declaracion del
+     * llamado es lo mismo que no tenerla: cada uno la buscaria a su manera. */
+    if (callee_sig != nullptr && !callee_sig->param_abi_regs.empty())
+        ins.call_abi_regs = callee_sig->param_abi_regs;
     /*   : si el callee es una @Macro user-defined,
      * rewriting al nombre prefijado `__macro_<name>` que el lowering
      * uso al generar la IrFunction.  Esto permite que un @Macro

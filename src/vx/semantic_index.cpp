@@ -15,6 +15,7 @@
 #include <unordered_set>
 
 #include "vx/diagnostic.h"
+#include "vx/token.h" // is_ident_char: que es un identificador, lo dice el lexico
 #include "vx/module/module_resolver.h"
 
 namespace vx {
@@ -152,12 +153,11 @@ std::string simple_name(const std::string &qname) {
     return (p == std::string::npos) ? qname : qname.substr(p + 1);
 }
 
-/// @brief true si @p c puede iniciar/continuar un identificador Vesta.
+/// @brief true si @p c puede iniciar/continuar un identificador Vesta.  Es el
+/// alfabeto de siempre; lo unico propio de aqui es que un digito no ABRE uno.
 bool ident_char(char c, bool first) {
-    if (c == '_' || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z'))
-        return true;
-    if (!first && c >= '0' && c <= '9') return true;
-    return false;
+    if (!is_ident_char(c)) return false;
+    return !first || c < '0' || c > '9';
 }
 
 /// @brief Extrae los identificadores presentes en un span de texto.  Es un

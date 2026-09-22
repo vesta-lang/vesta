@@ -23,11 +23,30 @@
  * con el numero en el registro equivocado devuelve un codigo cualquiera, y
  * para el nucleo NT el cero es @c STATUS_SUCCESS.
  *
- * ESTO NO ES DE LAS SYSCALLS.  Su alcance es el de la declaracion: cualquier
- * subconjunto de los parametros fijado a cualquiera de los registros
- * generales, y el resto por la plataforma.  Sirve igual para la convencion de
- * Linux (siete fijos), la de NT (cinco) o la que se invente quien escriba una
- * rutina suya en ensamblador.
+ * @par Esto NO es de las syscalls, ni de una arquitectura, ni tiene tope
+ * Su alcance es el de la DECLARACION, y por eso aqui no hay ni un numero
+ * fijado: ni cuantos argumentos caben, ni cuantos registros tiene el banco, ni
+ * cuantos bits ocupa un identificador de registro.  Cada uno de esos numeros
+ * es del OBJETIVO -- x86-64 tiene dieciseis generales, arm64 treinta y uno --,
+ * y escribirlo aqui convertiria una decision de transporte en un limite del
+ * lenguaje.  Los argumentos, su reparto y el banco viajan por puntero y
+ * cuenta.
+ *
+ * @par Quien sabe de una ISA
+ * Solo el GENERADOR, que es uno por arquitectura, igual que el resto del
+ * codegen (@c CodegenTarget).  Un objetivo sin generador NO se apana: lo dice
+ * y no llama, porque llamar sin cumplir la convencion es exactamente el fallo
+ * que esto viene a arreglar.  Los NOMBRES de los registros salen de
+ * @c asm_phys_reg_name, que es la misma tabla por la que se lee
+ * @c register("rXX") en la declaracion: una sola opinion sobre que numero es
+ * cada registro, en vez de dos que pueden separarse.
+ *
+ * @par El reparto se hornea, no se recalcula
+ * Que argumento va a que registro lo dice la DECLARACION, que es constante.
+ * Asi que el thunk se genera por CONVENCION -- no por cuantos argumentos hay
+ * -- y el codigo generado carga cada registro directamente de su hueco del
+ * bloque de valores.  No hay ni banco intermedio ni reparto en cada llamada:
+ * en el camino caliente no se reserva memoria.
  */
 #ifndef JIT_ABI_CALL_THUNK_H
 #define JIT_ABI_CALL_THUNK_H
@@ -40,71 +59,85 @@ namespace jit {
 
 class CodeCache;
 
-/**
- * @brief Cuantos argumentos como mucho.
- *
- * Doce, que es lo que ya admite el puente nativo del interprete y cubre la
- * syscall mas ancha de NT (`NtCreateFile`, once mas el numero de servicio).
- */
-constexpr size_t kAbiCallMaxArgs = 12;
-
-/**
- * @brief Donde va cada argumento, empaquetado.
- *
- * CINCO bits por argumento: el identificador fisico del registro (0-15), o
- * @ref kAbiArgOnStack para decir que va por la pila.  Cinco y no cuatro
- * porque "por la pila" tiene que poder DECIRSE: con cuatro habria que
- * deducirlo de la posicion, y entonces una convencion que fije el sexto
- * argumento y deje sueltos el segundo y el tercero no se podria escribir.
- */
-using AbiArgDesc = uint64_t;
-
-/// Bits por argumento en @ref AbiArgDesc.
-constexpr unsigned kAbiArgBits = 5;
 /// Este argumento NO va en registro: va por la pila, segun la plataforma.
-constexpr unsigned kAbiArgOnStack = 0x1Fu;
-
-/// El destino del argumento @p i, tal y como lo lleva @p desc.
-inline unsigned abi_arg_slot(AbiArgDesc desc, size_t i) {
-    return static_cast<unsigned>((desc >> (i * kAbiArgBits)) &
-                                 ((1u << kAbiArgBits) - 1u));
-}
+/// Fuera del espacio de identificadores de cualquier banco real.
+constexpr uint16_t kAbiArgOnStack = 0xFFFFu;
 
 /**
- * @brief Contexto que el thunk consume.  Lo arma quien llama.
+ * @brief Donde va cada argumento: un identificador de registro por posicion.
  *
- * Un struct con nombre y no tres punteros sueltos: lo que el thunk lee esta
- * PUESTO en un sitio concreto y el codigo generado direcciona por
- * desplazamiento, asi que el reparto es parte del contrato y tiene que poder
- * leerse al lado del generador.
+ * Un array y no bits empaquetados: empaquetar obliga a fijar cuantos bits
+ * lleva un identificador, y eso es del objetivo.  Con una ranura por
+ * argumento, anadir una arquitectura con otro banco no cambia nada de aqui.
+ */
+struct AbiArgSlots {
+    const uint16_t *at = nullptr; ///< uno por argumento, en orden.
+    size_t count = 0;
+
+    /// El destino del argumento @p i, o @ref kAbiArgOnStack si va por pila.
+    uint16_t slot_of(size_t i) const {
+        return (at != nullptr && i < count) ? at[i] : kAbiArgOnStack;
+    }
+};
+
+/**
+ * @brief Lo que el thunk consume.  Lo arma quien llama.
+ *
+ * Dos campos, porque el reparto ya va horneado en el codigo generado: a donde
+ * saltar, y donde estan los valores.  Un struct con nombre y no dos argumentos
+ * sueltos porque el codigo generado direcciona por desplazamiento, asi que el
+ * reparto es parte del contrato y tiene que leerse al lado del generador.
  */
 struct AbiCallCtx {
-    /// Valor de cada registro general, por identificador fisico.  El indice 4
-    /// (rsp) no se usa: el thunk no pisa el puntero de pila.
-    uint64_t gp[16] = {0};
-    /// A donde saltar.  Se copia a la pila ANTES de cargar los registros,
-    /// porque despues no queda ninguno libre con el que alcanzarlo.
+    /// A donde saltar.  El thunk lo copia a la pila ANTES de cargar los
+    /// registros, porque despues no queda ninguno libre con el que alcanzarlo.
     uint64_t target = 0;
-    /// Los que van por la pila, en orden.
-    uint64_t stack[kAbiCallMaxArgs] = {0};
+    /// Los valores, uno por argumento y en el orden de la declaracion.  El
+    /// thunk lee de aqui el hueco que le toca a cada uno.
+    const uint64_t *args = nullptr;
 };
 
 /// Lo que el codigo generado espera recibir.
 using AbiCallThunkFn = uint64_t (*)(const AbiCallCtx *ctx);
 
 /**
- * @brief Construye (o reutiliza) el thunk para @p n_stack argumentos de pila.
+ * @brief Por que no se pudo cumplir una convencion declarada.
  *
- * Uno por CUENTA y no uno generico con bucle: el marco depende de cuantos hay
- * -- y tiene que quedar alineado a 16 en el momento del salto --, asi que
- * calcularlo al generar sale mas corto y mas facil de leer que calcularlo al
- * ejecutar.  Son ocho como mucho y se generan una vez en la vida del proceso.
+ * Un codigo y no una frase: lo que se lee sale del catalogo multi-idioma.  Y
+ * el motivo IMPORTA, no basta con "no se pudo" -- "esta arquitectura no tiene
+ * generador" lo arregla quien porta, "el registro no existe" lo arregla quien
+ * escribio la declaracion, y "no cabe en el cache" no lo arregla ninguno de
+ * los dos --.
+ */
+enum class AbiCallReason : uint8_t {
+    Ok = 0,           ///< se genero.
+    NoGenerator,      ///< esta ISA no tiene generador de thunk.
+    NoAsmBackend,     ///< no hay ensamblador registrado.
+    AssembleFailed,   ///< el ensamblador rechazo el texto.
+    NoCodeSpace,      ///< no cabe en el cache de codigo.
+    RegNotInIsa,      ///< la declaracion pide un registro que no existe aqui.
+    RegIsStackPointer ///< la declaracion pide pasar algo en el puntero de pila.
+};
+
+/// El codigo del catalogo con el que se le cuenta @p r a quien lo lea.
+const char *abi_call_reason_code(AbiCallReason r);
+
+/**
+ * @brief Construye (o reutiliza) el thunk del objetivo activo para la
+ *        convencion @p slots.
  *
- * @param n_stack Cuantos argumentos van por la pila.
- * @param err     Si no es nulo, recibe el motivo cuando devuelve nulo.
+ * Uno por CONVENCION: el reparto es constante -- sale de la declaracion --,
+ * asi que resolverlo al generar deja el camino de llamada sin trabajo y sin
+ * reservas.  Y el marco depende ademas de cuantos van por la pila, que tiene
+ * que quedar alineado como pida la ABI en el momento del salto.  Se generan
+ * bajo demanda y viven lo que el proceso.
+ *
+ * @param slots Donde va cada argumento.  Se copia: el thunk le sobrevive.
+ * @param why   Si no es nulo, recibe el motivo -- @ref AbiCallReason::Ok
+ *              cuando devuelve un thunk.
  * @return El thunk, o @c nullptr si no se pudo generar.
  */
-AbiCallThunkFn abi_call_thunk_for(size_t n_stack, std::string *err);
+AbiCallThunkFn abi_call_thunk_for(AbiArgSlots slots, AbiCallReason *why);
 
 /**
  * @brief Da de alta @c vrt:call_with_abi, por el que el bytecode llega aqui.

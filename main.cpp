@@ -483,7 +483,7 @@ static bool recompilar_con_maquina_de_compilacion(
     }
     const int rc = asm_multi_process::run_worker(
         vel_tmp, prefijo, /*skip_preprocessor=*/true, /*keep_labels=*/false,
-        /*ir_section_bytes=*/&cr_vm.ir_section_bytes, /*emit_map=*/false);
+        /*ir_section_bytes=*/&cr_vm.ir_section_bytes.buf, /*emit_map=*/false);
     if (rc != EXIT_SUCCESS) {
         std::remove(vel_tmp.c_str());
         return false;
@@ -2529,13 +2529,13 @@ int main(int argc, char *argv[]) {
                           : vx::compile_vx_source(vx_source, vx_path, copts);
         for (const auto &d : cr.diagnostics.all())
             vx::print_diagnostic(std::cerr, d);
-        if (!cr.ok || cr.ir_module_cache_bytes.empty()) {
+        if (!cr.ok || cr.ir_module_cache_bytes.buf.size == 0) {
             std::cerr << "[asa] la compilacion no dejo IR que mirar.\n";
             return EXIT_FAILURE;
         }
         ir::IrModule asa_mod;
-        if (!ir::parse_ir_module_cache(cr.ir_module_cache_bytes.data(),
-                                   cr.ir_module_cache_bytes.size(),asa_mod)) {
+        if (!ir::parse_ir_module_cache(cr.ir_module_cache_bytes.buf.data,
+                                   cr.ir_module_cache_bytes.buf.size,asa_mod)) {
             std::cerr << "[asa] no se pudo leer el IR.\n";
             return EXIT_FAILURE;
         }
@@ -2584,10 +2584,10 @@ int main(int argc, char *argv[]) {
 
         if (show_ir) {
             ir::IrModule asa_mod_pre;
-            if (!cr.ir_module_cache_bytes_preopt.empty() &&
+            if (cr.ir_module_cache_bytes_preopt.buf.size != 0 &&
                 ir::parse_ir_module_cache(
-                    cr.ir_module_cache_bytes_preopt.data(),
-                    cr.ir_module_cache_bytes_preopt.size(), asa_mod_pre))
+                    cr.ir_module_cache_bytes_preopt.buf.data,
+                    cr.ir_module_cache_bytes_preopt.buf.size, asa_mod_pre))
                 print_asa_ir(asa_mod_pre, analysis::asa::kStagePreOpt);
             print_asa_ir(asa_mod, analysis::asa::kStagePostOpt);
         }
@@ -2749,7 +2749,7 @@ int main(int argc, char *argv[]) {
                          "analizar.\n";
             return EXIT_FAILURE;
         }
-        if (cr.ir_module_cache_bytes.empty()) {
+        if (cr.ir_module_cache_bytes.buf.size == 0) {
             std::cerr << "[analyze] el modulo no produjo IR.\n";
             return EXIT_FAILURE;
         }
@@ -2758,8 +2758,8 @@ int main(int argc, char *argv[]) {
         // final, tras inline/loop-elim/unroll) + correr el analisis +
         // composicion interprocedural (call-graph bottom-up -> coste TOTAL).
         ir::IrModule amod_post;
-        if (!ir::parse_ir_module_cache(cr.ir_module_cache_bytes.data(),
-                                   cr.ir_module_cache_bytes.size(),amod_post)) {
+        if (!ir::parse_ir_module_cache(cr.ir_module_cache_bytes.buf.data,
+                                   cr.ir_module_cache_bytes.buf.size,amod_post)) {
             std::cerr << "[analyze] no se pudo deserializar el IR.\n";
             return EXIT_FAILURE;
         }
@@ -2804,10 +2804,11 @@ int main(int argc, char *argv[]) {
                     vx::CompileResult io_cr =
                         vx::compile_vx_project(c, io_opts);
                     ir::IrModule io_mod;
-                    if (io_cr.ok && !io_cr.ir_module_cache_bytes.empty() &&
+                    if (io_cr.ok &&
+                        io_cr.ir_module_cache_bytes.buf.size != 0 &&
                         ir::parse_ir_module_cache(
-                            io_cr.ir_module_cache_bytes.data(),
-                            io_cr.ir_module_cache_bytes.size(), io_mod)) {
+                            io_cr.ir_module_cache_bytes.buf.data,
+                            io_cr.ir_module_cache_bytes.buf.size, io_mod)) {
                         for (auto &f : io_mod.functions)
                             if (!definidas.count(f.name))
                                 amod_post.functions.push_back(std::move(f));
@@ -2853,10 +2854,10 @@ int main(int argc, char *argv[]) {
         const long us_coste_bigo = tramo_us();
         ir::IrModule amod_build;
         bool hay_build = false;
-        if (!cr.ir_module_cache_bytes_inlined.empty())
+        if (cr.ir_module_cache_bytes_inlined.buf.size != 0)
             hay_build = ir::parse_ir_module_cache(
-                cr.ir_module_cache_bytes_inlined.data(),
-                cr.ir_module_cache_bytes_inlined.size(), amod_build);
+                cr.ir_module_cache_bytes_inlined.buf.data,
+                cr.ir_module_cache_bytes_inlined.buf.size, amod_build);
         us_modulo_final = tramo_us();
         const ir::IrModule &amod_efectos = hay_build ? amod_build : amod_post;
         if (!want_json)
@@ -2923,12 +2924,12 @@ int main(int argc, char *argv[]) {
         // Deserializar el modulo PRE-opt (complejidad algoritmica del fuente
         // tal como se escribio).  Si por alguna razon no esta disponible,
         // caemos al post (mejor mostrar algo que fallar).
-        bool have_pre = !cr.ir_module_cache_bytes_preopt.empty();
+        bool have_pre = cr.ir_module_cache_bytes_preopt.buf.size != 0;
         ir::IrModule amod_pre;
         analyze::ModuleCost mc_pre;
         if (have_pre &&
-            ir::parse_ir_module_cache(cr.ir_module_cache_bytes_preopt.data(),
-                                      cr.ir_module_cache_bytes_preopt.size(),
+            ir::parse_ir_module_cache(cr.ir_module_cache_bytes_preopt.buf.data,
+                                      cr.ir_module_cache_bytes_preopt.buf.size,
                                       amod_pre)) {
             mc_pre = analyze::analyze_module(amod_pre, &cr.facts,
                                              analysis::asa::kStagePreOpt);
@@ -3316,7 +3317,7 @@ int main(int argc, char *argv[]) {
                     vx::vx_source_has_imports(vx_source)
                         ? vx::compile_vx_project(vx_path, o2)
                         : vx::compile_vx_source(vx_source, vx_path, o2);
-                if (!r2.ok || r2.ir_module_cache_bytes.empty()) {
+                if (!r2.ok || r2.ir_module_cache_bytes.buf.size == 0) {
                     // Que el fuente no compile para una arquitectura NO es un
                     // error del analisis: es justo lo que hay que decir (p.ej.
                     // los atomicos de 64 bits no tienen variante en x86-32).
@@ -3334,8 +3335,8 @@ int main(int argc, char *argv[]) {
                 // es el cuerpo propio; el `total` lo compone el call-graph.
                 ir::IrModule m2;
                 if (!ir::parse_ir_module_cache(
-                        r2.ir_module_cache_bytes.data(),
-                        r2.ir_module_cache_bytes.size(), m2)) {
+                        r2.ir_module_cache_bytes.buf.data,
+                        r2.ir_module_cache_bytes.buf.size, m2)) {
                     pa.fallo = "no se pudo deserializar el IR";
                     tabla.push_back(std::move(pa));
                     continue;
@@ -3346,10 +3347,10 @@ int main(int argc, char *argv[]) {
                 // pre cae al post (mejor mostrar algo que fallar).
                 ir::IrModule m2_pre;
                 analyze::ModuleCost c2_pre;
-                bool tiene_pre = !r2.ir_module_cache_bytes_preopt.empty() &&
+                bool tiene_pre = r2.ir_module_cache_bytes_preopt.buf.size != 0 &&
                                  ir::parse_ir_module_cache(
-                                     r2.ir_module_cache_bytes_preopt.data(),
-                                     r2.ir_module_cache_bytes_preopt.size(),
+                                     r2.ir_module_cache_bytes_preopt.buf.data,
+                                     r2.ir_module_cache_bytes_preopt.buf.size,
                                      m2_pre);
                 if (tiene_pre) {
                     c2_pre = analyze::analyze_module(m2_pre);
@@ -5130,7 +5131,7 @@ int main(int argc, char *argv[]) {
                 std::move(vel_en_memoria), tmp_vel_path, cache_prefix,
                 /*skip_preprocessor=*/true,
                 /*keep_labels=*/false,
-                /*ir_section_bytes=*/&cr.ir_section_bytes,
+                /*ir_section_bytes=*/&cr.ir_section_bytes.buf,
                 /*emit_map=*/false);
             if (tmp_rc == EXIT_SUCCESS) {
                 /* El artefacto recien ensamblado, EN MEMORIA para la segunda
@@ -5672,7 +5673,7 @@ int main(int argc, char *argv[]) {
             std::move(vel_texto), vel_path, out_prefix,
             /*skip_preprocessor=*/true,
             /*keep_labels=*/(result.count("keep-labels") > 0),
-            /*ir_section_bytes=*/&cr.ir_section_bytes,
+            /*ir_section_bytes=*/&cr.ir_section_bytes.buf,
             /*emit_map=*/(result.count("emit-map") > 0), vel_nodos.get(),
             /*debug_source_file=*/copts.emit_debug ? vx_path : std::string());
 

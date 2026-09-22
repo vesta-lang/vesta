@@ -158,17 +158,18 @@ void test_trivial_function() {
     fn.blocks.push_back(entry);
 
     /* Serializar. */
-    std::vector<uint8_t> buf;
+    util::ByteBuffer buf;
+    util::byte_buffer_init(buf, &ir::kIrSectionKind);
     const size_t written = ir::serialize_function(fn, buf);
     CHECK(written > 0, "serialize > 0 bytes");
-    CHECK(written == buf.size(), "written == buf.size()");
+    CHECK(written == buf.size, "written == buf.size");
 
     /* Deserializar. */
-    size_t off = 0;
+    util::ByteCursor cur = util::byte_cursor_at_start(buf);
     ir::IrFunction fn2;
-    const bool ok = ir::deserialize_function(buf, off, fn2);
+    const bool ok = ir::deserialize_function(cur, fn2);
     CHECK(ok, "deserialize ok");
-    CHECK(off == buf.size(), "consumido todo el buffer");
+    CHECK(cur.off == buf.size, "consumido todo el buffer");
     CHECK(same_function(fn, fn2), "funciones identicas tras round-trip");
 }
 
@@ -200,12 +201,13 @@ void test_complexity_dimensions() {
     entry.instrs.push_back(r);
     fn.blocks.push_back(entry);
 
-    std::vector<uint8_t> buf;
+    util::ByteBuffer buf;
+    util::byte_buffer_init(buf, &ir::kIrSectionKind);
     ir::serialize_function(fn, buf);
-    size_t off = 0;
+    util::ByteCursor cur = util::byte_cursor_at_start(buf);
     ir::IrFunction fn2;
-    CHECK(ir::deserialize_function(buf, off, fn2), "deserialize complexity");
-    CHECK(off == buf.size(), "consumido todo el buffer");
+    CHECK(ir::deserialize_function(cur, fn2), "deserialize complexity");
+    CHECK(cur.off == buf.size, "consumido todo el buffer");
     // Cada uno de los cuatro campos + el legacy + los vars sobreviven.
     CHECK(fn2.complexity_expr == "O(n)", "complexity_expr preservado");
     CHECK(fn2.complexity_vars.size() == 1 && fn2.complexity_vars[0] == "n = m",
@@ -257,11 +259,12 @@ void test_value_flags() {
     entry.instrs.push_back(ret);
     fn.blocks.push_back(entry);
 
-    std::vector<uint8_t> buf;
+    util::ByteBuffer buf;
+    util::byte_buffer_init(buf, &ir::kIrSectionKind);
     ir::serialize_function(fn, buf);
-    size_t off = 0;
+    util::ByteCursor cur = util::byte_cursor_at_start(buf);
     ir::IrFunction fn2;
-    CHECK(ir::deserialize_function(buf, off, fn2), "deserialize ok");
+    CHECK(ir::deserialize_function(cur, fn2), "deserialize ok");
     CHECK(same_function(fn, fn2), "round-trip con flags");
     CHECK(fn2.values[2].const_val == 0xDEADBEEFCAFE1234ULL,
           "const_val preservado");
@@ -312,11 +315,12 @@ void test_memory_space_round_trip() {
         entry.instrs.push_back(ret);
         fn.blocks.push_back(entry);
 
-        std::vector<uint8_t> buf;
+        util::ByteBuffer buf;
+    util::byte_buffer_init(buf, &ir::kIrSectionKind);
         ir::serialize_function(fn, buf);
-        size_t off = 0;
+        util::ByteCursor cur = util::byte_cursor_at_start(buf);
         ir::IrFunction fn2;
-        CHECK(ir::deserialize_function(buf, off, fn2),
+        CHECK(ir::deserialize_function(cur, fn2),
               "deserialize de la clase de memoria");
         CHECK(fn2.values[0].memory == m, ir::memory_space_name(m));
         /* Y la pregunta que de verdad hacen los consumidores sigue de acuerdo
@@ -382,11 +386,12 @@ void test_multi_block_branches() {
 
     fn.blocks = {entry, then_bb, else_bb};
 
-    std::vector<uint8_t> buf;
+    util::ByteBuffer buf;
+    util::byte_buffer_init(buf, &ir::kIrSectionKind);
     ir::serialize_function(fn, buf);
-    size_t off = 0;
+    util::ByteCursor cur = util::byte_cursor_at_start(buf);
     ir::IrFunction fn2;
-    CHECK(ir::deserialize_function(buf, off, fn2), "deserialize");
+    CHECK(ir::deserialize_function(cur, fn2), "deserialize");
     CHECK(same_function(fn, fn2), "round-trip multi-block");
     CHECK(fn2.blocks[0].succs.size() == 2, "preds/succs preservados");
     CHECK(fn2.blocks[0].instrs[1].target_block == 1, "target_block preservado");
@@ -424,11 +429,12 @@ void test_phi_nodes() {
 
     fn.blocks.push_back(merge);
 
-    std::vector<uint8_t> buf;
+    util::ByteBuffer buf;
+    util::byte_buffer_init(buf, &ir::kIrSectionKind);
     ir::serialize_function(fn, buf);
-    size_t off = 0;
+    util::ByteCursor cur = util::byte_cursor_at_start(buf);
     ir::IrFunction fn2;
-    CHECK(ir::deserialize_function(buf, off, fn2), "deserialize phi");
+    CHECK(ir::deserialize_function(cur, fn2), "deserialize phi");
     CHECK(same_function(fn, fn2), "round-trip phi");
     CHECK(fn2.blocks[0].instrs[0].phi_args.size() == 2, "phi_args preservados");
     CHECK(fn2.blocks[0].instrs[0].phi_args[0].value == p0, "phi_args[0].value");
@@ -469,11 +475,12 @@ void test_call_with_func_name() {
 
     fn.blocks.push_back(entry);
 
-    std::vector<uint8_t> buf;
+    util::ByteBuffer buf;
+    util::byte_buffer_init(buf, &ir::kIrSectionKind);
     ir::serialize_function(fn, buf);
-    size_t off = 0;
+    util::ByteCursor cur = util::byte_cursor_at_start(buf);
     ir::IrFunction fn2;
-    CHECK(ir::deserialize_function(buf, off, fn2), "deserialize call");
+    CHECK(ir::deserialize_function(cur, fn2), "deserialize call");
     CHECK(same_function(fn, fn2), "round-trip call");
     CHECK(fn2.blocks[0].instrs[0].func_name == "vrt_gc_alloc",
           "func_name preservado");
@@ -501,11 +508,12 @@ void test_generic_metadata() {
     entry.instrs.push_back(ret);
     fn.blocks.push_back(entry);
 
-    std::vector<uint8_t> buf;
+    util::ByteBuffer buf;
+    util::byte_buffer_init(buf, &ir::kIrSectionKind);
     ir::serialize_function(fn, buf);
-    size_t off = 0;
+    util::ByteCursor cur = util::byte_cursor_at_start(buf);
     ir::IrFunction fn2;
-    CHECK(ir::deserialize_function(buf, off, fn2), "deserialize generic");
+    CHECK(ir::deserialize_function(cur, fn2), "deserialize generic");
     CHECK(fn2.generic_template_name == "Box", "template_name preservado");
     CHECK(fn2.generic_type_args.size() == 1, "type_args size");
     CHECK(fn2.generic_type_args[0] == "i32", "type_args[0]");
@@ -554,18 +562,19 @@ void test_multiple_functions() {
     fn3.blocks.push_back(e3);
 
     /* Serializar las 3 al mismo buffer. */
-    std::vector<uint8_t> buf;
+    util::ByteBuffer buf;
+    util::byte_buffer_init(buf, &ir::kIrSectionKind);
     ir::serialize_function(fn1, buf);
     ir::serialize_function(fn2, buf);
     ir::serialize_function(fn3, buf);
 
     /* Deserializar las 3 secuencialmente. */
-    size_t off = 0;
+    util::ByteCursor cur = util::byte_cursor_at_start(buf);
     ir::IrFunction got1, got2, got3;
-    CHECK(ir::deserialize_function(buf, off, got1), "deserialize f1");
-    CHECK(ir::deserialize_function(buf, off, got2), "deserialize f2");
-    CHECK(ir::deserialize_function(buf, off, got3), "deserialize f3");
-    CHECK(off == buf.size(), "consumido todo el buffer multi-fn");
+    CHECK(ir::deserialize_function(cur, got1), "deserialize f1");
+    CHECK(ir::deserialize_function(cur, got2), "deserialize f2");
+    CHECK(ir::deserialize_function(cur, got3), "deserialize f3");
+    CHECK(cur.off == buf.size, "consumido todo el buffer multi-fn");
 
     CHECK(same_function(fn1, got1), "f1 round-trip");
     CHECK(same_function(fn2, got2), "f2 round-trip");
@@ -612,29 +621,109 @@ void test_ir_section_round_trip() {
         fns.push_back(std::move(fn));
     }
 
+    /* Which file each one comes from.  The first and the third share one, the
+     * second has its own: that way the round trip tells "the table was
+     * stored" apart from "an index that happens to be zero was stored". */
+    util::SmallVector<const std::string *, 4> files;
+    fns[0].source_file = 0;
+    fns[1].source_file = 1;
+    fns[2].source_file = 0;
+    files.push_back(util::intern_name(std::string("a/one.vx")));
+    files.push_back(util::intern_name(std::string("b/two.vx")));
+
     /* Emit section. */
-    std::vector<uint8_t> section = ir::emit_ir_section(fns);
-    CHECK(section.size() > 12, "section tiene contenido");
-    /* Magic en los primeros 4 bytes. */
-    CHECK(section[0] == 'V' && section[1] == 'E' && section[2] == 'I' &&
-              section[3] == 'R',
+    util::ByteBuffer section;
+    ir::emit_ir_section(fns, files, section);
+    CHECK(section.size > 12, "section tiene contenido");
+    /* Magic en los primeros 4 bytes.  Y el buffer lo comprueba SOLO, contra
+     * el que declara su propia clase. */
+    CHECK(util::byte_buffer_check_magic(section) == util::ByteFault::None,
           "magic VEIR al inicio");
     /* function_count en offset 8. */
-    const uint32_t fc = static_cast<uint32_t>(section[8]) |
-                        (static_cast<uint32_t>(section[9]) << 8) |
-                        (static_cast<uint32_t>(section[10]) << 16) |
-                        (static_cast<uint32_t>(section[11]) << 24);
+    const uint32_t fc = static_cast<uint32_t>(section.data[8]) |
+                        (static_cast<uint32_t>(section.data[9]) << 8) |
+                        (static_cast<uint32_t>(section.data[10]) << 16) |
+                        (static_cast<uint32_t>(section.data[11]) << 24);
     CHECK(fc == 3, "function_count == 3");
 
     /* Parse de vuelta. */
     std::vector<ir::IrFunction> out_fns;
-    bool ok = ir::parse_ir_section(section, 0, section.size(), out_fns);
+    util::SmallVector<const std::string *, 4> out_files;
+    bool ok = ir::parse_ir_section(section.data, section.size, out_fns,
+                                   /*report=*/nullptr, &out_files);
     CHECK(ok, "parse_ir_section ok");
     CHECK(out_fns.size() == 3, "3 funciones parseadas");
     for (size_t i = 0; i < 3; ++i) {
         CHECK(same_function(fns[i], out_fns[i]),
               ("fn[" + std::to_string(i) + "] round-trip").c_str());
     }
+
+    /* The file table comes back whole, with the paths in place, interned (so
+     * the same text yields the same pointer as anywhere else in the compiler,
+     * which is what lets callers compare by pointer), and each function keeps
+     * ITS OWN index -- without that last one the test would pass just as well
+     * storing zero every time. */
+    if (out_files.size() != 2) {
+        CHECK(false, "file table round-trip: expected 2 entries");
+    } else {
+        CHECK(*out_files[0] == "a/one.vx", "path 0 comes back unchanged");
+        CHECK(*out_files[1] == "b/two.vx", "path 1 comes back unchanged");
+        CHECK(out_files[0] == util::intern_name(std::string("a/one.vx")),
+              "the path that comes back is interned");
+    }
+    CHECK(out_fns.size() == 3 && out_fns[0].source_file == 0 &&
+              out_fns[1].source_file == 1 && out_fns[2].source_file == 0,
+          "each function keeps its own file");
+}
+
+/* ===================================================================== */
+/* Test 9-bis: an INLINED chunk carries the file it came from            */
+/* ===================================================================== */
+/* Code that came from another function does not belong to the file it ended
+ * up in, but to the one it was written in.  It is sealed at inline time
+ * precisely because by the time anyone asks, the origin function may be gone
+ * (the native path drops functions left with no uses). */
+static void test_inline_site_source_file() {
+    std::vector<ir::IrFunction> fns;
+    ir::IrFunction fn;
+    fn.name = "caller";
+    fn.ret_type = ir::IrType::VOID;
+    fn.source_file = 0;
+    {
+        ir::InlineSite s;
+        s.callee = "callee_that_no_longer_exists";
+        s.line = 7;
+        s.column = 3;
+        s.source_file = 1; // came from the OTHER file
+        fn.inline_sites.push_back(std::move(s));
+    }
+    ir::IrBlock e;
+    e.name = "entry";
+    ir::IrInstr r;
+    r.op = ir::IrOp::RET;
+    r.type = ir::IrType::VOID;
+    e.instrs.push_back(r);
+    fn.blocks.push_back(e);
+    fns.push_back(std::move(fn));
+
+    util::SmallVector<const std::string *, 4> files;
+    files.push_back(util::intern_name(std::string("where/it/landed.vx")));
+    files.push_back(util::intern_name(std::string("where/it/came/from.vx")));
+
+    util::ByteBuffer section;
+    ir::emit_ir_section(fns, files, section);
+    std::vector<ir::IrFunction> out;
+    util::SmallVector<const std::string *, 4> out_files;
+    CHECK(ir::parse_ir_section(section.data, section.size, out,
+                               /*report=*/nullptr, &out_files),
+          "parse with an inline site ok");
+    if (out.size() != 1 || out[0].inline_sites.size() != 1) {
+        CHECK(false, "inline site round-trip: expected 1 fn with 1 site");
+        return;
+    }
+    CHECK(out[0].inline_sites[0].source_file == 1,
+          "the site keeps the file it CAME FROM, not the one it landed in");
+    CHECK(out[0].source_file == 0, "while the function keeps its own");
 }
 
 /* ===================================================================== */
@@ -649,8 +738,11 @@ void test_ir_section_invalid_magic() {
     bad[2] = 'X';
     bad[3] = 'X'; /* magic invalido */
     std::vector<ir::IrFunction> out;
-    CHECK(!ir::parse_ir_section(bad, 0, bad.size(), out),
+    ir::IrSectionReport why;
+    CHECK(!ir::parse_ir_section(bad.data(), bad.size(), out, &why),
           "magic invalido -> false");
+    /* Y dice que es que no es de esta clase, no que este cortada. */
+    CHECK(why.reject == ir::IrSectionReject::Corrupt, "y dice por que");
     CHECK(out.empty(), "out vacio tras failure");
 }
 
@@ -672,13 +764,15 @@ void test_ir_section_truncated() {
     fn.blocks.push_back(e);
 
     std::vector<ir::IrFunction> in_fns = {fn};
-    std::vector<uint8_t> section = ir::emit_ir_section(in_fns);
+    /* This test does not care where the code came from: it checks the format,
+     * not the coordinate. */
+    const util::SmallVector<const std::string *, 4> no_files;
+    util::ByteBuffer section;
+    ir::emit_ir_section(in_fns, no_files, section);
 
-    /* Truncar a la mitad. */
-    std::vector<uint8_t> trunc(section.begin(),
-                               section.begin() + section.size() / 2);
+    /* Truncar a la mitad: se leen los mismos bytes, hasta la mitad. */
     std::vector<ir::IrFunction> out;
-    CHECK(!ir::parse_ir_section(trunc, 0, trunc.size(), out),
+    CHECK(!ir::parse_ir_section(section.data, section.size / 2, out),
           "section truncada -> false");
 }
 
@@ -700,18 +794,24 @@ void test_ir_section_offset() {
     fn.blocks.push_back(e);
 
     std::vector<ir::IrFunction> in_fns = {fn};
-    std::vector<uint8_t> section = ir::emit_ir_section(in_fns);
+    /* This test does not care where the code came from: it checks the format,
+     * not the coordinate. */
+    const util::SmallVector<const std::string *, 4> no_files;
+    util::ByteBuffer section;
+    ir::emit_ir_section(in_fns, no_files, section);
 
     /* Simular un .velb: header dummy + section + footer dummy. */
     std::vector<uint8_t> velb;
     velb.resize(128, 0xFF); /* header de 128 bytes basura */
     const size_t section_offset = velb.size();
-    velb.insert(velb.end(), section.begin(), section.end());
+    velb.insert(velb.end(), section.data, section.data + section.size);
     velb.resize(velb.size() + 64, 0xAA); /* footer basura */
 
-    /* Parse desde el offset correcto. */
+    /* Parse desde el offset correcto.  Se le pasa el TRAMO: la seccion no
+     * sabe que vive dentro de un artefacto mas grande, ni tiene por que. */
     std::vector<ir::IrFunction> out;
-    bool ok = ir::parse_ir_section(velb, section_offset, section.size(), out);
+    bool ok = ir::parse_ir_section(velb.data() + section_offset, section.size,
+                                   out);
     CHECK(ok, "parse desde offset != 0");
     CHECK(out.size() == 1, "1 funcion encontrada");
     if (!out.empty()) {
@@ -733,15 +833,19 @@ void test_truncated_buffer() {
     e.instrs.push_back(ret);
     fn.blocks.push_back(e);
 
-    std::vector<uint8_t> buf;
+    util::ByteBuffer buf;
+    util::byte_buffer_init(buf, &ir::kIrSectionKind);
     ir::serialize_function(fn, buf);
 
-    /* Truncar a la mitad y verificar que deserialize falla. */
-    std::vector<uint8_t> trunc(buf.begin(), buf.begin() + buf.size() / 2);
-    size_t off = 0;
+    /* Truncar a la mitad y verificar que deserialize falla.  El recorte se
+     * PRESTA: son bytes de `buf`, mirados hasta la mitad. */
+    const util::ByteBuffer trunc =
+        util::byte_buffer_borrow(buf.data, buf.size / 2);
+    util::ByteCursor cur = util::byte_cursor_at_start(trunc);
     ir::IrFunction fn2;
-    CHECK(!ir::deserialize_function(trunc, off, fn2),
+    CHECK(!ir::deserialize_function(cur, fn2),
           "buffer truncado -> false (sin crash)");
+    CHECK(cur.fault != util::ByteFault::None, "y deja dicho por que");
 }
 
 } // namespace
@@ -783,12 +887,12 @@ static void test_asm_bindings_round_trip() {
     fija.reg_class = "rax";
     fn.asm_reg_bindings.push_back(std::move(fija));
 
-    std::vector<uint8_t> buf;
+    util::ByteBuffer buf;
+    util::byte_buffer_init(buf, &ir::kIrSectionKind);
     serialize_function(fn, buf);
-    size_t off = 0;
+    util::ByteCursor cur = util::byte_cursor_at_start(buf);
     IrFunction out;
-    CHECK(deserialize_function(buf, off, out),
-          "deserializa la funcion con asm");
+    CHECK(deserialize_function(cur, out), "deserializa la funcion con asm");
     CHECK(out.asm_reg_bindings.size() == 2, "las dos ligaduras cruzan");
     if (out.asm_reg_bindings.size() == 2) {
         CHECK(out.asm_reg_bindings[0].reg_class == "xmm",
@@ -804,11 +908,12 @@ static void test_asm_bindings_round_trip() {
     pub.name = "publica";
     pub.ret_type = IrType::VOID;
     pub.new_block("entry");
-    std::vector<uint8_t> buf2;
+    util::ByteBuffer buf2;
+    util::byte_buffer_init(buf2, &ir::kIrSectionKind);
     serialize_function(pub, buf2);
-    size_t off2 = 0;
+    util::ByteCursor cur2 = util::byte_cursor_at_start(buf2);
     IrFunction out2;
-    CHECK(deserialize_function(buf2, off2, out2), "deserializa la publica");
+    CHECK(deserialize_function(cur2, out2), "deserializa la publica");
     CHECK(out2.is_public, "sin marca de privada, se lee como publica");
 }
 
@@ -824,6 +929,7 @@ int main() {
     test_generic_metadata();
     test_multiple_functions();
     test_ir_section_round_trip();
+    test_inline_site_source_file();
     test_ir_section_invalid_magic();
     test_ir_section_truncated();
     test_ir_section_offset();

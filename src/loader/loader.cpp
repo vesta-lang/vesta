@@ -15,6 +15,10 @@
  * nativo lo alcance con rel32.  Ver `materialize_gdata_host`. */
 #include "util/alloc/host_allocator.h"
 #include "loader/loader.h"
+
+#include "util/name_pool.h"
+
+#include "vx/diag/diag_catalog.h"
 #include <algorithm> // UCRT64: no transitivo
 
 #include <cstdio>
@@ -512,9 +516,42 @@ void Loader::parser_import_table(Executable &exe, ByteReader &reader) {
     this->ffi_loader.call_plugin_inits(&this->plugin_api);
 }
 
-std::unique_ptr<Executable> Loader::parse_velb(std::vector<uint8_t> bytecode) {
+/**
+ * @brief Donde acaba el CoDIGO dentro del artefacto.
+ *
+ * @c Section::size_real viene a cero con el formato actual, asi que el final
+ * hay que derivarlo: es el tamanyo del artefacto recortado por la primera
+ * tabla que venga detras.
+ *
+ * Existe porque esta cuenta estaba COPIADA en tres sitios -- al cargar un
+ * modulo, al descargarlo y al comprobar una capacidad --, dos de ellos con un
+ * comentario que decia "mismo razonamiento que en el otro".  Tres copias de
+ * una cuenta son una que se corrige y dos que no.
+ *
+ * @param exe Ejecutable con el bytecode y la cabecera ya leidos.
+ * @return El desplazamiento donde termina el codigo.
+ */
+static uint64_t compute_code_end(const Executable &exe) {
+    uint64_t end = exe.bytecode.size();
+    if (exe.header.offset_reloc_table != 0 &&
+        exe.header.offset_reloc_table < end) {
+        end = exe.header.offset_reloc_table;
+    }
+    if (exe.header.offset_import_table != 0 &&
+        exe.header.size_import_table > 0 &&
+        exe.header.offset_import_table < end) {
+        end = exe.header.offset_import_table;
+    }
+    return end;
+}
+
+std::unique_ptr<Executable>
+Loader::parse_velb(std::vector<uint8_t> bytecode, ArtifactOrigin origin) {
     auto exe = std::make_unique<Executable>();
-    exe->bytecode = bytecode;
+    /* SE MUEVE, no se copia.  El parametro ya viene por valor -- o sea que el
+     * artefacto entero ya se copio una vez al llamar --, y asignarlo copiaba
+     * MEGABYTES otra vez para nada: nadie vuelve a mirar el parametro. */
+    exe->bytecode = std::move(bytecode);
 
     ByteReader reader(exe->bytecode);
 
@@ -647,8 +684,12 @@ std::unique_ptr<Executable> Loader::parse_velb(std::vector<uint8_t> bytecode) {
          * subsection (no consume bytes mas alla del VEIR + functions).
          * Si tras @ir hay un @sym section, parse_ir_section retornara
          * exitosamente y los bytes adicionales quedaran disponibles. */
-        const bool ok =
-            ir::parse_ir_section(exe->bytecode, ir_off, ir_size, fns);
+        ir::IrSectionReport ir_report;
+        /* Se le pasa el TRAMO, no el artefacto entero y un desplazamiento: el
+         * intermedio no tiene por que saber que vive dentro de un `.velb`, y
+         * asi los bytes se le PRESTAN sin copiar nada. */
+        const bool ok = ir::parse_ir_section(exe->bytecode.data() + ir_off,
+                                             ir_size, fns, &ir_report);
         if (ok) {
             exe->ir_functions = std::move(fns);
             /* Poblar lookup por nombre para O(1) dispatch JIT. */
@@ -663,8 +704,43 @@ std::unique_ptr<Executable> Loader::parse_velb(std::vector<uint8_t> bytecode) {
              * (g_asm_backend), no el compilador JIT. */
             jit::build_and_register_inline_asm_trampolines(exe->ir_functions);
         }
-        /* Si !ok, ignoramos silenciosamente (graceful degradation).
-         * El bytecode sigue siendo ejecutable via interp. */
+        /* Y si no se pudo, SE DICE.
+         *
+         * El programa sigue ejecutandose -- el bytecode esta ahi y el
+         * interprete tira de el --, asi que esto no es un error: es una
+         * PERDIDA.  Sin el intermedio no hay JIT, o sea que el mismo programa
+         * corre del orden de diecisiete veces mas lento.
+         *
+         * Se callaba, y ese es justo el modo de fallar que no se descubre:
+         * nada se rompe, no hay ningun mensaje, y lo unico que se nota es que
+         * va lento -- que nadie investiga como investiga un error --.  Un
+         * artefacto que rinde como el interprete despues de haberlo compilado
+         * parece que funciona.
+         *
+         * Va por el catalogo, como cualquier otro texto que lea una persona, y
+         * con un codigo por motivo: lo de la version se arregla recompilando y
+         * lo demas no. */
+        if (!ok) {
+            /* Y CUAL: un programa puede cargar mas modulos en marcha, asi
+             * que decir que uno trae codigo inservible sin decir cual no
+             * sirve de nada.  Una ruta se imprime tal cual -- es un dato --;
+             * lo que no vino de un fichero se dice con su codigo, para que la
+             * frase entera quede en el idioma de quien la lee. */
+            const std::string who =
+                (origin.path != nullptr)
+                    ? *origin.path
+                    : vx::diag::format(origin.kind_code != nullptr
+                                           ? origin.kind_code
+                                           : kOriginUnknown);
+            const std::string msg =
+                (ir_report.reject == ir::IrSectionReject::Version)
+                    ? vx::diag::format(
+                          "VX7035",
+                          {who, std::to_string(ir_report.found_version),
+                           std::to_string(ir::IR_SECTION_VERSION)})
+                    : vx::diag::format("VX7036", {who});
+            vesta::print_threadsafe(std::cerr, msg + "\n");
+        }
 
         /* parsear @sym section (symbol table del linker)
          * que vive RIGHT AFTER el @ir.  Magic "VSYM" + version + count
@@ -725,6 +801,15 @@ std::unique_ptr<Executable> Loader::parse_velb(std::vector<uint8_t> bytecode) {
         }
     }
 
+    /* Lo que del artefacto sobrevive a la carga.
+     *
+     * Son DOS numeros, no los megabytes: el tamanyo, para acotar una seccion,
+     * y donde acaba el codigo.  Se calculan aqui, UNA vez, en lugar de
+     * recalcularlos tres sitios distintos -- y uno de ellos,
+     * @c check_cap_at_pc, en cada instruccion con capacidad. */
+    exe->bytecode_size = exe->bytecode.size();
+    exe->code_end = compute_code_end(*exe);
+
     return exe;
 }
 
@@ -773,8 +858,11 @@ runtime::ProcessVM *Loader::load_executable(runtime::VM &vm, std::string path) {
         throw std::runtime_error("No se pudo abrir el ejecutable: " + path);
     }
 
-    // Delegar en la version bytecode
-    runtime::ProcessVM *proc = load_executable(vm, std::move(bytecode));
+    // Delegar en la version bytecode.  Este SI vino de un fichero, asi que lo
+    // nombra su ruta; se interna una vez, que es para lo que el pool sirve.
+    runtime::ProcessVM *proc = load_executable(
+        vm, std::move(bytecode), ArtifactOrigin::from_file(
+                                     util::intern_name(path)));
     // Se recuerda de que fichero salio.  Antes se dejaba vacio para el
     // ejecutable principal -- solo lo rellenaban los modulos cargados sobre la
     // marcha -- y sin el, al fallar algo, no habia forma de saber que programa
@@ -786,12 +874,13 @@ runtime::ProcessVM *Loader::load_executable(runtime::VM &vm, std::string path) {
 
 runtime::ProcessVM *
 Loader::load_executable(runtime::VM &vm,
-                        std::vector<uint8_t> raw_bytecode_file) {
+                        std::vector<uint8_t> raw_bytecode_file,
+                        ArtifactOrigin origin) {
     if (raw_bytecode_file.empty()) {
         throw std::runtime_error("Loader::load_executable: Se intento cargar "
                                  "un ejecutable con raw_bytecode_file vacio");
     }
-    auto exe = parse_velb(std::move(raw_bytecode_file));
+    auto exe = parse_velb(std::move(raw_bytecode_file), origin);
 
     GlobalPID pid = vm.spawn_process();
     runtime::ProcessVM *proccess = vm.get_process(pid);
@@ -868,6 +957,26 @@ Loader::load_executable(runtime::VM &vm,
         const size_t avail = exe->bytecode.size() - offset;
         proccess->vm_mem.vm_to_host_memcpy(vm_addr, src, avail);
     }
+
+    /* Y AQUi se suelta el artefacto, que es lo ultimo que se hace con el.
+     *
+     * Todo lo que habia dentro ya esta fuera: las secciones copiadas a la
+     * memoria de la maquina -- justo arriba --, el intermedio deserializado,
+     * la tabla de simbolos con sus nombres propios, la informacion de
+     * depuracion copiada y las globales materializadas.  Lo que viene despues
+     * -- comprobar una capacidad en cada instruccion, crear un proceso hijo,
+     * descargar el modulo -- usa @c bytecode_size y @c code_end, no los
+     * bytes.
+     *
+     * Son megabytes por programa cargado que se quedaban ahi para nada.
+     *
+     * Va ANTES de ceder el ejecutable, y no al final de la funcion, por una
+     * razon que costo encontrar: en la linea siguiente `exe` deja de ser
+     * nuestro, asi que tocarlo despues no lee un buffer viejo -- desreferencia
+     * un puntero vacio --. */
+    exe->bytecode.clear();
+    exe->bytecode.shrink_to_fit();
+
     // poner ejecutable a la pila de ejecutuables
     executables.push_back(std::move(exe));
 
@@ -1234,6 +1343,9 @@ Loader::load_executable(runtime::VM &vm,
         }
     }
 
+    /* El artefacto ya se solto mas arriba, justo antes de ceder el
+     * `Executable`: aqui `exe` ya no es nuestro. */
+
     // vm->vm_mem[0x10] = 1;
     return proccess;
 }
@@ -1443,11 +1555,12 @@ static void patch_first_hlt_to_ret(std::vector<uint8_t> &data,
 // address; el main del modulo ejecuta __module_init en su prologo,
 // registra clases en el ClassRegistry global y RETs de vuelta al caller.
 uint64_t Loader::load_module_dynamic(runtime::VM &vm,
-                                     std::vector<uint8_t> raw_bytecode_file) {
+                                     std::vector<uint8_t> raw_bytecode_file,
+                                     ArtifactOrigin origin) {
     if (raw_bytecode_file.empty()) {
         return 0; // archivo vacio -> failure
     }
-    auto exe = parse_velb(std::move(raw_bytecode_file));
+    auto exe = parse_velb(std::move(raw_bytecode_file), origin);
     if (!exe) return 0;
 
     // ---- Detectar solapamiento de VA y reasignar si es necesario ----
@@ -1505,17 +1618,8 @@ uint64_t Loader::load_module_dynamic(runtime::VM &vm,
         bool conflict = false;
         for (const auto &existing : executables) {
             if (!existing) continue;
-            // calcular bytecode_end del executable existente
-            uint64_t e_bc_end = existing->bytecode.size();
-            if (existing->header.offset_reloc_table != 0 &&
-                existing->header.offset_reloc_table < e_bc_end) {
-                e_bc_end = existing->header.offset_reloc_table;
-            }
-            if (existing->header.offset_import_table != 0 &&
-                existing->header.size_import_table > 0 &&
-                existing->header.offset_import_table < e_bc_end) {
-                e_bc_end = existing->header.offset_import_table;
-            }
+            // Donde acaba su codigo: calculado al cargarlo, no aqui.
+            const uint64_t e_bc_end = existing->code_end;
             for (const auto *esec : existing->sections) {
                 if (!esec) continue;
                 const uint64_t e_start = esec->memory.address_init;
@@ -1683,7 +1787,9 @@ Loader::load_module_dynamic_with_path(runtime::VM &vm,
                                       const std::string &source_path) {
     const size_t before = executables.size();
     const uint64_t init_pc =
-        load_module_dynamic(vm, std::move(raw_bytecode_file));
+        load_module_dynamic(vm, std::move(raw_bytecode_file),
+                            ArtifactOrigin::from_file(
+                                util::intern_name(source_path)));
     if (init_pc == 0) return 0;
     // Si load_module_dynamic anadio un executable (en raros casos podria
     // no anadirlo, e.g. parse_velb falla), patcheamos su source_path.
@@ -1712,18 +1818,8 @@ bool Loader::unload_module_dynamic(runtime::VM &vm, const std::string &path) {
             }
             if (code_sec) {
                 const uint64_t va = code_sec->memory.address_init;
-                // Calcular tamano efectivo del code section (mismo razonamiento
-                // que en load_module_dynamic).
-                uint64_t bc_end = (*it)->bytecode.size();
-                if ((*it)->header.offset_reloc_table != 0 &&
-                    (*it)->header.offset_reloc_table < bc_end) {
-                    bc_end = (*it)->header.offset_reloc_table;
-                }
-                if ((*it)->header.offset_import_table != 0 &&
-                    (*it)->header.size_import_table > 0 &&
-                    (*it)->header.offset_import_table < bc_end) {
-                    bc_end = (*it)->header.offset_import_table;
-                }
+                // Donde acaba su codigo: calculado al cargarlo, no aqui.
+                const uint64_t bc_end = (*it)->code_end;
                 const uint64_t code_size =
                     (code_sec->file_offset < bc_end)
                         ? (bc_end - code_sec->file_offset)
@@ -1753,20 +1849,13 @@ bool Loader::check_cap_at_pc(uint64_t pc, uint32_t required) const noexcept {
     for (const auto &exe : executables) {
         if (!exe) continue;
         if (exe->caps.unrestricted()) continue; // sin sandbox -> permitir
-        // Localizar la seccion cuyo rango VA contiene @c pc.  Mismo
-        // razonamiento de tamano efectivo que load_module_dynamic
-        // (size_real puede ser 0 con el formato actual; derivar del
-        // bytecode hasta la primera tabla reloc/imports).
-        uint64_t bc_end = exe->bytecode.size();
-        if (exe->header.offset_reloc_table != 0 &&
-            exe->header.offset_reloc_table < bc_end) {
-            bc_end = exe->header.offset_reloc_table;
-        }
-        if (exe->header.offset_import_table != 0 &&
-            exe->header.size_import_table > 0 &&
-            exe->header.offset_import_table < bc_end) {
-            bc_end = exe->header.offset_import_table;
-        }
+        /* Localizar la seccion cuyo rango de direcciones contiene @c pc.
+         *
+         * Donde acaba el codigo se calculo al CARGAR.  Esto corre en cada
+         * instruccion con capacidad, asi que rehacer aqui la cuenta -- que es
+         * lo que se hacia -- era pagarla un millon de veces por un numero que
+         * no cambia. */
+        const uint64_t bc_end = exe->code_end;
         for (const auto *sec : exe->sections) {
             if (!sec) continue;
             const uint64_t start = sec->memory.address_init;
@@ -1788,7 +1877,7 @@ bool Loader::check_cap_at_pc(uint64_t pc, uint32_t required) const noexcept {
 }
 
 void Loader::copy_executables_to(runtime::ProcessVM &dest,
-                                 runtime::ProcessVM *parent) {
+                                 runtime::ProcessVM &parent) {
     // Replica la copia que hace load_executable() pero apuntando al
     // vm_mem del proceso destino.  Itera todos los executables cargados
     // (puede ser >1 si se usa loadmodule) y todas sus secciones.
@@ -1807,32 +1896,30 @@ void Loader::copy_executables_to(runtime::ProcessVM &dest,
             if (!sec) continue;
             const uint64_t vm_addr = sec->memory.address_init;
             const uint64_t offset = sec->file_offset;
-            if (offset >= exe->bytecode.size()) continue;
-            const size_t avail = exe->bytecode.size() - offset;
+            if (offset >= exe->bytecode_size) continue;
+            const size_t avail = exe->bytecode_size - offset;
             const size_t sec_size =
                 sec->size_real ? std::min<size_t>(sec->size_real, avail)
                                : avail;
-            if (parent) {
-                // Copia desde el vm_mem actual del padre, qword a qword
-                // (preserva cualquier modificacion runtime: cache slots
-                // de __module_init, datos globales modificados, etc.).
-                // Limitamos a chunks de 8 bytes alineados; el resto se
-                // cubre con el fallback del bytecode original.
+            {
+                /* Se copia del vm_mem ACTUAL del padre, y no del artefacto:
+                 * asi el hijo hereda lo que el padre ya hizo -- las ranuras
+                 * de cache de `__module_init`, las globales modificadas --.
+                 * Sin eso, `findclass` devolvia 0 en el hijo y `newobj`
+                 * fallaba callando.
+                 *
+                 * De ocho en ocho mientras cuadre, y lo que sobre de uno en
+                 * uno. */
                 constexpr size_t CHUNK = 8;
                 size_t i = 0;
                 for (; i + CHUNK <= sec_size; i += CHUNK) {
-                    uint64_t v = parent->vm_mem.read_u64(vm_addr + i);
+                    uint64_t v = parent.vm_mem.read_u64(vm_addr + i);
                     dest.vm_mem.write_u64(vm_addr + i, v);
                 }
-                // Bytes residuales (< 8): copiar uno por uno.
                 for (; i < sec_size; ++i) {
-                    uint8_t b = parent->vm_mem.read_u8(vm_addr + i);
+                    uint8_t b = parent.vm_mem.read_u8(vm_addr + i);
                     dest.vm_mem.write_u8(vm_addr + i, b);
                 }
-            } else {
-                // Fallback: copia desde el bytecode crudo (caso load_module).
-                const uint8_t *src = exe->bytecode.data() + offset;
-                dest.vm_mem.vm_to_host_memcpy(vm_addr, src, sec_size);
             }
         }
     }

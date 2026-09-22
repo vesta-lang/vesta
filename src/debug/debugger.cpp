@@ -3483,7 +3483,12 @@ void Debugger::handle_command(const std::string &json_msg, int client_fd) {
         bool do_pause = (pause_s == "true" || pause_s == "1");
         try {
             runtime::ProcessVM *p =
-                vm_.mgr_vm.loader.load_executable(vm_, std::move(bytes));
+                /* Vino por la conexion del depurador, no de disco: eso es
+                 * lo que hay que decir si luego se le reprocha algo. */
+                vm_.mgr_vm.loader.load_executable(
+                    vm_, std::move(bytes),
+                    loader::ArtifactOrigin::from_kind(
+                        loader::kOriginDebugger));
             if (!p) {
                 err_resp("load_executable devolvio nullptr");
                 return;

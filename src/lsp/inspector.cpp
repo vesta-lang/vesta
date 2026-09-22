@@ -186,9 +186,10 @@ uint32_t first_source_line(const ir::IrFunction &fn) {
  *         funciones; false en otro caso.
  */
 bool parse_post_opt_module(const vx::CompileResult &result, ir::IrModule &out) {
-    if (result.ir_module_cache_bytes.empty()) return false;
-    return ir::parse_ir_module_cache(result.ir_module_cache_bytes.data(),
-                                      result.ir_module_cache_bytes.size(),out);
+    if (result.ir_module_cache_bytes.buf.size == 0) return false;
+    return ir::parse_ir_module_cache(result.ir_module_cache_bytes.buf.data,
+                                     result.ir_module_cache_bytes.buf.size,
+                                     out);
 }
 
 /**
@@ -1350,11 +1351,12 @@ nlohmann::json Inspector::ir(const std::string &uri, const std::string &phase,
         vx::CompileOptions opts = view_options(target);
         opts.emit_ir_preopt = true;
         vx::CompileResult res = compile_document(uri, text, opts);
-        if (res.ir_module_cache_bytes_preopt.empty())
+        if (res.ir_module_cache_bytes_preopt.buf.size == 0)
             return {{"error", "no se pudo generar el IR pre-optimizacion"}};
         ir::IrModule mod;
-        if (!ir::parse_ir_module_cache(res.ir_module_cache_bytes_preopt.data(),
-                                   res.ir_module_cache_bytes_preopt.size(),mod))
+        if (!ir::parse_ir_module_cache(
+                res.ir_module_cache_bytes_preopt.buf.data,
+                res.ir_module_cache_bytes_preopt.buf.size, mod))
             return {
                 {"error", "no se pudo deserializar el IR pre-optimizacion"}};
         std::ostringstream oss;
@@ -3658,7 +3660,12 @@ Inspector::aot_build(const std::string &uri, const std::string &text,
     const std::pair<size_t, size_t> diags = count_diags(res);
     build.errors = diags.first;
     build.warnings = diags.second;
-    build.ir_bytes = res.ir_module_cache_bytes;
+    /* El editor guarda su propia copia: su cache de construcciones sobrevive
+     * al `CompileResult` del que salio.  Es la frontera de la cadena, no una
+     * copia de mas. */
+    build.ir_bytes.assign(res.ir_module_cache_bytes.buf.data,
+                          res.ir_module_cache_bytes.buf.data +
+                              res.ir_module_cache_bytes.buf.size);
     /* Dos peticiones pueden haber compilado lo mismo a la vez -- se prefiere
      * eso a hacerlas esperar --, asi que la que llegue segunda se queda con la
      * que ya esta puesta: las dos dicen lo mismo y asi solo hay un objeto. */

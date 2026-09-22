@@ -1357,6 +1357,22 @@ else ()
     target_link_libraries(test_vx_builtin_names PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
 endif ()
 
+# Lo mismo para la tabla de ANOTACIONES.  Lo que decide es si un `@algo`
+# compila, y sus dos formas de fallar son opuestas y caras: dejarse una buena
+# fuera rechaza codigo correcto, y aceptar cualquier cosa devuelve el agujero
+# que la tabla vino a cerrar -- una errata que no hacia nada --.
+add_executable(test_vx_annotation_names tests/vx/test_vx_annotation_names.cpp)
+target_include_directories(test_vx_annotation_names PRIVATE ${VM_INCLUDES})
+target_link_libraries(test_vx_annotation_names PRIVATE vx_lib vmcore sqlite3 capstone keystone aot_emit)
+if(VESTA_BUILD_PREPROCESSOR)
+    target_link_libraries(test_vx_annotation_names PRIVATE vpp_lib)
+endif()
+if (WIN32)
+    target_link_libraries(test_vx_annotation_names PRIVATE vesta_openssl ws2_32 synchronization)
+else ()
+    target_link_libraries(test_vx_annotation_names PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
+endif ()
+
 # Que la base de hechos REUTILICE de verdad y no sirva lo rancio.  Los dos lados
 # en el mismo test: una base que recalcula siempre es un computo con otro nombre,
 # y una que reutiliza sin comprobar sirve hechos de un codigo que ya no existe.
@@ -1440,9 +1456,6 @@ endif ()
 # unidad de un analisis se nombra con el puntero INTERNADO, no con la cadena.
 add_executable(test_analysis_manager tests/analysis/test_manager.cpp
                                      src/util/name_pool.cpp
-                                     # Lo que ESTE hilo tiene cogido vive en
-                                     # una ranura, no en un `thread_local`.
-                                     ${VESTA_ALLOC_THREAD_SLOT_SRC}
                                      # Y el cerrojo del gestor es el nuestro,
                                      # no el de la emulacion de pthreads.
                                      src/util/shared_mutex.cpp
@@ -1455,6 +1468,13 @@ add_executable(test_analysis_manager tests/analysis/test_manager.cpp
                                      src/util/crono_tramo.cpp
                                      src/util/env_flags.cpp)
 target_include_directories(test_analysis_manager PRIVATE ${VM_INCLUDES})
+# El asignador del anfitrion tiene su camino rapido en la cabecera y el lento
+# fuera, asi que quien compile cualquiera de estos ficheros tiene que enlazarlo.
+# Sin esto el objetivo no enlazaba -- y como nadie lo pedia por su nombre, rompia
+# `all` sin que se notara.  La ranura por hilo (nada de `thread_local`) la trae
+# la propia libreria, asi que ya no se compila aparte: hacerlo daba el mismo
+# simbolo dos veces.
+target_link_libraries(test_analysis_manager PRIVATE vesta_alloc)
 
 # Coste por opcode derivado del codigo maquina de los handlers.  ENLAZA la VM
 # a proposito: asi las tablas de decodificacion son datos de este proceso y los
@@ -1615,6 +1635,23 @@ if (WIN32)
     target_link_libraries(test_aggregate_facts PRIVATE vesta_openssl ws2_32 synchronization)
 else ()
     target_link_libraries(test_aggregate_facts PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
+endif ()
+
+# Que la disyuncion DEMOSTRADA no se apoye en ninguna promesa: `may_alias` es
+# el oraculo de la OPTIMIZACION -- ahi un contrato declarado cuenta -- y
+# `must_not_overlap` el de la VERIFICACION, donde contarlo seria comprobar una
+# promesa con la propia promesa.  La e2e no puede guardarlo: la propiedad es
+# interna y no se ve en la salida de ningun programa.
+add_executable(test_must_not_overlap tests/analysis/test_must_not_overlap.cpp)
+target_include_directories(test_must_not_overlap PRIVATE ${VM_INCLUDES})
+target_link_libraries(test_must_not_overlap PRIVATE vx_lib vmcore sqlite3 capstone keystone aot_emit)
+if(VESTA_BUILD_PREPROCESSOR)
+    target_link_libraries(test_must_not_overlap PRIVATE vpp_lib)
+endif()
+if (WIN32)
+    target_link_libraries(test_must_not_overlap PRIVATE vesta_openssl ws2_32 synchronization)
+else ()
+    target_link_libraries(test_must_not_overlap PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
 endif ()
 
 # Resumenes de frontera: que entra y que sale de una funcion, y cuando se puede
@@ -1957,6 +1994,21 @@ add_executable(test_vxdbg_resolve tests/vxdbg/test_vxdbg_resolve.cpp
                                   src/vxdbg/resolver.cpp)
 target_include_directories(test_vxdbg_resolve PRIVATE ${VM_INCLUDES} src/vxdbg)
 vesta_vxdbg_store_link(test_vxdbg_resolve)
+
+# Que una convencion de llamada DECLARADA se cumpla de verdad al llamar desde
+# el interprete: no que 'no revento', sino QUE REGISTRO llego con QUE valor.
+add_executable(test_jit_abi_call_thunk tests/jit/test_abi_call_thunk.cpp)
+target_include_directories(test_jit_abi_call_thunk PRIVATE ${VM_INCLUDES})
+target_link_libraries(test_jit_abi_call_thunk PRIVATE vx_lib vmcore sqlite3 capstone keystone aot_emit)
+if(VESTA_BUILD_PREPROCESSOR)
+    target_link_libraries(test_jit_abi_call_thunk PRIVATE vpp_lib)
+endif()
+if (WIN32)
+    target_link_libraries(test_jit_abi_call_thunk PRIVATE vesta_openssl ws2_32 synchronization)
+else ()
+    target_link_libraries(test_jit_abi_call_thunk PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
+endif ()
+
 
 add_executable(test_rbank_physical tests/jit/test_rbank_physical.cpp)
 target_include_directories(test_rbank_physical PRIVATE ${VM_INCLUDES})
@@ -2696,6 +2748,13 @@ target_compile_options(vesta_rt PRIVATE
 add_executable(test_util_env_flags tests/util/test_env_flags.cpp)
 target_include_directories(test_util_env_flags PRIVATE ${VM_INCLUDES})
 target_link_libraries(test_util_env_flags PRIVATE vmcore sqlite3 capstone keystone)
+
+# La parte COMUN de todo buffer de bytes.  Va SUELTO, sin `vmcore`: la cabecera
+# es independiente, y enlazar media maquina virtual para comprobar un puntero y
+# dos tamanyos hace que un test de treinta lineas tarde lo que tarda el enlace.
+# Ademas asi se comprueba que de verdad no arrastra nada.
+add_executable(test_util_byte_buffer tests/util/test_byte_buffer.cpp)
+target_include_directories(test_util_byte_buffer PRIVATE ${VM_INCLUDES})
 
 # El reparto de la cache: una raiz, un cajon por tipo y un ALCANCE declarado en
 # cada uno.  Las tres formas de que la tabla se pudra son mudas -- dos tipos

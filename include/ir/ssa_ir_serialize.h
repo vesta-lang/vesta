@@ -73,8 +73,31 @@
 #include <vector>
 
 #include "ir/ssa_ir.h"
+#include "util/byte_buffer.h"
 
 namespace ir {
+
+/**
+ * @brief Que ES la seccion @c @ir: nombre, magic, version y como reserva.
+ *
+ * Su funcion de reserva es SUYA, y esa es la razon de que exista un descriptor
+ * en vez de un buffer de bytes cualquiera: el intermedio es, con diferencia,
+ * lo mas grande que produce una compilacion -- medido en un proyecto de 6k
+ * lineas, 5,75 MiB de los 7,56 del artefacto --, y hasta ahora esos megabytes
+ * se reservaban por el mismo camino que todo lo demas y el informe no podia
+ * atribuirlos.
+ */
+extern const util::ByteKind kIrSectionKind;
+
+/**
+ * @brief Y que es el cache de IR por modulo (@c .vxir).
+ *
+ * Aparte del anterior aunque el contenido se parezca: son dos cosas con dos
+ * vidas -- uno viaja DENTRO del artefacto y el otro vive en el cache --, y
+ * mezclarlos en el informe es no poder distinguir lo que cuesta producir un
+ * programa de lo que cuesta guardarlo para la proxima vez.
+ */
+extern const util::ByteKind kIrModuleCacheKind;
 
 /**
  * @brief Serializa una @c IrFunction a bytes en @p out.
@@ -82,16 +105,20 @@ namespace ir {
  *        a un mismo buffer.
  * @return numero de bytes escritos para esta funcion.
  */
-size_t serialize_function(const IrFunction &fn, std::vector<uint8_t> &out);
+size_t serialize_function(const IrFunction &fn, util::ByteBuffer &out);
 
 /**
- * @brief Deserializa una @c IrFunction desde @p in empezando en
- *        @p offset.  Avanza @p offset a la posicion siguiente.
- * @return true si la deserializacion fue exitosa.  En caso de
- *         error, @p out puede quedar en estado parcial.
+ * @brief Deserializa una @c IrFunction por donde vaya @p c.
+ *
+ * El cursor avanza, y si algo va mal se queda con el MOTIVO -- se salio del
+ * final, o una longitud del propio artefacto mentia --, que son cosas
+ * distintas: la primera acusa a quien lee y la segunda al fichero.
+ *
+ * @param c Cursor sobre el buffer.
+ * @param out Funcion reconstruida; puede quedar a medias si falla.
+ * @return true si la deserializacion fue exitosa.
  */
-bool deserialize_function(const std::vector<uint8_t> &in, size_t &offset,
-                          IrFunction &out);
+bool deserialize_function(util::ByteCursor &c, IrFunction &out);
 
 /* ===================================================================== */
 /* Seccion @ir del archivo .velb                                         */
@@ -108,7 +135,14 @@ static constexpr uint32_t IR_SECTION_MAGIC = 0x52494556U; /* 'V''E''I''R' */
  * @brief Version del formato @ir.  Bump cuando cambia el layout.
  */
 static constexpr uint16_t IR_SECTION_VERSION =
-    18; // v18: los prestamos dejan de ir en una tabla aparte -- ahora son
+    19; // v19: el IR dice de que FICHERO salio cada cosa.  Una tabla de rutas
+        // por modulo, un indice en cada funcion y otro en cada sitio de
+        // inlinado; la instruccion no cambia.  Hacia falta porque el modulo
+        // que se compila es un FUSIONADO -- dentro conviven funciones de
+        // muchos ficheros -- y hasta aqui cada consumidor adivinaba: el
+        // informe ponia la ruta raiz, con lo que un error de la biblioteca se
+        // leia como del fichero del usuario y en una linea que no existe.
+        // v18: los prestamos dejan de ir en una tabla aparte -- ahora son
         // instrucciones `borrow` del cuerpo --, asi que su bloque desaparece
         // del formato.  Leer un artefacto v17 con este lector desalinearia el
         // resto del cuerpo, que es por lo que sube la version y no por lo que
@@ -159,6 +193,41 @@ static constexpr uint16_t kIrFlagDeflate = 0x0001; ///< el cuerpo va comprimido
 static constexpr int kIrCompressionLevel = 3;
 
 /**
+ * @brief Por que no se pudo leer la seccion @c @ir.
+ *
+ * No es un detalle interno: de aqui sale lo que se le cuenta a quien ejecuta
+ * el programa.  Que la seccion se descartara sin decir nada hacia que un
+ * artefacto de otra version siguiera corriendo -- correctamente -- pero SIN
+ * JIT, o sea del orden de diecisiete veces mas lento, sin que nada lo
+ * explicara.  Y un programa lento no se investiga como se investiga un error.
+ *
+ * @c Ninguno es tambien la respuesta cuando el artefacto sencillamente no
+ * trae intermedio, que es normal y no hay nada que contar.
+ */
+enum class IrSectionReject : uint8_t {
+    None = 0,   ///< Se leyo bien, o no habia nada que leer.
+    Version,    ///< La trae, pero de otra version del formato.
+    Corrupt,    ///< Ni el magic ni las banderas cuadran.
+    Truncated,  ///< Se acaba antes de lo que ella misma dice.
+    Decompress, ///< Venia comprimida y no se pudo deshacer.
+    Function    ///< Una de las funciones no se pudo reconstruir.
+};
+
+/**
+ * @brief Lo que se sabe de por que no se pudo leer la seccion.
+ *
+ * Junto y no como parametros sueltos porque el motivo y su detalle son UNA
+ * respuesta: la version que se encontro solo significa algo si el motivo es
+ * @c IrSectionReject::Version, y separarlos deja que uno viaje sin el otro.
+ */
+struct IrSectionReport {
+    IrSectionReject reject = IrSectionReject::None; ///< Que paso.
+    /// Que version decia traer, cuando el motivo es @c Version.  Cero si no
+    /// se llego a leer o el motivo es otro.
+    uint16_t found_version = 0;
+};
+
+/**
  * @brief Emit del bytes de la seccion @c @ir lista para append a
  *        un `.velb`.  Layout:
  *
@@ -166,13 +235,32 @@ static constexpr int kIrCompressionLevel = 3;
  *            +4  [2]  version (u16, IR_SECTION_VERSION)
  *            +6  [2]  reserved (0)
  *            +8  [4]  function_count
- *            +12 [..] functions (concat de serialize_function output)
+ *            +12 [..] cuerpo: tabla de ficheros + functions (ver abajo)
+ *
+ * El cuerpo empieza por la tabla de ficheros del modulo -- u32 con cuantos,
+ * y luego las rutas -- y sigue con las funciones concatenadas.  Va DENTRO del
+ * cuerpo y no en la cabecera para no tocarla y porque se comprime con el
+ * resto, que es donde una lista de rutas parecidas casi desaparece.
  *
  * @param functions IR functions a incluir en la seccion.
- * @return bytes serializados.  El caller los añade al .velb y
- *         escribe el offset/size en el header.
+ * @param source_files Tabla de ficheros del modulo del que salen, contra la
+ *        que se leen los indices @c IrFunction::source_file y
+ *        @c InlineSite::source_file.  Sin ella los indices quedan apuntando a
+ *        una tabla vacia y nadie puede decir de donde vino nada; por eso NO
+ *        tiene valor por defecto -- quien emite la seccion tiene el modulo
+ *        delante, y olvidarla seria perder el dato en silencio.
+ * @param out Recibe los bytes.  Se inicializa aqui con la clase
+ *        @ref kIrSectionKind, asi que lo que llegue dentro se pierde.
+ *
+ *        Sale por parametro y no por retorno porque un @c util::ByteBuffer es
+ *        el DUENO de su memoria y no tiene constructor de movimiento que lo
+ *        diga: devolverlo por valor dejaria dos copias apuntando al mismo
+ *        bloque, que no falla al devolverlo sino al soltarlo.
  */
-std::vector<uint8_t> emit_ir_section(const std::vector<IrFunction> &functions);
+void emit_ir_section(
+    const std::vector<IrFunction> &functions,
+    const util::SmallVector<const std::string *, 4> &source_files,
+    util::ByteBuffer &out);
 
 /**
  * @brief Parse de la seccion @c @ir desde @p data leyendo
@@ -182,11 +270,26 @@ std::vector<uint8_t> emit_ir_section(const std::vector<IrFunction> &functions);
  * Si magic/version no coinciden, retorna false y deja @c functions
  * vacio (puede ser un .velb v2 sin IR -> graceful degradation).
  *
+ * @param report Si no es nulo, recibe POR QUE no se pudo leer.  Existe porque
+ *        un `false` pelado no distingue "este artefacto no trae intermedio"
+ *        -- normal, no hay nada que decir -- de "lo trae pero es de otra
+ *        version", que quien lo ejecuta necesita saber: el programa corre
+ *        igual pero sin JIT, y eso no se nota como un error sino como que va
+ *        lento.  Un analisis que renuncia sin decir por que parece que
+ *        funciona.
+ * @param source_files Si no es nulo, recibe la tabla de ficheros del modulo.
+ *        Aqui SI es opcional -- al contrario que al emitir --: la tabla se lee
+ *        siempre para avanzar por el cuerpo, y quien no vaya a citar un sitio
+ *        no tiene por que quedarse con ella.  Omitirla no pierde nada, solo no
+ *        lo pide.
  * @return true si parseo exitoso; false si magic/version invalido
  *         o si alguna funcion fallo deserializacion.
  */
-bool parse_ir_section(const std::vector<uint8_t> &data, size_t offset,
-                      size_t section_size, std::vector<IrFunction> &functions);
+bool parse_ir_section(const uint8_t *data, size_t section_size,
+                      std::vector<IrFunction> &functions,
+                      IrSectionReport *report = nullptr,
+                      util::SmallVector<const std::string *, 4> *source_files =
+                          nullptr);
 
 /* ===================================================================== */
 /* Cache de IR por modulo (.vxir)                                       */
@@ -202,7 +305,11 @@ bool parse_ir_section(const std::vector<uint8_t> &data, size_t offset,
 static constexpr uint32_t IR_MODULE_CACHE_MAGIC =
     0x434D5856U; /* 'V''X''M''C' */
 static constexpr uint16_t IR_MODULE_CACHE_VERSION =
-    18; // v18: fuera el bloque de prestamos (ahora son instrucciones).
+    19; // v19: de que fichero salio cada funcion y cada trozo inlinado.  Sube
+        // A LA VEZ que IR_SECTION_VERSION -- ver la nota de la v15: comparten
+        // `serialize_function`, y olvidar una no da error de version sino un
+        // cuerpo leido con el reparto equivocado.
+        // v18: fuera el bloque de prestamos (ahora son instrucciones).
         // v17: cada promesa dice ademas QUIEN la afirma, aparte de si esta
         // demostrada.
         // v16: el contrato de cada parametro, por NIVEL y con la cara negativa.
@@ -228,7 +335,25 @@ static constexpr uint16_t IR_MODULE_CACHE_VERSION =
  * @param mod  IrModule del dep a cachear.
  * @return     bytes listos para escribir al `.vxir`.
  */
-std::vector<uint8_t> emit_ir_module_cache(const IrModule &mod);
+void emit_ir_module_cache(const IrModule &mod, util::ByteBuffer &out);
+
+/**
+ * @brief Lo mismo, pero devolviendo un `std::vector`.  COSTURA TEMPORAL.
+ *
+ * Existe solo mientras la cadena del intermedio ya habla
+ * @c util::ByteBuffer y los campos que lo transportan -- los de
+ * @c CompileResult, y detras el enlazador, el capi, el LSP y el AOT -- siguen
+ * siendo `std::vector<uint8_t>`.
+ *
+ * COPIA, y no es poco: son ~5,75 MiB en un proyecto de 6k lineas.  Esta aqui,
+ * en UN sitio y con nombre, en vez de repartida por los ocho llamantes,
+ * precisamente para que se vea lo que cuesta y para que quitarla sea borrar
+ * una funcion.
+ *
+ * @param mod Modulo a serializar.
+ * @return Sus bytes.
+ */
+std::vector<uint8_t> emit_ir_module_cache_vec(const IrModule &mod);
 
 /**
  * @brief Reconstruye un @c IrModule completo desde un buffer `.vxir`
@@ -240,7 +365,7 @@ std::vector<uint8_t> emit_ir_module_cache(const IrModule &mod);
  *         no coinciden (p.ej. un `.vxir` del formato viejo) o el
  *         buffer esta truncado.  En false, el caller debe recompilar.
  */
-bool parse_ir_module_cache(const std::vector<uint8_t> &data, IrModule &out);
+bool parse_ir_module_cache(const uint8_t *data, size_t len, IrModule &out);
 
 /**
  * @brief Serializa una @c StaticDataStore verbatim (pool + entries + meta).
@@ -251,78 +376,92 @@ bool parse_ir_module_cache(const std::vector<uint8_t> &data, IrModule &out);
  * deserialize_static_data.
  */
 void serialize_static_data(const IrModule::StaticDataStore &sd,
-                           std::vector<uint8_t> &out);
+                           util::ByteBuffer &out);
 
 /**
- * @brief Reconstruye una @c StaticDataStore desde @p in empezando en @p off.
+ * @brief Reconstruye una @c StaticDataStore por donde vaya @p c.
+ * @param c Cursor sobre el buffer.
+ * @param sd Destino.
  * @return @c false si el buffer esta truncado o un rango cae fuera del pool.
  */
-bool deserialize_static_data(const std::vector<uint8_t> &in, size_t &off,
+bool deserialize_static_data(util::ByteCursor &c,
                              IrModule::StaticDataStore &sd);
 
-/* Helpers expuestos para tests / linker (escritura en buffer). */
-inline void write_u8(std::vector<uint8_t> &o, uint8_t v) {
-    o.push_back(v);
+/* -------------------------------------------------------------------------
+ * Escribir y leer bytes sueltos.
+ *
+ * DELEGAN en @c util/byte_buffer.h y no tienen logica propia, que es todo el
+ * cambio: habia CUATRO implementaciones de esto mismo en el arbol -- aqui,
+ * `util/serialize.h`, `emmit/bytewriter.h` + `bytereader.h`, y los lectores
+ * sueltos del loader --, ninguna escrita para divergir; simplemente escribir
+ * la quinta siempre fue el camino corto.
+ *
+ * Se conservan los nombres cortos porque son ~300 llamadas en este fichero y
+ * renombrarlas no anyade nada: lo que importaba era que hubiera UN sitio donde
+ * se decide como se pone un entero en un byte.
+ * ---------------------------------------------------------------------- */
+
+/** @brief Escribe un byte.  @param o Destino.  @param v Valor. */
+inline void write_u8(util::ByteBuffer &o, uint8_t v) {
+    util::byte_buffer_append_u8(o, v);
 }
-inline void write_u16(std::vector<uint8_t> &o, uint16_t v) {
-    o.push_back(static_cast<uint8_t>(v));
-    o.push_back(static_cast<uint8_t>(v >> 8));
+/** @brief Escribe 16 bits little-endian.  @param o Destino.  @param v Valor. */
+inline void write_u16(util::ByteBuffer &o, uint16_t v) {
+    util::byte_buffer_append_u16(o, v);
 }
-inline void write_u32(std::vector<uint8_t> &o, uint32_t v) {
-    for (int i = 0; i < 4; ++i)
-        o.push_back(static_cast<uint8_t>(v >> (i * 8)));
+/** @brief Escribe 32 bits little-endian.  @param o Destino.  @param v Valor. */
+inline void write_u32(util::ByteBuffer &o, uint32_t v) {
+    util::byte_buffer_append_u32(o, v);
 }
-inline void write_u64(std::vector<uint8_t> &o, uint64_t v) {
-    for (int i = 0; i < 8; ++i)
-        o.push_back(static_cast<uint8_t>(v >> (i * 8)));
+/** @brief Escribe 64 bits little-endian.  @param o Destino.  @param v Valor. */
+inline void write_u64(util::ByteBuffer &o, uint64_t v) {
+    util::byte_buffer_append_u64(o, v);
 }
-inline void write_str(std::vector<uint8_t> &o, const std::string &s) {
-    write_u32(o, static_cast<uint32_t>(s.size()));
-    o.insert(o.end(), s.begin(), s.end());
+/**
+ * @brief Escribe una cadena: longitud delante y detras sus bytes.
+ * @param o Destino.  @param s Texto; puede llevar bytes nulos dentro.
+ */
+inline void write_str(util::ByteBuffer &o, const std::string &s) {
+    util::byte_buffer_append_bytes_with_len(o, s.data(), s.size());
 }
 
-/* Helpers de lectura (con bounds checking). */
-inline bool read_u8(const std::vector<uint8_t> &in, size_t &off, uint8_t &out) {
-    if (off >= in.size()) return false;
-    out = in[off];
-    ++off;
-    return true;
+/* Lectura.  Un fallo no se devuelve solo: se queda apuntado en el cursor con
+ * su MOTIVO, asi que una secuencia larga se comprueba una vez al final. */
+
+/** @brief Lee un byte.  @param c Cursor.  @param out Destino.  @return false
+ * si no quedaba. */
+inline bool read_u8(util::ByteCursor &c, uint8_t &out) {
+    return util::byte_cursor_read_u8(c, out);
 }
-inline bool read_u16(const std::vector<uint8_t> &in, size_t &off,
-                     uint16_t &out) {
-    if (off + 2 > in.size()) return false;
-    out = static_cast<uint16_t>(in[off]) |
-          (static_cast<uint16_t>(in[off + 1]) << 8);
-    off += 2;
-    return true;
+/** @brief Lee 16 bits little-endian.  @param c Cursor.  @param out Destino.
+ * @return false si no quedaban. */
+inline bool read_u16(util::ByteCursor &c, uint16_t &out) {
+    return util::byte_cursor_read_u16(c, out);
 }
-inline bool read_u32(const std::vector<uint8_t> &in, size_t &off,
-                     uint32_t &out) {
-    if (off + 4 > in.size()) return false;
-    out = 0;
-    for (int i = 0; i < 4; ++i) {
-        out |= static_cast<uint32_t>(in[off + i]) << (i * 8);
-    }
-    off += 4;
-    return true;
+/** @brief Lee 32 bits little-endian.  @param c Cursor.  @param out Destino.
+ * @return false si no quedaban. */
+inline bool read_u32(util::ByteCursor &c, uint32_t &out) {
+    return util::byte_cursor_read_u32(c, out);
 }
-inline bool read_u64(const std::vector<uint8_t> &in, size_t &off,
-                     uint64_t &out) {
-    if (off + 8 > in.size()) return false;
-    out = 0;
-    for (int i = 0; i < 8; ++i) {
-        out |= static_cast<uint64_t>(in[off + i]) << (i * 8);
-    }
-    off += 8;
-    return true;
+/** @brief Lee 64 bits little-endian.  @param c Cursor.  @param out Destino.
+ * @return false si no quedaban. */
+inline bool read_u64(util::ByteCursor &c, uint64_t &out) {
+    return util::byte_cursor_read_u64(c, out);
 }
-inline bool read_str(const std::vector<uint8_t> &in, size_t &off,
-                     std::string &out) {
-    uint32_t len = 0;
-    if (!read_u32(in, off, len)) return false;
-    if (off + len > in.size()) return false;
-    out.assign(reinterpret_cast<const char *>(in.data() + off), len);
-    off += len;
+/**
+ * @brief Lee una cadena escrita por @ref write_str.
+ *
+ * Esta SI copia, al contrario que @c util::byte_cursor_read_bytes_with_len:
+ * el destino es una `std::string` que sobrevive al buffer.  Donde se pueda
+ * evitar la copia conviene usar la de la capa comun directamente.
+ *
+ * @param c Cursor.  @param out Destino.  @return false si no cabia.
+ */
+inline bool read_str(util::ByteCursor &c, std::string &out) {
+    const char *p = nullptr;
+    size_t n = 0;
+    if (!util::byte_cursor_read_bytes_with_len(c, &p, &n)) return false;
+    out.assign(p, n);
     return true;
 }
 

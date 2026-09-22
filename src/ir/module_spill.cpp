@@ -71,7 +71,7 @@ size_t functions_footprint(const std::vector<IrFunction> &fns) {
 bool spill_functions(IrModule &mod, const std::string &path,
                      bool already_written) {
     if (!already_written) {
-        const std::vector<uint8_t> bytes = emit_ir_module_cache(mod);
+        const std::vector<uint8_t> bytes = emit_ir_module_cache_vec(mod);
         /* Si no se puede escribir NO se suelta nada.  Quedarse sin memoria es
          * un problema; perder el programa para ahorrarla es otro, y peor. */
         if (!fs::write_file_atomic(path, bytes)) return false;
@@ -93,7 +93,7 @@ bool restore_functions(IrModule &mod, const std::string &path, size_t expected,
      * tambien `globals` y `static_data`, y esos nunca salieron de la RAM -- los
      * de aqui son los buenos. */
     IrModule parsed;
-    if (!parse_ir_module_cache(bytes, parsed)) {
+    if (!parse_ir_module_cache(bytes.data(), bytes.size(), parsed)) {
         err = "el intermedio de " + path + " no se pudo interpretar";
         return false;
     }

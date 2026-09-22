@@ -35,13 +35,13 @@ namespace {
 const char *const k_annotations[] = {
     /* -- Sobre una declaracion: que ES, o como se compila -- */
     "Abstract",           ///< clase que no se puede instanciar
-    "After",              ///< AOP: aspecto que corre al salir
+    ann::kAfter,          ///< AOP: aspecto que corre al salir
     "AfterReturning",     ///< AOP: al salir con valor
     "AllArgsConstructor", ///< genera un constructor con todos los campos
-    "Around",             ///< AOP: aspecto que envuelve
-    "Aspect",             ///< clase que agrupa aspectos
-    "Async",              ///< devuelve un futuro implicito
-    "Before",             ///< AOP: aspecto que corre al entrar
+    ann::kAround,         ///< AOP: aspecto que envuelve
+    ann::kAspect,         ///< clase que agrupa aspectos
+    ann::kAsync,          ///< devuelve un futuro implicito
+    ann::kBefore,         ///< AOP: aspecto que corre al entrar
     "Builder",            ///< genera el patron constructor
     "Data",               ///< combo: getters, setters, toString, equals
     "EqualsAndHashCode",  ///< genera la comparacion y el hash
@@ -49,7 +49,7 @@ const char *const k_annotations[] = {
     "Getter",             ///< genera el lector de un campo
     "HelperOverride", ///< sustituye un helper multi-versionado (memcpy, ...)
     "Hook",           ///< instrumentacion en compilacion
-    "Inline",         ///< sugerencia al optimizador
+    ann::kInline,     ///< sugerencia al optimizador
     "Introspect",     ///< expone la forma del tipo al comptime
     "Log",            ///< inyecta el registro
     "Macro",          ///< se expande al compilar
@@ -60,9 +60,9 @@ const char *const k_annotations[] = {
     "NoIdiom",           ///< no reconocer patrones en este cuerpo
     "NoInstrument",      ///< no instrumentar aunque haya @Hook
     "NonNull",           ///< campo que no admite nulo
-    "Override", ///< redefine un metodo heredado (OBLIGATORIA al redefinir)
-    "Provides", ///< cubre un builtin del lenguaje: el mecanismo de ganchos
-    "Pure",     ///< sin efectos observables
+    ann::kOverride, ///< redefine un metodo heredado (OBLIGATORIA al redefinir)
+    "Provides",     ///< cubre un builtin del lenguaje: el mecanismo de ganchos
+    "Pure",         ///< sin efectos observables
     "RequiredArgsConstructor", ///< constructor con los campos obligatorios
     "Setter",                  ///< genera el escritor de un campo
     "StringConcat",            ///< sustituye el `+` de cadenas

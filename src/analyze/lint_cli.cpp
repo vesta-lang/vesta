@@ -143,12 +143,13 @@ int run(int argc, char **argv) {
                                : vx::compile_vx_source(source, path, copts);
     for (const auto &d : cr.diagnostics.all())
         vx::print_diagnostic(std::cerr, d);
-    if (!cr.ok || cr.ir_module_cache_bytes.empty()) {
+    if (!cr.ok || cr.ir_module_cache_bytes.buf.size == 0) {
         say(std::cerr, "VXW901", {path});
         return 1;
     }
     ir::IrModule mod;
-    if (!ir::parse_ir_module_cache(cr.ir_module_cache_bytes, mod)) {
+    if (!ir::parse_ir_module_cache(cr.ir_module_cache_bytes.buf.data,
+                                   cr.ir_module_cache_bytes.buf.size, mod)) {
         say(std::cerr, "VXW901", {path});
         return 1;
     }

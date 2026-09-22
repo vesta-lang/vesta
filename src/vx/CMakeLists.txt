@@ -137,6 +137,7 @@ add_library(vx_lib STATIC
     ${CMAKE_SOURCE_DIR}/src/analysis/memory/points_to.cpp
     ${CMAKE_SOURCE_DIR}/src/analysis/memory/memory_access.cpp
     ${CMAKE_SOURCE_DIR}/src/analysis/escape/escape.cpp
+    ${CMAKE_SOURCE_DIR}/src/analysis/escape/fn_addr_escape.cpp
     asm/asm_effects.cpp
     # Resumen de efectos a nivel de bloque de un inline asm (memoria/atomica/
     # call/flags/rama/marco de pila explicito) sobre la tabla plana por
@@ -215,6 +216,10 @@ add_library(vx_lib STATIC
     # comprobador de tipos, que antes tenian cada uno la suya.
     builtin_names.cpp
     builtin_params.cpp
+    # Y la lista de las ANOTACIONES, por lo mismo: estaba repartida por siete
+    # sitios del parser y lo que ninguno reconocia se tiraba callando, asi que
+    # una errata daba una anotacion que no hacia nada.
+    annotation_names.cpp
     # Varias declaraciones con un nombre: cual quiere una llamada, y como se
     # separan sus simbolos.  Aparte porque la misma regla la usan las funciones
     # libres, los metodos y los constructores -- tenerla escrita tres veces es

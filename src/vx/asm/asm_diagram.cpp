@@ -97,6 +97,8 @@ BlockCost block_cost(const AsmCfg &cfg, const AsmBasicBlock &bb,
                      const AsmDiagramOptions &opt) {
     std::string body;
     for (uint32_t i = bb.first; i <= bb.last; ++i) {
+        // La de SALIDA la anade el grafo: no es codigo de nadie y no cuesta.
+        if (cfg.insns[i].sintetica) continue;
         body += cfg.insns[i].text;
         body += '\n';
     }
@@ -109,6 +111,7 @@ BlockCost block_cost(const AsmCfg &cfg, const AsmBasicBlock &bb,
     r.port = bn.first;
     r.port_uops = bn.second;
     for (uint32_t i = bb.first; i <= bb.last; ++i) {
+        if (cfg.insns[i].sintetica) continue;
         instr_db::AsmInsnSem s =
             instr_db::asm_insn_sem(opt.isa, cfg.insns[i].text, opt.ua_id);
         r.writes_flags = r.writes_flags || s.writes_flags;
@@ -132,10 +135,22 @@ std::string flag_marks(const BlockCost &bc) {
 std::string block_body_text(const AsmCfg &cfg, const AsmBasicBlock &bb) {
     std::string t;
     if (!bb.label.empty()) t += bb.label + ":\n";
-    const uint32_t n = bb.last - bb.first + 1;
+    /* La instruccion de SALIDA la anade el constructor del grafo cuando el
+     * bloque CAE al siguiente.  No la escribio nadie: ni se ensena -- se leia
+     * un `nop` que no esta en el fuente -- ni se cuenta, que es exactamente lo
+     * que avisa `AsmInsn::sintetica`.  Que el bloque sale ya lo dice su
+     * arista. */
+    uint32_t n = 0;
+    for (uint32_t i = bb.first; i <= bb.last; ++i)
+        if (!cfg.insns[i].sintetica) ++n;
+    if (n == 0) return t;
     const uint32_t show = n > 6 ? 5 : n;
-    for (uint32_t k = 0; k < show; ++k)
-        t += cfg.insns[bb.first + k].text + "\n";
+    uint32_t shown = 0;
+    for (uint32_t i = bb.first; i <= bb.last && shown < show; ++i) {
+        if (cfg.insns[i].sintetica) continue;
+        t += cfg.insns[i].text + "\n";
+        ++shown;
+    }
     if (n > 6) t += "... (" + std::to_string(n) + " instrs)\n";
     return t;
 }

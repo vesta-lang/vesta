@@ -34,7 +34,7 @@
 namespace asm_multi_process {
 int run_worker(const std::string &file_name, const std::string &output_prefix,
                bool skip_preprocessor, bool keep_labels,
-               const std::vector<uint8_t> *ir_section_bytes, bool emit_map) {
+               const util::ByteBuffer *ir_section_bytes, bool emit_map) {
     /* Entrada por FICHERO: el `.vel` escrito a mano, que es un formato de
      * entrada de primera clase del lenguaje.  Lo unico que hace es leerlo y
      * delegar. */
@@ -53,7 +53,7 @@ int run_worker(const std::string &file_name, const std::string &output_prefix,
 int run_worker_from_source(std::string code, const std::string &file_name,
                            const std::string &output_prefix,
                            bool skip_preprocessor, bool keep_labels,
-                           const std::vector<uint8_t> *ir_section_bytes,
+                           const util::ByteBuffer *ir_section_bytes,
                            bool emit_map, emmit::NodeStream *nodes,
                            const std::string &debug_source_file) {
     Timer global;
@@ -257,7 +257,7 @@ int run_worker_from_source(std::string code, const std::string &file_name,
     // pasar IR section bytes pre-serializados al linker.
     // El frontend Vesta los produjo via @c ir::emit_ir_section.
     // El linker los appendea a la seccion @c @ir del .velb v3.
-    if (ir_section_bytes && !ir_section_bytes->empty()) {
+    if (ir_section_bytes != nullptr && ir_section_bytes->size != 0) {
         linker.set_ir_section_bytes(*ir_section_bytes);
     }
 

@@ -20,6 +20,7 @@
 #include "vx/asm/asm_cfg.h"
 
 #include "vx/asm/asm_effects.h" // asm_canonical_reg: seguir un salto calculado
+#include "vx/token.h" // is_ident_char: que es un identificador, lo dice el lexico
 
 #include <algorithm>
 #include <cctype>
@@ -31,11 +32,10 @@ namespace vx {
 
 namespace {
 
-/// ¿Es @p c parte de un identificador de asm (letra, digito, @c _ / @c . / @c
-/// $)?
+/// ¿Es @p c parte de un identificador de asm?  El alfabeto del ensamblador es
+/// el de Vesta MAS @c . y @c $, que ahi son parte del nombre de una etiqueta.
 inline bool ident_char(char c) {
-    return std::isalnum(static_cast<unsigned char>(c)) || c == '_' ||
-           c == '.' || c == '$';
+    return is_ident_char(c) || c == '.' || c == '$';
 }
 
 /// Minusculiza una cadena ASCII.

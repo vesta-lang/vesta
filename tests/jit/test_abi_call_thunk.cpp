@@ -24,11 +24,13 @@
 #include "jit/code_cache.h"
 #include "jit/keystone_asm_backend.h"
 #include "vx/asm/asm_backend.h"
+#include "vx/diag/diag_catalog.h"
 
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -42,6 +44,43 @@ void check(bool cond, const std::string &what) {
         std::printf("  FAIL: %s\n", what.c_str());
     }
 }
+
+/**
+ * @brief Arma un contexto de llamada y es dueno de lo que el contexto apunta.
+ *
+ * El contexto lleva el banco y los argumentos de pila POR PUNTERO -- para que
+ * ni el tamano del banco ni cuantos argumentos hay esten fijados en ningun
+ * sitio --, asi que alguien tiene que ser dueno de esa memoria mientras dura
+ * la llamada.  Aqui, esto.
+ */
+struct Call {
+    std::vector<uint16_t> slots; ///< la convencion: un destino por argumento.
+    std::vector<uint64_t> args;  ///< y el valor de cada uno.
+
+    /// Anade un argumento fijado al registro @p phys del objetivo.
+    void pin(uint16_t phys, uint64_t value) {
+        slots.push_back(phys);
+        args.push_back(value);
+    }
+    /// Anade uno sin fijar: va por la pila, detras de los que ya haya.
+    void push(uint64_t value) {
+        slots.push_back(jit::kAbiArgOnStack);
+        args.push_back(value);
+    }
+
+    uint64_t run(uint64_t target) {
+        jit::AbiArgSlots s;
+        s.at = slots.data();
+        s.count = slots.size();
+        jit::AbiCallReason why = jit::AbiCallReason::Ok;
+        jit::AbiCallThunkFn thunk = jit::abi_call_thunk_for(s, &why);
+        if (thunk == nullptr) return 0;
+        jit::AbiCallCtx ctx;
+        ctx.target = target;
+        ctx.args = args.data();
+        return thunk(&ctx);
+    }
+};
 
 /// Ensambla @p src y lo deja ejecutable.  El destino de cada caso: unas pocas
 /// instrucciones que DELATAN de donde leyeron su valor.
@@ -66,15 +105,9 @@ void case_pinned_register(jit::CodeCache &cc) {
     check(target != 0, "the target assembles");
     if (target == 0) return;
 
-    std::string err;
-    jit::AbiCallThunkFn thunk = jit::abi_call_thunk_for(0, &err);
-    check(thunk != nullptr, "the thunk is generated: " + err);
-    if (thunk == nullptr) return;
-
-    jit::AbiCallCtx ctx;
-    ctx.target = target;
-    ctx.gp[10] = 0xC0FFEEULL; // r10
-    check(thunk(&ctx) == 0xC0FFEEULL,
+    Call c;
+    c.pin(10, 0xC0FFEEULL); // r10
+    check(c.run(target) == 0xC0FFEEULL,
           "an argument pinned to r10 arrives in r10");
 }
 
@@ -88,16 +121,11 @@ void case_several_pins(jit::CodeCache &cc) {
     check(target != 0, "the target assembles");
     if (target == 0) return;
 
-    std::string err;
-    jit::AbiCallThunkFn thunk = jit::abi_call_thunk_for(0, &err);
-    if (thunk == nullptr) return;
-
-    jit::AbiCallCtx ctx;
-    ctx.target = target;
-    ctx.gp[0] = 1000; // rax
-    ctx.gp[10] = 200; // r10
-    ctx.gp[2] = 30;   // rdx
-    check(thunk(&ctx) == 1230, "three pinned registers all arrive");
+    Call c;
+    c.pin(0, 1000); // rax
+    c.pin(10, 200); // r10
+    c.pin(2, 30);   // rdx
+    check(c.run(target) == 1230, "three pinned registers all arrive");
 }
 
 /// Lo que no cabe en registro va por la pila, al desplazamiento que la
@@ -114,24 +142,16 @@ void case_stack_arguments(jit::CodeCache &cc) {
     const char *src = "mov rax, [rsp + 0x8]\nret\n";
     const char *src2 = "mov rax, [rsp + 0x10]\nret\n";
 #endif
-    std::string err;
-    jit::AbiCallThunkFn thunk = jit::abi_call_thunk_for(2, &err);
-    check(thunk != nullptr, "the thunk with stack arguments is generated");
-    if (thunk == nullptr) return;
-
     const uint64_t t1 = make_target(src, cc);
     const uint64_t t2 = make_target(src2, cc);
     if (t1 == 0 || t2 == 0) return;
 
-    jit::AbiCallCtx ctx;
-    ctx.stack[0] = 0x1111222233334444ULL;
-    ctx.stack[1] = 0x5555666677778888ULL;
-
-    ctx.target = t1;
-    check(thunk(&ctx) == 0x1111222233334444ULL,
+    Call c;
+    c.push(0x1111222233334444ULL);
+    c.push(0x5555666677778888ULL);
+    check(c.run(t1) == 0x1111222233334444ULL,
           "the first stack argument lands where the platform says");
-    ctx.target = t2;
-    check(thunk(&ctx) == 0x5555666677778888ULL, "and the second right after");
+    check(c.run(t2) == 0x5555666677778888ULL, "and the second right after");
 }
 
 /// Los dos a la vez, que es lo que de verdad pide una convencion como la de
@@ -146,15 +166,10 @@ void case_pins_and_stack_together(jit::CodeCache &cc) {
     const uint64_t target = make_target(src, cc);
     if (target == 0) return;
 
-    std::string err;
-    jit::AbiCallThunkFn thunk = jit::abi_call_thunk_for(1, &err);
-    if (thunk == nullptr) return;
-
-    jit::AbiCallCtx ctx;
-    ctx.target = target;
-    ctx.gp[10] = 7000;
-    ctx.stack[0] = 42;
-    check(thunk(&ctx) == 7042,
+    Call c;
+    c.pin(10, 7000);
+    c.push(42);
+    check(c.run(target) == 7042,
           "registers and stack are honoured in the same call");
 }
 
@@ -168,25 +183,45 @@ void case_callee_saved_survive(jit::CodeCache &cc) {
         cc);
     if (target == 0) return;
 
-    std::string err;
-    jit::AbiCallThunkFn thunk = jit::abi_call_thunk_for(0, &err);
-    if (thunk == nullptr) return;
-
-    jit::AbiCallCtx ctx;
-    ctx.target = target;
     volatile uint64_t before = 0xABCDEF;
-    uint64_t r = thunk(&ctx);
-    check(r == 5, "the result comes back");
+    Call c;
+    check(c.run(target) == 5, "the result comes back");
     check(before == 0xABCDEF, "the caller's own state is intact");
 }
 
-/// Pedir mas de los que caben se DICE, no se recorta en silencio.
-void case_too_many_is_refused() {
-    std::string err;
-    jit::AbiCallThunkFn thunk =
-        jit::abi_call_thunk_for(jit::kAbiCallMaxArgs + 1, &err);
-    check(thunk == nullptr, "too many stack arguments is refused");
-    check(!err.empty(), "and it says why");
+/// Una convencion que no se puede cumplir se DICE, y se dice POR QUE: no se
+/// apana ni se llama a medias.  Pedir el puntero de pila como destino de un
+/// argumento es el caso que ninguna arquitectura puede conceder.
+void case_impossible_is_refused() {
+    const uint16_t rsp = 4;
+    jit::AbiArgSlots s;
+    s.at = &rsp;
+    s.count = 1;
+    jit::AbiCallReason why = jit::AbiCallReason::Ok;
+    check(jit::abi_call_thunk_for(s, &why) == nullptr,
+          "passing an argument in the stack pointer is refused");
+    check(why == jit::AbiCallReason::RegIsStackPointer, "for its real reason");
+    check(vx::diag::has_code(jit::abi_call_reason_code(why)),
+          "and the reason is a catalog code, so it reads in any language");
+}
+
+/// Una convencion distinta da un thunk distinto, y la MISMA da el mismo: es lo
+/// que permite que buscarlo este en el camino de cada llamada.
+void case_thunk_is_per_convention() {
+    const uint16_t a[] = {10, 2};
+    const uint16_t b[] = {10, jit::kAbiArgOnStack};
+    jit::AbiArgSlots sa;
+    sa.at = a;
+    sa.count = 2;
+    jit::AbiArgSlots sb;
+    sb.at = b;
+    sb.count = 2;
+    jit::AbiCallReason why = jit::AbiCallReason::Ok;
+    jit::AbiCallThunkFn ta = jit::abi_call_thunk_for(sa, &why);
+    jit::AbiCallThunkFn tb = jit::abi_call_thunk_for(sb, &why);
+    check(ta != nullptr && tb != nullptr, "both conventions generate");
+    check(ta != tb, "two conventions do not share a thunk");
+    check(jit::abi_call_thunk_for(sa, &why) == ta, "and the same one reuses");
 }
 
 } // namespace
@@ -201,7 +236,8 @@ int main() {
     case_stack_arguments(cc);
     case_pins_and_stack_together(cc);
     case_callee_saved_survive(cc);
-    case_too_many_is_refused();
+    case_impossible_is_refused();
+    case_thunk_is_per_convention();
 
     std::printf("%d of %d OK\n", g_checks - g_fail, g_checks);
     return g_fail == 0 ? 0 : 1;

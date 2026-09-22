@@ -50,6 +50,7 @@
 #include "lsp/symbol_index.h"
 #include "vx/ast.h"
 #include "vx/diagnostic.h"
+#include "vx/token.h" // is_ident_char: que es un identificador, lo dice el lexico
 #include "vx/source_text.h" // un solo fin de linea para todo el pipeline
 
 namespace lsp {
@@ -408,9 +409,11 @@ void LspServer::publish_diagnostics(const std::string &uri) {
      * tiene sus propios diagnosticos, y anadir "no pude lintar" encima seria
      * ruido sobre un error que el usuario ya esta viendo. */
     vx::Diagnostics lint_findings;
-    if (!an.result.ir_module_cache_bytes.empty()) {
+    if (an.result.ir_module_cache_bytes.buf.size != 0) {
         ir::IrModule mod;
-        if (ir::parse_ir_module_cache(an.result.ir_module_cache_bytes, mod)) {
+        if (ir::parse_ir_module_cache(
+                an.result.ir_module_cache_bytes.buf.data,
+                an.result.ir_module_cache_bytes.buf.size, mod)) {
             /* El MOMENTO tiene que ser el del modulo que se mira, igual que en
              * la terminal: preguntar sin decirlo no significa "cualquiera",
              * significa que no casa con ninguno de los sellados. */
@@ -543,6 +546,9 @@ void LspServer::handle_semantic_tokens_full(const nlohmann::json &msg) {
 }
 
 namespace {
+
+/// Que es un identificador de Vesta lo dice el lexico, no cada consumidor.
+using vx::is_ident_char;
 
 /**
  * @brief Construye el objeto @c Range LSP a partir de coordenadas 0-based.
@@ -1022,12 +1028,6 @@ bool has_prefix(const std::string &name, const std::string &prefix) {
     return name.compare(0, prefix.size(), prefix) == 0;
 }
 
-/// @brief true si @p c es valido dentro de un identificador de Vesta.
-bool is_ident_char(char c) {
-    return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
-           (c >= '0' && c <= '9') || c == '_';
-}
-
 /**
  * @brief Extrae el prefijo de identificador inmediatamente anterior a
  *        @p byte_off (los caracteres [A-Za-z0-9_] que se estan escribiendo).
@@ -1195,12 +1195,6 @@ void collect_ufcs_reachable(const vx::SemanticIndex &idx,
     }
 }
 
-/// Cierto si @p c puede formar parte de un identificador.
-bool ident_char(char c) {
-    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-           (c >= '0' && c <= '9') || c == '_';
-}
-
 /**
  * @brief Expande @p word al nombre de builtin en ARBOL que lo contiene.
  *
@@ -1225,14 +1219,14 @@ void expand_builtin_tree_word(const std::string &text, size_t offset,
     for (;;) {
         if (start == 0 || text[start - 1] != '.') break;
         size_t j = start - 1;
-        while (j > 0 && ident_char(text[j - 1]))
+        while (j > 0 && is_ident_char(text[j - 1]))
             --j;
         if (j == start - 1) break; // el punto no venia de un identificador
         start = j;
     }
     if (start >= text.size()) return;
     size_t root_end = start;
-    while (root_end < text.size() && ident_char(text[root_end]))
+    while (root_end < text.size() && is_ident_char(text[root_end]))
         ++root_end;
     if (!vx::is_builtin_tree_root(text.substr(start, root_end - start))) return;
     /* Hacia delante hasta formar un builtin. */
@@ -1241,7 +1235,7 @@ void expand_builtin_tree_word(const std::string &text, size_t offset,
     while (vx::builtin_from_name(name) == vx::Builtin::Unknown &&
            at < text.size() && text[at] == '.') {
         size_t k = at + 1;
-        while (k < text.size() && ident_char(text[k]))
+        while (k < text.size() && is_ident_char(text[k]))
             ++k;
         if (k == at + 1) break;
         name += text.substr(at, k - at);
@@ -1777,7 +1771,8 @@ void LspServer::handle_hover(const nlohmann::json &msg) {
          * objetivo con el que se esta mirando -- un fichero de Linux leido
          * desde Windows, por ejemplo -- y sin compilar no hay layout que
          * consultar. */
-        if (tf == nullptr && def_an.result.ir_module_cache_bytes.empty()) {
+        if (tf == nullptr &&
+            def_an.result.ir_module_cache_bytes.buf.size == 0) {
             md += "\n";
             md += vx::diag::format("VX9157", {});
             md += "\n";
@@ -2139,7 +2134,7 @@ void LspServer::handle_completion(const nlohmann::json &msg) {
         for (;;) {
             if (at == 0 || text[at - 1] != '.') break;
             size_t j = at - 1;
-            while (j > 0 && (ident_char(text[j - 1])))
+            while (j > 0 && (is_ident_char(text[j - 1])))
                 --j;
             if (j == at - 1) break;
             at = j;

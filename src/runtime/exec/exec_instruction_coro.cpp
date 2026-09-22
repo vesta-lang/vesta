@@ -162,7 +162,7 @@ void exec_instr_spawn(ProcessVM *vm, const DecodedInstr &instr) {
     // original.  Asi copiamos EXACTAMENTE lo que el loader cargo (sin
     // depender de un tamano fijo arbitrario), y soportamos modulos
     // adicionales cargados dinamicamente con @c loadmodule.
-    vm_ref.loader_public.copy_executables_to(*child, vm);
+    vm_ref.loader_public.copy_executables_to(*child, *vm);
 
     // activar el proceso: pasa de NEW a READY y se inserta en la cola
     // del scheduler propietario.  En multi-scheduler, VM::make_ready
@@ -244,7 +244,7 @@ void exec_instr_spawn_on(ProcessVM *vm, const DecodedInstr &instr) {
     child->stack_high = stack_base;
     child->stack_low_water = stack_base;
 
-    vm_ref.loader_public.copy_executables_to(*child, vm);
+    vm_ref.loader_public.copy_executables_to(*child, *vm);
     vm_ref.make_ready(new_pid);
 
     const uint64_t encoded_pid =
@@ -302,7 +302,7 @@ void exec_instr_spawnargs(ProcessVM *vm, const DecodedInstr &instr) {
     child->registers.base_pointer.qword(stack_base);
     child->stack_high = stack_base;
     child->stack_low_water = stack_base;
-    vm_ref.loader_public.copy_executables_to(*child, vm);
+    vm_ref.loader_public.copy_executables_to(*child, *vm);
 
     // CRITICO: copiar args ANTES de make_ready, para que el child los
     // vea desde su primer ciclo de instruccion (sin race con el

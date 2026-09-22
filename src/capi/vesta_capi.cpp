@@ -213,7 +213,8 @@ bool compile_to_velb_bytes(const std::string &src, const std::string &unit_name,
         asm_multi_process::run_worker(vel_path, prefix,
                                       /*skip_preprocessor=*/true,
                                       /*keep_labels=*/false,
-                                      /*ir_section_bytes=*/&cr.ir_section_bytes,
+                                      /*ir_section_bytes=*/
+                                      &cr.ir_section_bytes.buf,
                                       /*emit_map=*/false);
 
     if (rc != 0) {
@@ -251,7 +252,7 @@ bool compile_to_velb_bytes(const std::string &src, const std::string &unit_name,
  * @return true si exito.
  */
 bool assemble_vel_to_velb(const std::string &vel_text,
-                          const std::vector<uint8_t> *ir_bytes,
+                          const util::ByteBuffer *ir_bytes,
                           std::vector<uint8_t> &out_bytes, std::string &err) {
     const std::string prefix = make_temp_prefix();
     const std::string vel_path = prefix + ".vel";
@@ -271,7 +272,7 @@ bool assemble_vel_to_velb(const std::string &vel_text,
         vel_path, prefix,
         /*skip_preprocessor=*/true,
         /*keep_labels=*/false,
-        /*ir_section_bytes=*/const_cast<std::vector<uint8_t> *>(ir_bytes),
+        /*ir_section_bytes=*/ir_bytes,
         /*emit_map=*/false);
 
     if (rc != 0) {
@@ -341,9 +342,12 @@ bool run_velb_bytes(std::vector<uint8_t> velb_bytes,
         return false;
     }
 
-    // Cargar el bytecode desde memoria (sin pasar por disco).
-    runtime::ProcessVM *proc =
-        mgr.loader.load_executable(*vm, std::move(velb_bytes));
+    // Cargar el bytecode desde memoria (sin pasar por disco).  Lo entrego
+    // quien empotra la VM, asi que no hay ruta que nombrar: eso es lo que se
+    // dice si luego hay algo que reprocharle.
+    runtime::ProcessVM *proc = mgr.loader.load_executable(
+        *vm, std::move(velb_bytes),
+        loader::ArtifactOrigin::from_kind(loader::kOriginEmbedder));
     if (!proc) {
         err = "no se pudo cargar el ejecutable .velb";
         return false;
@@ -957,8 +961,10 @@ VESTA_API int vesta_compile_to_asm_t(const char *src, const char *unit_name,
             return 1;
         }
         ir::IrModule mod;
-        if (cr.ir_module_cache_bytes.empty() ||
-            !ir::parse_ir_module_cache(cr.ir_module_cache_bytes, mod)) {
+        if (cr.ir_module_cache_bytes.buf.size == 0 ||
+            !ir::parse_ir_module_cache(cr.ir_module_cache_bytes.buf.data,
+                                       cr.ir_module_cache_bytes.buf.size,
+                                       mod)) {
             set_err(out_err, "no se pudo obtener el IR del modulo para el asm");
             return 1;
         }
@@ -1019,8 +1025,10 @@ VESTA_API int vesta_compile_to_jit_t(const char *src, const char *unit_name,
             return 1;
         }
         ir::IrModule mod;
-        if (cr.ir_module_cache_bytes.empty() ||
-            !ir::parse_ir_module_cache(cr.ir_module_cache_bytes, mod)) {
+        if (cr.ir_module_cache_bytes.buf.size == 0 ||
+            !ir::parse_ir_module_cache(cr.ir_module_cache_bytes.buf.data,
+                                       cr.ir_module_cache_bytes.buf.size,
+                                       mod)) {
             set_err(out_err, "no se pudo obtener el IR del modulo para el JIT");
             return 1;
         }
@@ -1153,8 +1161,8 @@ VESTA_API int vesta_compile_full(const char *src, const char *unit_name,
             std::vector<uint8_t> bytes;
             std::string err;
             // Embeber el IR para producir un .velb v3 igual que vesta_compile.
-            if (!assemble_vel_to_velb(cr.vel_text, &cr.ir_section_bytes, bytes,
-                                      err)) {
+            if (!assemble_vel_to_velb(cr.vel_text, &cr.ir_section_bytes.buf,
+                                      bytes, err)) {
                 set_err(out_err, err);
                 return 1;
             }

@@ -213,7 +213,7 @@ bool compile_to_velb(const std::string &src, std::vector<uint8_t> &out,
         rc = asm_multi_process::run_worker(vel_path, prefix,
                                            /*skip_preprocessor=*/true,
                                            /*keep_labels=*/false,
-                                           &cr.ir_section_bytes,
+                                           &cr.ir_section_bytes.buf,
                                            /*emit_map=*/false);
     }
     std::remove(vel_path.c_str());
@@ -263,7 +263,12 @@ bool aot_run_link_script(
             run_ok = false;
         } else {
             runtime::ProcessVM *proc =
-                mgr.loader.load_executable(*vm, std::move(velb));
+                /* El origen es el guion de enlace: no hay fichero suyo en
+                 * disco, se compila al vuelo. */
+                mgr.loader.load_executable(
+                    *vm, std::move(velb),
+                    loader::ArtifactOrigin::from_kind(
+                        loader::kOriginLinkScript));
             if (!proc) {
                 err = "link-script: no se pudo cargar el .velb del script";
                 run_ok = false;

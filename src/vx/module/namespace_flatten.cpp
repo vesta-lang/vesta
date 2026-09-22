@@ -27,6 +27,7 @@
 #include <unordered_map>
 
 #include "vx/ast.h"
+#include "vx/token.h" // is_ident_char: que es un identificador, lo dice el lexico
 
 namespace vx {
 
@@ -1001,11 +1002,17 @@ std::string demangle_symbol(const std::string &mangled) {
 
     /* Los separadores del mangling vuelven a ser puntos de modulo.  Un solo
      * subrayado NO se toca: forma parte del nombre que se escribio
-     * (`parse_int_lit`), y convertirlo partiria la palabra. */
+     * (`parse_int_lit`), y convertirlo partiria la palabra.
+     *
+     * Y un `__` solo SEPARA si hay un identificador a cada lado.  El de un
+     * nombre sintetico -- `__module_init`, `__lambda_3` -- no separa nada: es
+     * parte del nombre, y convertirlo daba `.module_init`, que no es un nombre
+     * que exista ni que nadie haya escrito. */
     std::string out;
     out.reserve(s.size());
     for (size_t k = 0; k < s.size();) {
-        if (k + 1 < s.size() && s[k] == '_' && s[k + 1] == '_') {
+        if (k > 0 && k + 2 < s.size() && s[k] == '_' && s[k + 1] == '_' &&
+            is_ident_char(s[k - 1]) && is_ident_char(s[k + 2])) {
             out.push_back('.');
             k += 2;
         } else {

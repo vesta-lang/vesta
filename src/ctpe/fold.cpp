@@ -163,8 +163,10 @@ int fold(ir::IrModule &mod, vx::ComptimeRuntime &rt, const FoldBudget &budget) {
     if (cands.empty()) return 0;
 
     // Clave de cache: huella del IR del modulo ANTES de plegar (determinista).
-    const std::vector<uint8_t> irbytes = ir::emit_ir_module_cache(mod);
-    const uint64_t key = fnv1a(irbytes.data(), irbytes.size());
+    util::ByteBuffer irbytes;
+    ir::emit_ir_module_cache(mod, irbytes);
+    const uint64_t key = fnv1a(irbytes.data, irbytes.size);
+    util::byte_buffer_release(irbytes);
     CacheMap cache;
     load_cache(key, cache);
 

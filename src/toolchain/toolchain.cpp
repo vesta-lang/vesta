@@ -281,7 +281,7 @@ CompileResponse compile(const CompileRequest &req) {
         std::move(vel_src), vel_path, out_prefix,
         /*skip_preprocessor=*/true,
         /*keep_labels=*/req.keep_labels,
-        /*ir_section_bytes=*/&cr.ir_section_bytes,
+        /*ir_section_bytes=*/&cr.ir_section_bytes.buf,
         /*emit_map=*/req.emit_map, nodes.get(),
         /*debug_source_file=*/opts.emit_debug ? req.input : std::string());
     if (rc != 0) {

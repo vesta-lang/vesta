@@ -507,6 +507,7 @@ static bool ranges_overlap(const range_memory *a, const range_memory *b) {
 
 #include "emmit/struct_context.h"
 #include "optimizer/optimizer.h"
+#include "util/byte_buffer.h" // el intermedio llega como buffer con dueno
 #include "emmit/annotations.h"
 
 namespace Assembly::Bytecode::Linker {
@@ -1136,8 +1137,14 @@ class Linker {
      *
      * Vacio = no IR section -> @c offset_ir_section queda en 0.
      */
-    void set_ir_section_bytes(std::vector<uint8_t> bytes) {
-        ir_section_bytes = std::move(bytes);
+    void set_ir_section_bytes(const util::ByteBuffer &bytes) {
+        /* FRONTERA con la cadena del `.velb`, que todavia no esta migrada:
+         * aqui los bytes del intermedio pasan a ser bytes del artefacto.
+         *
+         * Copia UNA vez, la misma que hacia antes -- el parametro venia por
+         * valor --, no una nueva.  Se va cuando el enlazador hable tambien
+         * @c util::ByteBuffer. */
+        ir_section_bytes.assign(bytes.data, bytes.data + bytes.size);
     }
 
     /** @brief Acceso const para tests / inspeccion. */

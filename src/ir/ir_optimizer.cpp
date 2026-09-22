@@ -10850,6 +10850,11 @@ static uint32_t inline_note_site(IrFunction &caller, const IrFunction &callee,
     s.callee = callee.name;
     s.line = call.source_line;
     s.column = call.source_column;
+    /* El fichero del llamado se SELLA aqui, que es el unico momento en que se
+     * le puede preguntar: el camino nativo borra despues las funciones que se
+     * quedan sin usos, asi que buscarla luego por su nombre no la encontraria
+     * -- y ademas no hay ninguna busqueda por nombre en el modulo --. */
+    s.source_file = callee.source_file;
     // Si la propia llamada venia ya inlinada, cuelga de aquella.
     s.parent = call.inline_site;
     caller.inline_sites.push_back(std::move(s));

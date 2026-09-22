@@ -1056,6 +1056,42 @@ static constexpr uint8_t IR_NO_REG = 0xFFu;
 static constexpr uint32_t IR_NO_INLINE_SITE = 0xFFFFFFFFu;
 
 /**
+ * @brief No consta de que fichero salio.
+ *
+ * Se distingue del indice 0 a proposito: "no lo se" y "el primero de la tabla"
+ * son respuestas distintas, y un consumidor que las confunda cita un fichero
+ * que no tiene nada que ver en lugar de callarse.
+ */
+static constexpr uint32_t IR_NO_SOURCE_FILE = 0xFFFFFFFFu;
+
+/**
+ * @brief Las palabras con las que el volcado textual empieza una linea.
+ *
+ * UNA declaracion para quien las ESCRIBE (@c dump_ir_module) y para quien las
+ * LEE (el inspector del editor, que recorta el bloque de una sola funcion).
+ * Escritas dos veces son dos vocabularios: el que anade una directiva toca su
+ * lado, el otro sigue compilando, y lo que falla es la lectura -- en silencio y
+ * lejos.  Ya paso con las de @c @Target, donde una errata borro codigo.
+ *
+ * Los prefijos llevan su espacio cuando lo llevan en el volcado: quien compara
+ * no tiene entonces que acordarse de anadirlo, que es justo lo que se olvida.
+ */
+namespace ir_dump {
+
+/// Abre una funcion: `@function nombre(...) -> tipo {`.
+static constexpr const char *kFunction = "@function ";
+/// De que fichero de la tabla salio la funcion que sigue.
+static constexpr const char *kFile = "@file ";
+/// La tabla de ficheros del modulo, al principio del volcado.
+static constexpr const char *kSourceFile = "@source_file ";
+/// De que plantilla generica es instancia la funcion que sigue, y con que
+/// argumentos de tipo.
+static constexpr const char *kTemplateOf = "@template_of ";
+static constexpr const char *kTypeArgs = "@type_args ";
+
+} // namespace ir_dump
+
+/**
  * @struct InlineSite
  * @brief Un trozo de funcion que se metio dentro de otra al inlinar.
  *
@@ -1070,6 +1106,21 @@ struct InlineSite {
     uint32_t column = 0; ///< Columna de la llamada.
     /// Sitio de fuera si la propia llamada tambien venia inlinada.
     uint32_t parent = IR_NO_INLINE_SITE;
+    /**
+     * @brief Fichero del CALLEE: indice en @c IrModule::source_files.
+     *
+     * Se SELLA al inlinar, no se resuelve despues por el nombre de @c callee.
+     * Hay dos razones y las dos bastan:
+     *
+     * - el camino nativo BORRA las funciones que se quedan sin usos, y eso
+     *   corre despues de inlinar: un llamado pequenyo aplanado en todos sus
+     *   sitios ya no esta cuando alguien preguntaria por el;
+     * - y aunque estuviera, no hay ninguna busqueda por nombre en el modulo:
+     *   cada consumidor se monta la suya.
+     *
+     * Aqui, en cambio, el llamado esta delante por construccion.
+     */
+    uint32_t source_file = IR_NO_SOURCE_FILE;
 };
 
 /**
@@ -1389,13 +1440,24 @@ struct IrInstr {
     IrValueId
         func_ptr; ///< para CALLIND: id del valor con el puntero de funcion
 
-    /// ABI custom del CALLIND: registro fisico por argumento, tomado del TIPO
-    /// del puntero (cfn con abi_regs).  Vacio = ABI estandar.  Necesario porque
-    /// un CALLIND no tiene nombre resoluble -> la ABI no puede buscarse por
-    /// IrFunction; viaja aqui, fijada en compile-time desde el tipo (aunque el
-    /// valor del puntero cambie en runtime).  Para CALL directo NO se usa (el
-    /// codegen resuelve la ABI por nombre via IrFunction::param_abi_regs).
-    /// Se serializa (cross-module).
+    /**
+     * @brief ABI custom de ESTA llamada: registro fisico por argumento.  Vacio
+     *        = la ABI estandar.
+     *
+     * La lleva el SITIO DE LLAMADA, no se va a buscar al llamado, y vale por
+     * igual para CALL y para CALLIND:
+     *
+     *  - un CALLIND no tiene nombre resoluble, asi que no hay ninguna
+     *    @c IrFunction que consultar; la ABI sale del TIPO del puntero (un
+     *    `cfn` con abi_regs), fijada al compilar aunque el valor del puntero
+     *    cambie al ejecutar;
+     *  - y un CALL puede cruzar de modulo, donde la @c IrFunction del llamado
+     *    sencillamente no esta delante.  Ademas, que cada backend fuera a
+     *    buscar la declaracion por su cuenta es lo mismo que no tenerla: se
+     *    buscaria de tres maneras distintas.
+     *
+     * Se serializa (cross-module).
+     */
     std::vector<std::string> call_abi_regs;
 
     IrBlockId target_block; ///< destino de BR o rama true de BR_COND
@@ -2080,6 +2142,23 @@ struct IrFunction {
     /// una entrada por indice (@c IrInstr::inline_site); vacio si no se inlino
     /// nada, que es lo comun.
     std::vector<InlineSite> inline_sites;
+    /**
+     * @brief De que fichero se escribio: indice en @c IrModule::source_files.
+     *
+     * Va aqui y no en la instruccion porque una funcion viene de UN fichero,
+     * asi que cuesta por funcion y no por instruccion -- que son millones
+     * frente a unos pocos ficheros.  Una instruccion que venga inlinada NO usa
+     * este campo: usa el de su @c InlineSite, que nombra el fichero de donde
+     * vino de verdad.
+     *
+     * Hace falta porque el modulo que se compila es un FUSIONADO: las
+     * funciones de cada dependencia se vuelcan en uno solo, y hasta ahora ahi
+     * se perdia de cual venia cada una.  El sintoma era que un error en una
+     * funcion de la biblioteca se leia como si estuviera en el fichero del
+     * usuario, con la linea del modulo de origen -- un programa de quince
+     * lineas recibiendo errores en la 414 --.
+     */
+    uint32_t source_file = IR_NO_SOURCE_FILE;
     bool is_native = false;   ///< true si es stub para funcion nativa
     bool is_variadic = false; ///< true si acepta argc variable
     /**
@@ -2732,6 +2811,106 @@ struct IrModule {
     std::string name;                  ///< nombre del modulo (@module)
     std::vector<IrFunction> functions; ///< funciones definidas
     /**
+     * @brief Los ficheros de los que salio el codigo de este modulo.
+     *
+     * Indexada por @c IrFunction::source_file y @c InlineSite::source_file.
+     * Es la UNICA tabla: hasta ahora cada consumidor que necesitaba citar un
+     * sitio se montaba su media respuesta -- el informe de cotas ponia la ruta
+     * raiz, el ASA se quedaba con la linea a secas, el almacen de depuracion y
+     * la traza tenian cada uno su tabla, y el editor lo resolvia por su cuenta
+     * --, asi que la misma pregunta tenia seis respuestas que no coincidian.
+     *
+     * Rutas canonicas, sin repetir.  Son pocas -- una por fichero que entra al
+     * programa -- frente a los millones de instrucciones que la consultan, que
+     * es justo lo que hace que compense una tabla y un indice.
+     *
+     * INTERNADAS, y por dos motivos.  El primero es que asi la ruta no se
+     * guarda otra vez: la misma cadena ya esta en el pool porque
+     * @c SourceLoc::set_file la interna, asi que esta tabla comparte PUNTERO
+     * con la coordenada del AST -- que es justamente lo que se persigue, una
+     * sola respuesta a "que fichero es este" y no dos copias que puedan
+     * diferir.  El segundo es que buscar pasa a comparar punteros.
+     *
+     * El pool toma un cerrojo, asi que no vale para llamarlo por nodo ni por
+     * token; aqui se llama una vez por FICHERO, que son decenas en toda la
+     * compilacion.
+     *
+     * Con hueco para cuatro sin reservar: un modulo sin fusionar tiene UNO, y
+     * son la inmensa mayoria de los que se construyen.  El fusionado, que
+     * tiene tantos como ficheros lleve el programa, reserva una vez.
+     */
+    util::SmallVector<const std::string *, 4> source_files;
+
+    /**
+     * @brief Indice de @p key en @ref source_files, anyadiendolo si no estaba.
+     *
+     * Toma la cadena YA internada, que es como llega cuando se traduce la
+     * tabla de un modulo a la de otro: volver a internarla seria tomar el
+     * cerrojo del pool para obtener el puntero que ya se tenia.
+     *
+     * Busqueda lineal a proposito: la tabla tiene decenas de entradas, no
+     * miles, y compara punteros.  Un mapa costaria mas en reservas y en
+     * localidad de lo que ahorra en comparaciones.
+     *
+     * @param key Puntero del pool, o nulo.
+     * @return Su indice, o @ref IR_NO_SOURCE_FILE si no hay ruta -- que es
+     *         distinto de tener una: "no consta" y "la cadena vacia" no se
+     *         pueden confundir.
+     */
+    uint32_t intern_source_file(const std::string *key) {
+        if (key == nullptr || key->empty()) return IR_NO_SOURCE_FILE;
+        for (size_t i = 0; i < source_files.size(); ++i)
+            if (source_files[i] == key) return static_cast<uint32_t>(i);
+        source_files.push_back(key);
+        return static_cast<uint32_t>(source_files.size() - 1);
+    }
+
+    /**
+     * @brief Igual, partiendo del texto de la ruta.
+     *
+     * @param path Ruta canonica del fichero.
+     * @return Su indice, o @ref IR_NO_SOURCE_FILE si @p path viene vacio.
+     */
+    uint32_t intern_source_file(const std::string &path) {
+        if (path.empty()) return IR_NO_SOURCE_FILE;
+        return intern_source_file(util::intern_name(path));
+    }
+
+    /**
+     * @brief La ruta de un indice, o vacia si no consta.
+     *
+     * Devolver vacio en vez de una ruta inventada es lo que permite que quien
+     * pregunta pueda CALLARSE cuando no se sabe, en lugar de citar un fichero
+     * que no tiene nada que ver.
+     *
+     * @param idx Indice en @ref source_files.
+     * @return La ruta, o una cadena vacia.
+     */
+    const std::string &source_file_at(uint32_t idx) const {
+        static const std::string none;
+        return idx < source_files.size() ? *source_files[idx] : none;
+    }
+
+    /**
+     * @brief Apunta @p path como fichero de las funciones que no tengan uno.
+     *
+     * Se llama al acabar de bajar un fichero, que es el ultimo momento en que
+     * el modulo y su fuente se ven a la vez: despues el modulo se fusiona con
+     * sus dependencias y dentro conviven funciones de muchos ficheros.
+     *
+     * Solo toca las que no lo tienen: una funcion que ya sepa de donde sale
+     * -- porque se genero a partir de otra cosa, o porque vino de fuera -- no
+     * se reetiqueta.
+     *
+     * @param path Ruta canonica del fichero que se acaba de bajar.
+     */
+    void assign_source_file(const std::string &path) {
+        const uint32_t idx = intern_source_file(path);
+        if (idx == IR_NO_SOURCE_FILE) return;
+        for (IrFunction &fn : functions)
+            if (fn.source_file == IR_NO_SOURCE_FILE) fn.source_file = idx;
+    }
+    /**
      * @brief Alguna funcion pidio a donde volvera (@c IrOp::RETURN_ADDR).
      *
      * Lo pone quien la emite, que es el unico que ya lo sabe sin buscarlo.
@@ -3099,6 +3278,51 @@ bool ir_parse(const std::string &text, IrModule &out, std::string &error);
  * @return true si el modulo es valido.
  */
 bool ir_verify(const IrModule &mod, std::vector<std::string> &errors);
+
+/// De que clase es una arista del grafo de flujo.
+enum class IrEdgeKind : uint8_t {
+    Uncond,    ///< @c BR: se pasa sin preguntar.
+    True,      ///< @c BR_COND, rama tomada.
+    False,     ///< @c BR_COND, rama no tomada.
+    Exception, ///< se llega si algo LANZA dentro de la region protegida.
+};
+
+/// Una arista: de donde, a donde y de que clase.
+struct IrEdge {
+    IrBlockId from;
+    IrBlockId to;
+    IrEdgeKind kind;
+};
+
+/**
+ * @brief El grafo de flujo de @p fn, entero.
+ *
+ * POR QUE EXISTE, Y POR QUE LO PIDE TODO EL MUNDO AQUI.  Recorrer los bloques
+ * mirando el terminador es tres lineas, y por eso cada consumidor se las
+ * escribia: el diagrama de Mermaid, el de Graphviz y el de la pagina.  Tres
+ * copias de la misma lectura, que se mantienen iguales mientras nadie aprenda
+ * nada nuevo -- y en cuanto una lo aprende, las otras dos dibujan otro
+ * programa.
+ *
+ * Y LA DE EXCEPCION NO SALE DEL TERMINADOR, que es justo por lo que faltaba en
+ * las tres.  El camino al manejador lo establece un @c TRYENTER en MEDIO del
+ * bloque, y el bloque destino ya viene resuelto en @c IrInstr::target_block
+ * desde que lo bajo el frontend -- el backend del JIT lo usa para registrar su
+ * arista anormal --.  Quien solo mire la ultima instruccion no la ve, y
+ * entonces un `try/catch` no es un grafo: son dos trozos, con el `catch` sin
+ * nada que entre en el.
+ *
+ * Se ancla en el @c TRYENTER y no en el `throw` a proposito: lanzar puede
+ * hacerlo cualquier instruccion protegida -- incluida una llamada, dentro de
+ * otra funcion --, asi que una arista por cada sitio que PODRIA lanzar seria
+ * casi todas.  Lo que el `tryenter` dice es exacto: *a partir de aqui, lo que
+ * se lance acaba alli*.
+ *
+ * @param fn La funcion.
+ * @return Las aristas, en orden de bloque.  Un destino fuera de rango no se
+ *         devuelve: una arista inventada es peor que una que falta.
+ */
+std::vector<IrEdge> ir_cfg_edges(const IrFunction &fn);
 
 /**
  * @brief Escribe UNA instruccion en el mismo formato que el volcado completo.

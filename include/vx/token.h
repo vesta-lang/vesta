@@ -46,6 +46,24 @@
 namespace vx {
 
 /**
+ * @brief Si un caracter puede formar parte de un identificador de Vesta.
+ *
+ * Lo pregunta cualquiera que mire un nombre sin lexar -- el servidor de
+ * lenguaje para saber donde empieza la palabra bajo el cursor, el CFG del asm
+ * para leer una etiqueta, el indice semantico, el deshacer del aplanado --, y
+ * estaba escrita cinco veces, cada una en su fichero y ninguna alcanzable
+ * desde las otras.  La regla de que es un identificador es UNA, y vive donde
+ * vive el vocabulario lexico.
+ *
+ * @param c El caracter.
+ * @return true si es letra, digito o subrayado.
+ */
+inline bool is_ident_char(char c) noexcept {
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+           (c >= '0' && c <= '9') || c == '_';
+}
+
+/**
  * @enum TokenKind
  * @brief Categorias semanticas de los tokens del lexer Vesta.
  *

@@ -596,7 +596,7 @@ recorrer_recordado_(const std::string &raiz, const vx::CasStore &store,
  * de modulos los deja vacios.  Sin ellos, un acierto de cache perderia la
  * configuracion del asignador y el enlazado bajaria a otra funcion.
  */
-static std::vector<uint8_t> empaquetar_modulo_(const std::vector<uint8_t> &ir,
+static std::vector<uint8_t> empaquetar_modulo_(const util::ByteBuffer &ir,
                                                const std::string &alloc_sym,
                                                const std::string &free_sym) {
     std::vector<uint8_t> out;
@@ -606,7 +606,7 @@ static std::vector<uint8_t> empaquetar_modulo_(const std::vector<uint8_t> &ir,
             out.push_back((uint8_t)((len >> (i * 8)) & 0xFF));
         out.insert(out.end(), datos, datos + n);
     };
-    poner(ir.data(), ir.size());
+    poner(ir.data, ir.size);
     poner((const uint8_t *)alloc_sym.data(), alloc_sym.size());
     poner((const uint8_t *)free_sym.data(), free_sym.size());
     return out;
@@ -769,7 +769,7 @@ static bool traer_modulo_stdlib_(const std::string &path,
         std::string a, f;
         if (store->get(clave, blob) &&
             desempaquetar_modulo_(blob, ir_bytes, a, f) &&
-            ir::parse_ir_module_cache(ir_bytes, out)) {
+            ir::parse_ir_module_cache(ir_bytes.data(), ir_bytes.size(),out)) {
             if (alloc_sym) *alloc_sym = a;
             if (free_sym) *free_sym = f;
             ++tel.stdlib_cache_;
@@ -780,8 +780,9 @@ static bool traer_modulo_stdlib_(const std::string &path,
 
     vx::CompileResult r = proyecto ? vx::compile_vx_project(path, opts)
                                    : vx::compile_vx_source(src, path, opts);
-    if (!r.ok || r.ir_module_cache_bytes.empty() ||
-        !ir::parse_ir_module_cache(r.ir_module_cache_bytes, out)) {
+    if (!r.ok || r.ir_module_cache_bytes.buf.size == 0 ||
+        !ir::parse_ir_module_cache(r.ir_module_cache_bytes.buf.data,
+                                   r.ir_module_cache_bytes.buf.size, out)) {
         // Sin el motivo el mensaje del llamador no sirve de nada.
         for (const auto &d : r.diagnostics.all())
             vx::print_diagnostic(std::cerr, d);
@@ -793,7 +794,7 @@ static bool traer_modulo_stdlib_(const std::string &path,
 
     if (usar_cache)
         (void)store->put(clave,
-                         empaquetar_modulo_(r.ir_module_cache_bytes,
+                         empaquetar_modulo_(r.ir_module_cache_bytes.buf,
                                             r.aot_alloc_sym, r.aot_free_sym));
     tel.sumar_stdlib(t0);
     return true;
@@ -831,7 +832,7 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                             : (aot_tier == aot::Tier::EMBED) ? "embed"
                                                              : "full";
 
-    if (cr.ir_module_cache_bytes.empty()) {
+    if (cr.ir_module_cache_bytes.buf.size == 0) {
         std::cerr << "[aot] el modulo no produjo IR; nada que compilar a "
                      "nativo.\n";
         return EXIT_FAILURE;
@@ -841,7 +842,9 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
     // AOT necesita el static_data para materializar los literales en
     // .rodata.
     ir::IrModule aot_mod;
-    if (!ir::parse_ir_module_cache(cr.ir_module_cache_bytes, aot_mod)) {
+    if (!ir::parse_ir_module_cache(cr.ir_module_cache_bytes.buf.data,
+                                   cr.ir_module_cache_bytes.buf.size,
+                                   aot_mod)) {
         std::cerr << "[aot] no se pudo deserializar el IR del modulo.\n";
         return EXIT_FAILURE;
     }

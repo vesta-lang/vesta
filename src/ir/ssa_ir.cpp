@@ -1334,15 +1334,33 @@ void ir_print(const IrModule &mod, std::ostream &o) {
     }
     if (!mod.imports.empty()) o << "\n";
 
+    /* De que ficheros salio el codigo.  Numerada porque es a estos indices a
+     * los que apunta cada funcion y cada trozo inlinado: sin verla, el `@file
+     * 3` de mas abajo no dice nada.
+     *
+     * Importa sobre todo en un modulo FUSIONADO, que es donde conviven
+     * funciones de muchos ficheros y donde hasta ahora no habia forma de
+     * saber cual era cual. */
+    for (size_t i = 0; i < mod.source_files.size(); ++i) {
+        o << ir_dump::kSourceFile << i << " " << *mod.source_files[i] << "\n";
+    }
+    if (!mod.source_files.empty()) o << "\n";
+
     // funciones
     for (const auto &fn : mod.functions) {
+        /* Donde se escribio, si consta.  Se calla cuando no se sabe en vez de
+         * poner un cero, que se leeria como el primer fichero de la tabla. */
+        if (fn.source_file != IR_NO_SOURCE_FILE) {
+            o << ir_dump::kFile << fn.source_file << "  // "
+              << mod.source_file_at(fn.source_file) << "\n";
+        }
         // contract: si la funcion es una instanciacion de
         // un template generico, emitir las anotaciones de
         // provenance ANTES del @function.  Asi el round-trip
         // preserva el contract para C2/AOT/tools.
         if (!fn.generic_template_name.empty()) {
-            o << "@template_of " << fn.generic_template_name << "\n";
-            o << "@type_args [";
+            o << ir_dump::kTemplateOf << fn.generic_template_name << "\n";
+            o << ir_dump::kTypeArgs << "[";
             for (size_t i = 0; i < fn.generic_type_args.size(); ++i) {
                 if (i > 0) o << ", ";
                 o << fn.generic_type_args[i];
@@ -1351,7 +1369,7 @@ void ir_print(const IrModule &mod, std::ostream &o) {
         }
 
         // @function nombre(param: tipo, ...) -> tipo_retorno [flags] {
-        o << "@function " << fn.name << "(";
+        o << ir_dump::kFunction << fn.name << "(";
         bool first = true;
         for (size_t pi = 0; pi < fn.params.size(); ++pi) {
             const IrValueId pid = fn.params[pi];
@@ -2104,6 +2122,37 @@ bool ir_parse(const std::string &text, IrModule &out, std::string &error) {
     }
 
     return true;
+}
+
+std::vector<IrEdge> ir_cfg_edges(const IrFunction &fn) {
+    std::vector<IrEdge> out;
+    /* Una arista incondicional por bloque como suelo, que es la forma de casi
+     * todos; los `br.cond` anaden la segunda y los `try` son raros. */
+    out.reserve(fn.blocks.size());
+
+    const IrBlockId n = static_cast<IrBlockId>(fn.blocks.size());
+    for (const auto &bb : fn.blocks) {
+        /* El `tryenter` va en MEDIO del bloque, asi que hay que recorrerlo.  No
+         * cuesta una pasada extra: el terminador es el ultimo de este mismo
+         * recorrido, y el destino del manejador ya viene resuelto en
+         * `target_block` -- no hay ningun nombre que buscar. */
+        for (const auto &ins : bb.instrs) {
+            if (ins.op == IrOp::TRYENTER && ins.target_block < n)
+                out.push_back({bb.id, ins.target_block, IrEdgeKind::Exception});
+        }
+        if (bb.instrs.empty()) continue;
+        const IrInstr &term = bb.instrs.back();
+        if (term.op == IrOp::BR) {
+            if (term.target_block < n)
+                out.push_back({bb.id, term.target_block, IrEdgeKind::Uncond});
+        } else if (term.op == IrOp::BR_COND) {
+            if (term.target_block < n)
+                out.push_back({bb.id, term.target_block, IrEdgeKind::True});
+            if (term.false_block < n)
+                out.push_back({bb.id, term.false_block, IrEdgeKind::False});
+        }
+    }
+    return out;
 }
 
 /* =====================================================================

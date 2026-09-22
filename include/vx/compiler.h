@@ -33,7 +33,8 @@
 #include <string>
 #include <vector>
 
-#include "vx/builtin_names.h" // que builtin cubre un `@Provides`
+#include "ir/ssa_ir_serialize.h" // los buffers del intermedio y su clase
+#include "vx/builtin_names.h"    // que builtin cubre un `@Provides`
 #include "vx/diagnostic.h"
 #include "port/port_options.h"
 #include "analyze/fingerprint.h"     // FunctionContracts
@@ -424,6 +425,32 @@ void traer_asignador_del_lenguaje(ir::IrModule &mod, const CompileOptions &opts,
  * estar vacio o ser parcial.
  */
 struct CompileResult {
+    CompileResult() = default;
+    /**
+     * @brief NO se copia, y eso es parte del diseno.
+     *
+     * Dentro viven varios @c util::ByteBuffer, que son DUENOS de su memoria:
+     * copiar la estructura dejaria dos objetos apuntando al mismo bloque, y
+     * eso no falla al copiar -- falla mucho despues, al soltarlo el segundo.
+     *
+     * Moverla si vale, que es lo que hace devolverla por valor: los campos
+     * cambian de sitio y el original se queda sin ellos.  El unico caso malo
+     * es la copia, y aqui deja de compilar en vez de depender de que nadie la
+     * escriba.
+     */
+    CompileResult(const CompileResult &) = delete;
+    CompileResult &operator=(const CompileResult &) = delete;
+
+    /**
+     * @brief Moverla SI vale: lo hace cada campo por su cuenta.
+     *
+     * Los buffers de bytes son @c util::OwnedBytes, que sabe moverse y
+     * soltarse solo, asi que aqui no hay nada que escribir a mano -- ni una
+     * lista de campos que se quede corta cuando alguien anyada uno.
+     */
+    CompileResult(CompileResult &&) = default;
+    CompileResult &operator=(CompileResult &&) = default;
+
     bool ok = false; ///< Exito global.
     /**
      * @brief Lo que se supo del modulo al compilarlo.
@@ -619,8 +646,19 @@ struct CompileResult {
      * el IR y se patcha @c MethodInfo::jit_code.
      *
      * Vacio si la compilacion no produjo IR (caso de errores).
+     *
+     * Es un @c util::ByteBuffer y no un `std::vector<uint8_t>`, que es lo que
+     * era: asi el emisor escribe DIRECTAMENTE aqui -- sin copiar los ~5,75
+     * MiB que ocupa en un proyecto de 6k lineas -- y sus reservas salen en el
+     * informe bajo el nombre de su cadena en vez de mezcladas con todas las
+     * demas.
+     *
+     * Es un @c util::OwnedBytes -- el buffer mas su propiedad -- porque vive
+     * como CAMPO: se suelta cuando muere esta estructura, y al moverla el
+     * origen se queda sin el.  El buffer de dentro, @c .buf, es lo que se le
+     * pasa a cualquier frontera.
      */
-    std::vector<uint8_t> ir_section_bytes;
+    util::OwnedBytes ir_section_bytes{&ir::kIrSectionKind};
 
     /**
      * @brief  AOT: IR del modulo COMPLETO serializado (functions +
@@ -635,7 +673,7 @@ struct CompileResult {
      *
      * Vacio si la compilacion no produjo IR (caso de errores).
      */
-    std::vector<uint8_t> ir_module_cache_bytes;
+    util::OwnedBytes ir_module_cache_bytes{&ir::kIrModuleCacheKind};
 
     /// Contratos de huella (@pure/@nothrow/@nopanic/@alloc/@stack) declarados
     /// por el usuario, por nombre de funcion.  Se llevan aqui (no en el IR)
@@ -667,7 +705,7 @@ struct CompileResult {
      * Vacio si la compilacion no produjo IR o si @c emit_ir_preopt es
      * false (caso comun en builds de produccion: cero coste extra).
      */
-    std::vector<uint8_t> ir_module_cache_bytes_preopt;
+    util::OwnedBytes ir_module_cache_bytes_preopt{&ir::kIrModuleCacheKind};
 
     /**
      * @brief El modulo optimizado CON inline (mismo formato magic VXMC).
@@ -677,7 +715,7 @@ struct CompileResult {
      * @c emit_ir_preopt se optimiza sin inline para medir el cuerpo escrito.
      * Los dos salen de la misma bajada.
      */
-    std::vector<uint8_t> ir_module_cache_bytes_inlined;
+    util::OwnedBytes ir_module_cache_bytes_inlined{&ir::kIrModuleCacheKind};
 
     /// Codigo fuente generado por el transpiler IR -> lenguaje destino.
     /// Lleno solo si @c CompileOptions::port_target != "".  El contenido
@@ -797,7 +835,7 @@ struct CompileResult {
     /// Vacio si el modulo no tiene nada comptime.
     std::string comptime_vel_text;
     /// Seccion `@ir` que acompana a @c comptime_vel_text.
-    std::vector<uint8_t> comptime_ir_section_bytes;
+    util::OwnedBytes comptime_ir_section_bytes{&ir::kIrSectionKind};
     /// Clave de contenido de @c comptime_unit_source: cambia si y solo si
     /// cambia una decl comptime o una de sus dependencias.  Tocar codigo de
     /// runtime NO la mueve, que es lo que permite reusar el artefacto entre

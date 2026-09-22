@@ -933,7 +933,10 @@ void DistRuntime::handle_rspawn_(uint32_t node_idx, const VdpPayloadRspawn &req,
         // que las importaciones (calln) se resuelvan con las bibliotecas de
         // este nodo
         try {
-            new_proc = vm_.loader_public.load_executable(vm_, code_vec);
+            /* Vino por la red desde otro nodo, no de un fichero de aqui. */
+            new_proc = vm_.loader_public.load_executable(
+                vm_, code_vec,
+                loader::ArtifactOrigin::from_kind(loader::kOriginRemoteNode));
         } catch (const std::exception &e) {
             DIST_DBG("RSPAWN: load_executable excepcion: %s", e.what());
             new_proc = nullptr;

@@ -900,6 +900,18 @@ CompileResult compile_vx_source(const std::string &source,
         }
     }
 
+    /* De que fichero salio cada funcion.
+     *
+     * Se sella AQUI porque este es el ultimo sitio donde el modulo y el
+     * fichero se ven a la vez: en cuanto el modulo se fusiona con sus
+     * dependencias, dentro conviven funciones de muchos ficheros y ya no hay
+     * forma de saber cual es cual.
+     *
+     * Todas las de este modulo vienen del mismo fichero -- las sinteticas que
+     * genera la bajada tambien, porque las genera a partir de algo escrito
+     * aqui --, asi que la tabla estrena una sola entrada. */
+    irmod.assign_source_file(filename);
+
     /* Comprobar que el IR recien construido cumple sus propias reglas: cada
      * valor definido una vez, los operandos existen, y todo bloque acaba -- y
      * acaba de verdad, con el terminador el ULTIMO -- porque quien recalcula
@@ -1019,9 +1031,10 @@ CompileResult compile_vx_source(const std::string &source,
                 CompileResult vf_cr =
                     compile_vx_source(vf_src, vf_path, vf_opts);
                 ir::IrModule vf_mod;
-                if (vf_cr.ok && !vf_cr.ir_module_cache_bytes.empty() &&
-                    ir::parse_ir_module_cache(vf_cr.ir_module_cache_bytes,
-                                              vf_mod)) {
+                if (vf_cr.ok && vf_cr.ir_module_cache_bytes.buf.size != 0 &&
+                    ir::parse_ir_module_cache(
+                        vf_cr.ir_module_cache_bytes.buf.data,
+                        vf_cr.ir_module_cache_bytes.buf.size, vf_mod)) {
                     std::unordered_set<std::string> have;
                     for (const auto &f : irmod.functions)
                         have.insert(f.name);
@@ -1341,8 +1354,8 @@ CompileResult compile_vx_source(const std::string &source,
                         changed = true;
                 }
             }
-            res.ir_module_cache_bytes_preopt =
-                ir::emit_ir_module_cache(irmod_pre);
+            ir::emit_ir_module_cache(irmod_pre,
+                                     res.ir_module_cache_bytes_preopt.buf);
         }
         // Contratos de huella (@pure/@nothrow/@nopanic/@alloc/@stack): recoger
         // del AST + guardarlos en el resultado (para --analyze) + VERIFICAR
@@ -1462,8 +1475,8 @@ CompileResult compile_vx_source(const std::string &source,
             ir::IrModule con_inline = irmod_for_section;
             ir::ir_optimize(con_inline, opt_level_from_int(opts.opt_level),
                             /*allow_inline=*/true);
-            res.ir_module_cache_bytes_inlined =
-                ir::emit_ir_module_cache(con_inline);
+            ir::emit_ir_module_cache(con_inline,
+                                     res.ir_module_cache_bytes_inlined.buf);
         }
         /* Antes de optimizar, sobre el modulo COMPLETO -- el propio mas lo que
          * traen los imports, que puede venir de la cache y no de compilarlo
@@ -1686,7 +1699,7 @@ CompileResult compile_vx_source(const std::string &source,
     // para que el artefacto lleve el resultado ya calculado, y aqui no hay
     // artefacto.
     if (!util::flag_on(util::FlagId::NoCtpe) && opts.opt_level >= 2 &&
-        !opts.ir_only && !res.ir_section_bytes.empty() &&
+        !opts.ir_only && res.ir_section_bytes.buf.size != 0 &&
         !res.has_lowerable_macros) {
         ctpe::Evaluability ev = ctpe::compute_evaluability(irmod);
         std::vector<ctpe::Candidate> cands = ctpe::find_candidates(irmod, ev);
@@ -1704,8 +1717,8 @@ CompileResult compile_vx_source(const std::string &source,
             jit::jit_set_ctpe_safepoint(jit::jit_safepoint_handler_addr());
             /* Con su seccion @ir, para que el runtime pueda compilar main en
              * JIT y ejecutarlo. */
-            ctpe_rt = vx::compile_ir_and_load(irmod, emit_opts,
-                                              &res.ir_section_bytes, "ctpe");
+            ctpe_rt = vx::compile_ir_and_load(
+                irmod, emit_opts, &res.ir_section_bytes.buf, "ctpe");
             if (ctpe_rt) emit_opts.ctpe_runtime = ctpe_rt.get();
         }
     }
@@ -1805,13 +1818,20 @@ CompileResult compile_vx_source(const std::string &source,
             for (size_t v = 0; v < n; ++v)
                 fn.values[v].reg = it->second[v];
         }
-        // El intermedio que viaja dentro del artefacto: sin artefacto, sobra.
+        /* El intermedio que viaja dentro del artefacto: sin artefacto, sobra.
+         *
+         * Se escribe DIRECTAMENTE en su destino.  Aqui hubo un momento una
+         * copia -- el emisor producia su propio buffer y se volcaba al campo
+         * --, y no era poca: ~5,75 MiB en un proyecto de 6k lineas.  Se fue
+         * cuando el campo dejo de ser un `std::vector<uint8_t>`. */
         if (!opts.ir_only)
-            res.ir_section_bytes =
-                ir::emit_ir_section(mod_para_seccion.functions);
+            ir::emit_ir_section(mod_para_seccion.functions,
+                                mod_para_seccion.source_files,
+                                res.ir_section_bytes.buf);
         /*  AOT: modulo completo (functions + static_data + globals) para
          * que el driver -m aot materialice los literales en .rodata. */
-        res.ir_module_cache_bytes = ir::emit_ir_module_cache(mod_para_seccion);
+        ir::emit_ir_module_cache(mod_para_seccion,
+                                 res.ir_module_cache_bytes.buf);
     }
 
     res.vel_text = std::move(eres.vel_text);

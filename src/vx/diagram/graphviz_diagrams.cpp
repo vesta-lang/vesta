@@ -31,8 +31,9 @@
 #include "vx/diagram/graphviz_diagrams.h"
 
 #include "vx/asm/asm_diagram.h" // expansion del CFG de inline asm con coste
-#include "vx/diagram/diagram_labels.h" // como se lee cada cosa
-#include "vx/diagram/vel_text_model.h" // que se lee del .vel, comun a los dos
+#include "vx/diagram/diagram_labels.h"   // como se lee cada cosa
+#include "vx/diagram/vel_text_model.h"   // que se lee del .vel, comun a los dos
+#include "vx/module/namespace_flatten.h" // demangle_symbol: el nombre escrito
 
 #include "analyze/bigo.h"
 #include "vx/ast.h"
@@ -70,27 +71,15 @@ namespace {
  * usamos aqui.  Para nuestro caso de labels estandar quoted, no hay
  * que escapar HTML entities.
  */
-// NS: convierte el separador de mangling `__` en `.` para mostrar los nombres
-// de namespace cualificados (org__geo__shapes__area -> org.geo.shapes.area).
-// Preserva un `__` INICIAL (nombres sinteticos: __module_init, __new_X).
-static std::string ns_demangle(const std::string &s_in) {
-    std::string s;
-    s.reserve(s_in.size());
-    for (size_t i = 0; i < s_in.size();) {
-        if (i > 0 && i + 1 < s_in.size() && s_in[i] == '_' &&
-            s_in[i + 1] == '_') {
-            s.push_back('.');
-            i += 2;
-        } else {
-            s.push_back(s_in[i]);
-            ++i;
-        }
-    }
-    return s;
-}
-
-std::string escape_label(const std::string &s_raw) {
-    const std::string s = ns_demangle(s_raw);
+/**
+ * @brief Escapa para DOT lo que se dibuja TAL CUAL.
+ *
+ * El texto literal de una instruccion `.vel` se ensena verbatim: el operando
+ * tiene que poder buscarse en el fichero, y leerlo como un nombre lo cambiaba
+ * -- `@Absolute("code.__module_init")` salia `code..module_init`, que no
+ * existe --.  Los NOMBRES pasan por @c escape_label, que ademas los deshace.
+ */
+std::string escape_verbatim(const std::string &s) {
     std::string out;
     out.reserve(s.size() + 8);
     for (char c : s) {
@@ -111,15 +100,22 @@ std::string escape_label(const std::string &s_raw) {
     return out;
 }
 
+/// Un NOMBRE: se lee cualificado (@c demangle_symbol) y luego se escapa.
+std::string escape_label(const std::string &s_raw) {
+    return escape_verbatim(demangle_symbol(s_raw));
+}
+
 /**
  * @brief Escapa un string para usar en un campo de un nodo `record`.
  *
  * Records son nodos con estructura: `label="campo1 | campo2 | { sub1 | sub2
  * }"`. Los caracteres `{`, `}`, `|`, `<`, `>` son sintaxis del record y deben
  * ir escapados con `\` cuando aparecen como contenido literal.
+ *
+ * Como arriba: esta es la version VERBATIM, y @c escape_record_name la de un
+ * nombre.
  */
-std::string escape_record(const std::string &s_raw) {
-    const std::string s = ns_demangle(s_raw);
+std::string escape_record_verbatim(const std::string &s) {
     std::string out;
     out.reserve(s.size() + 8);
     for (char c : s) {
@@ -144,23 +140,16 @@ std::string escape_record(const std::string &s_raw) {
     return out;
 }
 
+/// Un NOMBRE dentro de un `record`.
+std::string escape_record(const std::string &s_raw) {
+    return escape_record_verbatim(demangle_symbol(s_raw));
+}
+
 // Forward decls.
 void render_function_body_subgraph(std::ostringstream &os,
                                    const std::string &cluster_id,
                                    const std::string &title,
                                    const ast::BlockStmt *body);
-
-size_t count_stmts(const ast::Stmt *s) {
-    if (!s) return 0;
-    if (s->kind == ast::NodeKind::BlockStmt) {
-        auto *bs = static_cast<const ast::BlockStmt *>(s);
-        size_t total = 0;
-        for (const auto &st : bs->body)
-            total += count_stmts(st.get());
-        return total > 0 ? total : 1;
-    }
-    return 1;
-}
 
 // =====================================================================
 //  Atributos por tipo de nodo (estilos visuales)
@@ -288,7 +277,8 @@ void emit_node(std::ostringstream &os, const std::string &id,
  */
 void emit_record(std::ostringstream &os, const std::string &id,
                  const std::string &record_label, const NodeStyle &st,
-                 const std::string &tooltip = "") {
+                 const std::string &tooltip = "",
+                 bool tooltip_verbatim = false) {
     os << "    " << id << " [label=\"" << record_label << "\"";
     os << ", shape=record";
     os << ", fillcolor=\"" << st.fillcolor << "\"";
@@ -297,7 +287,12 @@ void emit_record(std::ostringstream &os, const std::string &id,
     os << ", style=\"" << st.style << "\"";
     os << ", penwidth=" << st.penwidth;
     if (!tooltip.empty()) {
-        os << ", tooltip=\"" << escape_label(tooltip) << "\"";
+        // El de la vista .vel son las instrucciones tal cual: no se leen como
+        // nombres, o el texto del globo deja de ser el del nodo.
+        os << ", tooltip=\""
+           << (tooltip_verbatim ? escape_verbatim(tooltip)
+                                : escape_label(tooltip))
+           << "\"";
     }
     os << "];\n";
 }
@@ -344,22 +339,9 @@ void emit_edge(std::ostringstream &os, const std::string &from,
 void render_function_decl(std::ostringstream &os, const ast::FunctionDecl *fd,
                           const std::string &parent_id, size_t idx) {
     const std::string fid = "F_" + std::to_string(idx);
-    std::string ret_type = fmt_type(fd->return_type.get());
-    std::string title = "fn " + fd->name + "(";
-    for (size_t pi = 0; pi < fd->params.size(); ++pi) {
-        if (pi) title += ", ";
-        title +=
-            fmt_type(fd->params[pi]->type.get()) + " " + fd->params[pi]->name;
-    }
-    title += ") -> " + ret_type;
-    if (fd->is_async) title = "@Async " + title;
-    std::string body_info;
-    if (fd->body) {
-        size_t n = count_stmts(fd->body.get());
-        body_info = "body: " + std::to_string(n) + " stmts";
-    } else {
-        body_info = "(declaracion sin body)";
-    }
+    const std::string title = fmt_function_signature(*fd);
+    const std::string body_info = fmt_body_info(
+        fd->body.get(), "body: ", " stmts", "(declaracion sin body)");
     std::string tooltip = title + "\nFile: line " +
                           std::to_string(fd->loc.line) + "\n" + body_info;
     emit_node(os, fid, title + "\n" + body_info, ST_FUNC, tooltip);
@@ -374,51 +356,48 @@ void render_function_decl(std::ostringstream &os, const ast::FunctionDecl *fd,
     }
 }
 
-void render_class_decl(std::ostringstream &os, const ast::ClassDecl *cd,
-                       const std::string &parent_id, size_t idx) {
+void render_class_decl(
+    std::ostringstream &os, const ast::ClassDecl *cd,
+    const std::string &parent_id, size_t idx,
+    const std::unordered_map<std::string, uint32_t> &classes) {
     const std::string cid = "C_" + std::to_string(idx);
-    std::string title;
-    if (cd->is_interface)
-        title = "interface " + cd->name;
-    else if (cd->is_aspect)
-        title = "@Aspect class " + cd->name;
-    else if (cd->is_final)
-        title = "final class " + cd->name;
-    else
-        title = "class " + cd->name;
-    if (!cd->type_params.empty()) {
-        title += "<";
-        for (size_t i = 0; i < cd->type_params.size(); ++i) {
-            if (i) title += ",";
-            title += cd->type_params[i];
-        }
-        title += ">";
-    }
-    std::string sub = std::to_string(cd->fields.size()) + " fields, " +
-                      std::to_string(cd->methods.size()) + " methods";
+    const std::string title = fmt_class_title(*cd);
+    const std::string sub = fmt_class_summary(*cd);
     std::string tooltip =
         title + "\n" + sub + "\nLine: " + std::to_string(cd->loc.line);
     emit_node(os, cid, title + "\n" + sub, ST_CLASS, tooltip);
     emit_edge(os, parent_id, cid);
 
+    // Herencia.  Si la base esta declarada en este mismo modulo, la arista
+    // apunta a SU nodo: dibujarla siempre como referencia externa sacaba la
+    // misma clase dos veces y dejaba la jerarquia sin unir.
+    const ClassBases bases = class_bases(*cd, classes);
     if (!cd->super_name.empty()) {
-        std::string sid = cid + "_super";
-        emit_node(os, sid, cd->super_name, ST_EXTREF,
-                  "extends " + cd->super_name);
-        emit_edge(os, cid, sid, "extends", EdgeKind::Bold);
+        if (bases.super_is_local) {
+            emit_edge(os, cid, "C_" + std::to_string(bases.super), "extends",
+                      EdgeKind::Bold);
+        } else {
+            const std::string sid = cid + "_super";
+            emit_node(os, sid, cd->super_name, ST_EXTREF,
+                      "extends " + cd->super_name);
+            emit_edge(os, cid, sid, "extends", EdgeKind::Bold);
+        }
     }
-    // Interfaces consolidadas en un solo nodo lista (el padre tenia
-    // multiples hijos del mismo tipo y todos eran nodos hoja sin
-    // estructura interna).
-    if (!cd->interface_names.empty()) {
+    for (uint32_t iat : bases.local_ifaces)
+        emit_edge(os, cid, "C_" + std::to_string(iat), "implements",
+                  EdgeKind::Solid, "#9d174d");
+    // Las interfaces de FUERA siguen consolidadas en un solo nodo lista, que
+    // es lo que eran antes todas: hijos del mismo tipo y hojas sin estructura
+    // interna propia.
+    if (!bases.foreign.empty()) {
         const std::string iid = cid + "_ifaces";
         std::ostringstream lbl;
-        lbl << "Interfaces (" << cd->interface_names.size() << ")";
+        lbl << "Interfaces (" << bases.foreign.size() << ")";
         std::ostringstream tip;
         tip << cd->name << " implements:\n";
-        for (const auto &iname : cd->interface_names) {
-            lbl << "\n" << iname;
-            tip << iname << "\n";
+        for (const std::string *iname : bases.foreign) {
+            lbl << "\n" << *iname;
+            tip << *iname << "\n";
         }
         emit_node(os, iid, lbl.str(), ST_EXTREF, tip.str());
         emit_edge(os, cid, iid, "implements", EdgeKind::Solid, "#9d174d");
@@ -432,14 +411,7 @@ void render_class_decl(std::ostringstream &os, const ast::ClassDecl *cd,
         std::ostringstream tip;
         tip << cd->name << " fields:\n";
         for (const auto &f : cd->fields) {
-            std::string acc = (f.access == 1)   ? "private "
-                              : (f.access == 2) ? "protected "
-                                                : "public ";
-            std::string mods;
-            if (f.is_static) mods += "static ";
-            if (f.is_final) mods += "final ";
-            std::string line =
-                acc + mods + fmt_type(f.type.get()) + " " + f.name;
+            const std::string line = fmt_field_line(f);
             tip << line << "\n";
             lbl << "\n" << line;
         }
@@ -449,34 +421,9 @@ void render_class_decl(std::ostringstream &os, const ast::ClassDecl *cd,
     for (size_t mi = 0; mi < cd->methods.size(); ++mi) {
         const auto &m = cd->methods[mi];
         std::string mid = cid + "_m" + std::to_string(mi);
-        std::string acc = (m->access == 1)   ? "private "
-                          : (m->access == 2) ? "protected "
-                                             : "public ";
-        std::string mods;
-        if (m->is_static) mods += "static ";
-        if (m->is_final) mods += "final ";
-        if (m->is_override) mods += "@Override ";
-        if (m->is_constructor) mods += "<ctor> ";
-        if (m->is_destructor) mods += "<dtor> ";
-        if (m->is_inline) mods += "@Inline ";
-        if (m->advice_kind == 1)
-            mods += "@Before(\"" + m->advice_target + "\") ";
-        if (m->advice_kind == 2)
-            mods += "@After(\"" + m->advice_target + "\") ";
-        if (m->advice_kind == 3)
-            mods += "@Around(\"" + m->advice_target + "\") ";
-        std::string ret = m->return_type ? fmt_type(m->return_type.get())
-                                         : std::string("void");
-        std::string sig = acc + mods + ret + " " + m->name + "(";
-        for (size_t pi = 0; pi < m->params.size(); ++pi) {
-            if (pi) sig += ", ";
-            sig +=
-                fmt_type(m->params[pi]->type.get()) + " " + m->params[pi]->name;
-        }
-        sig += ")";
-        std::string body_info =
-            m->body ? (std::to_string(count_stmts(m->body.get())) + " stmts")
-                    : std::string("(abstract)");
+        const std::string sig = fmt_method_signature(*m);
+        const std::string body_info =
+            fmt_body_info(m->body.get(), "", " stmts", "(abstract)");
         std::string tooltip2 =
             sig + "\n" + body_info + "\nLine: " + std::to_string(m->loc.line);
         emit_node(os, mid, sig + "\n" + body_info, ST_METHOD, tooltip2);
@@ -496,8 +443,7 @@ void render_class_decl(std::ostringstream &os, const ast::ClassDecl *cd,
 void render_struct_decl(std::ostringstream &os, const ast::StructDecl *sd,
                         const std::string &parent_id, size_t idx) {
     const std::string sid = "S_" + std::to_string(idx);
-    std::string title = "struct " + sd->name + " (" +
-                        std::to_string(sd->fields.size()) + " fields)";
+    const std::string title = fmt_struct_title(*sd);
     std::string tooltip = title + "\nLine: " + std::to_string(sd->loc.line);
     emit_node(os, sid, title, ST_STRUCT, tooltip);
     emit_edge(os, parent_id, sid);
@@ -509,10 +455,7 @@ void render_struct_decl(std::ostringstream &os, const ast::StructDecl *sd,
         std::ostringstream tip;
         tip << sd->name << " fields:\n";
         for (const auto &f : sd->fields) {
-            std::string line = fmt_type(f.type.get()) + " " + f.name;
-            if (f.bit_width > 0) {
-                line += " : " + std::to_string(f.bit_width);
-            }
+            const std::string line = fmt_struct_field_line(f);
             tip << line << "\n";
             lbl << "\n" << line;
         }
@@ -524,8 +467,7 @@ void render_struct_decl(std::ostringstream &os, const ast::StructDecl *sd,
 void render_enum_decl(std::ostringstream &os, const ast::EnumDecl *ed,
                       const std::string &parent_id, size_t idx) {
     const std::string eid = "E_" + std::to_string(idx);
-    std::string title = "enum " + ed->name + " (" +
-                        std::to_string(ed->variants.size()) + " variants)";
+    const std::string title = fmt_enum_title(*ed);
     emit_node(os, eid, title, ST_ENUM,
               title + "\nLine: " + std::to_string(ed->loc.line));
     emit_edge(os, parent_id, eid);
@@ -537,15 +479,7 @@ void render_enum_decl(std::ostringstream &os, const ast::EnumDecl *ed,
         std::ostringstream tip;
         tip << ed->name << " variants:\n";
         for (const auto &v : ed->variants) {
-            std::string line = v.name;
-            if (!v.field_types.empty()) {
-                line += "(";
-                for (size_t i = 0; i < v.field_types.size(); ++i) {
-                    if (i) line += ", ";
-                    line += fmt_type(v.field_types[i].get());
-                }
-                line += ")";
-            }
+            const std::string line = fmt_enum_variant_line(v);
             tip << line << "\n";
             lbl << "\n" << line;
         }
@@ -576,24 +510,13 @@ void render_globals_batch(
     tip << globals.size() << " globals/constants:\n";
     // Sin truncamiento: emitimos TODOS los globals con su expresion
     // completa.  Pase 1 const, pase 2 var-globals.
-    for (const auto *gv : globals) {
-        if (!gv->is_const) continue;
-        std::string line =
-            std::string("const ") + fmt_type(gv->type.get()) + " " + gv->name;
-        if (gv->init) {
-            line += " = " + fmt_expr_brief(gv->init.get(), 32);
+    for (int pass = 0; pass < 2; ++pass) {
+        for (const auto *gv : globals) {
+            if (gv->is_const != (pass == 0)) continue;
+            const std::string line = fmt_global_line(*gv);
+            tip << line << "\n";
+            lbl << "\n" << line;
         }
-        tip << line << "\n";
-        lbl << "\n" << line;
-    }
-    for (const auto *gv : globals) {
-        if (gv->is_const) continue;
-        std::string line = fmt_type(gv->type.get()) + " " + gv->name;
-        if (gv->init) {
-            line += " = " + fmt_expr_brief(gv->init.get(), 32);
-        }
-        tip << line << "\n";
-        lbl << "\n" << line;
     }
     emit_node(os, gid, lbl.str(), ST_GLOBAL, tip.str());
     emit_edge(os, parent_id, gid);
@@ -629,14 +552,7 @@ void render_externs_batch(std::ostringstream &os,
         lbl << "\n--- " << lib << " ---";
         tip << "--- " << lib << " ---\n";
         for (const auto *ef : by_lib[lib]) {
-            std::string ret = fmt_type(ef->return_type.get());
-            std::string line = ret + " " + ef->name + "(";
-            for (size_t pi = 0; pi < ef->params.size(); ++pi) {
-                if (pi) line += ", ";
-                line += fmt_type(ef->params[pi]->type.get()) + " " +
-                        ef->params[pi]->name;
-            }
-            line += ")";
+            const std::string line = fmt_extern_line(*ef);
             tip << line << "\n";
             lbl << "\n" << line;
         }
@@ -677,60 +593,26 @@ std::string emit_stmt_node(StmtCtx &ctx, const char *kind,
 }
 
 /**
- * @brief Clasifica un stmt para fusion en `render_block`.  Misma
- *        semantica que la version Mermaid: stmts hoja consecutivos
- *        del mismo grupo se colapsan en un nodo multi-linea.
+ * @brief El estilo de nodo con el que se pinta cada clase de sentencia.
+ *
+ * Tabla plana indexada por @c StmtStyle: que sentencia funde con cual lo
+ * decide @c classify_stmt_for_fusion, que es comun a los dos formatos; esto es
+ * lo unico que DOT pone de su parte.
  */
-struct StmtFusionInfo {
-    std::string group; // empty = no fusable
-    std::string line;
-    const NodeStyle *style = nullptr;
-};
-
-StmtFusionInfo classify_stmt_for_fusion(const ast::Stmt *s) {
-    StmtFusionInfo r;
-    if (!s) return r;
-    switch (s->kind) {
-    case ast::NodeKind::VarDeclStmt: {
-        auto *v = static_cast<const ast::VarDeclStmt *>(s);
-        std::string ty = fmt_type(v->type.get());
-        std::string lbl =
-            (v->is_const ? "const " : std::string()) + ty + " " + v->name;
-        if (v->init) lbl += " = " + fmt_expr(v->init.get());
-        r.group = "var";
-        r.line = lbl;
-        r.style = &ST_VAR;
-        return r;
-    }
-    case ast::NodeKind::ExprStmt: {
-        auto *e = static_cast<const ast::ExprStmt *>(s);
-        if (!e->expr) {
-            r.group = "noop";
-            r.line = "(no-op)";
-            r.style = &ST_AUX;
-            return r;
-        }
-        auto *expr = e->expr.get();
-        r.line = fmt_expr(expr);
-        if (expr->kind == ast::NodeKind::CallExpr ||
-            expr->kind == ast::NodeKind::NewExpr) {
-            r.group = "call";
-            r.style = &ST_CALL;
-        } else if (expr->kind == ast::NodeKind::SpawnExpr ||
-                   expr->kind == ast::NodeKind::RSpawnExpr) {
-            r.group = "spawn";
-            r.style = &ST_SPAWN;
-        } else if (expr->kind == ast::NodeKind::AssignExpr) {
-            r.group = "assign";
-            r.style = &ST_ASSIGN;
-        } else {
-            r.group = "expr";
-            r.style = &ST_EXPR;
-        }
-        return r;
-    }
-    default: return r;
-    }
+const NodeStyle *stmt_style(StmtStyle st) {
+    static const NodeStyle *const k_styles[] = {
+        nullptr,    // None
+        &ST_VAR,    //
+        &ST_AUX,    //
+        &ST_CALL,   //
+        &ST_SPAWN,  //
+        &ST_ASSIGN, //
+        &ST_EXPR,   //
+    };
+    static_assert(sizeof(k_styles) / sizeof(k_styles[0]) ==
+                      static_cast<size_t>(StmtStyle::Count),
+                  "falta un estilo para una clase de sentencia");
+    return k_styles[static_cast<size_t>(st)];
 }
 
 std::string render_block(StmtCtx &ctx, const ast::BlockStmt *bs) {
@@ -771,14 +653,14 @@ std::string render_block(StmtCtx &ctx, const ast::BlockStmt *bs) {
     };
 
     for (const auto &s : bs->body) {
-        StmtFusionInfo fi = classify_stmt_for_fusion(s.get());
-        if (!fi.group.empty()) {
+        StmtFusion fi = classify_stmt_for_fusion(s.get());
+        if (fi.group) {
             if (run_group == fi.group) {
                 run_lines.push_back(fi.line);
             } else {
                 flush_run();
                 run_group = fi.group;
-                run_style = fi.style;
+                run_style = stmt_style(fi.style);
                 run_lines.push_back(fi.line);
             }
             continue;
@@ -1222,36 +1104,31 @@ void render_ir_function(std::ostringstream &os, const ir::IrFunction &fn,
         render_ir_block(os, fn, fn.blocks[bi], bid);
     }
 
-    for (size_t bi = 0; bi < fn.blocks.size(); ++bi) {
-        std::string src = fn_id + "_b" + std::to_string(bi);
-        const auto &bb = fn.blocks[bi];
-        if (bb.instrs.empty()) continue;
-        const auto &term = bb.instrs.back();
-        if (term.op == ir::IrOp::BR) {
-            if (term.target_block < fn.blocks.size()) {
-                std::string dst =
-                    fn_id + "_b" + std::to_string(term.target_block);
-                emit_edge(os, src, dst);
-            }
-        } else if (term.op == ir::IrOp::BR_COND) {
-            if (term.target_block < fn.blocks.size()) {
-                std::string dst =
-                    fn_id + "_b" + std::to_string(term.target_block);
-                emit_edge(os, src, dst, "true", EdgeKind::Solid, "#16a34a");
-            }
-            if (term.false_block < fn.blocks.size()) {
-                std::string dst =
-                    fn_id + "_b" + std::to_string(term.false_block);
-                emit_edge(os, src, dst, "false", EdgeKind::Solid, "#dc2626");
-            }
-        }
-        for (const auto &ins : bb.instrs) {
-            if ((ins.op == ir::IrOp::CALL || ins.op == ir::IrOp::TAILCALL) &&
-                !ins.func_name.empty()) {
-                intra_calls_out.insert(fn_id + ">" + ins.func_name);
-            }
+    /* Las mismas aristas que dibuja Mermaid, del mismo sitio: aqui solo cambia
+     * con que color y que trazo se escribe cada clase.  Ver `ir_cfg_edges`. */
+    for (const ir::IrEdge &e : ir::ir_cfg_edges(fn)) {
+        const std::string src = fn_id + "_b" + std::to_string(e.from);
+        const std::string dst = fn_id + "_b" + std::to_string(e.to);
+        switch (e.kind) {
+        case ir::IrEdgeKind::Uncond: emit_edge(os, src, dst); break;
+        case ir::IrEdgeKind::True:
+            emit_edge(os, src, dst, "true", EdgeKind::Solid, "#16a34a");
+            break;
+        case ir::IrEdgeKind::False:
+            emit_edge(os, src, dst, "false", EdgeKind::Solid, "#dc2626");
+            break;
+        case ir::IrEdgeKind::Exception:
+            emit_edge(os, src, dst, "exc", EdgeKind::Dashed, "#b91c1c");
+            break;
         }
     }
+
+    // Las llamadas NO son aristas de este grafo: van a otro cluster.
+    for (const auto &bb : fn.blocks)
+        for (const auto &ins : bb.instrs)
+            if ((ins.op == ir::IrOp::CALL || ins.op == ir::IrOp::TAILCALL) &&
+                !ins.func_name.empty())
+                intra_calls_out.insert(fn_id + ">" + ins.func_name);
 
     os << "    }\n";
 }
@@ -1375,6 +1252,9 @@ std::string graphviz_from_ast(const ast::ModuleNode &mod) {
     // siendo nodos individuales porque tienen estructura interna propia.
     std::vector<const ast::GlobalVarDecl *> globals;
     std::vector<const ast::ExternFnDecl *> externs;
+    // Donde esta cada clase, para que la herencia apunte al nodo de verdad.
+    const std::unordered_map<std::string, uint32_t> classes =
+        class_index_by_name(mod);
     size_t fcount = 0, ccount = 0, scount = 0, ecount = 0;
     for (const auto &dn : mod.decls) {
         if (!dn) continue;
@@ -1385,7 +1265,7 @@ std::string graphviz_from_ast(const ast::ModuleNode &mod) {
             break;
         case ast::NodeKind::ClassDecl:
             render_class_decl(os, static_cast<ast::ClassDecl *>(dn.get()), root,
-                              ccount++);
+                              ccount++, classes);
             break;
         case ast::NodeKind::StructDecl:
             render_struct_decl(os, static_cast<ast::StructDecl *>(dn.get()),
@@ -1562,13 +1442,16 @@ std::string graphviz_from_vel_text(const std::string &vel_text) {
     // emitidas por el assembler.
     for (size_t bi = 0; bi < blocks.size(); ++bi) {
         const auto &b = blocks[bi];
+        // TODO verbatim: esta vista ENSENA el .vel, asi que lo que dibuja
+        // tiene que poder buscarse en el fichero -- nombre del label incluido.
         std::ostringstream record;
         record << "{ "
-               << escape_record(b.name + ":  (" +
-                                std::to_string(b.instrs.size()) + " instrs)");
+               << escape_record_verbatim(b.name + ":  (" +
+                                         std::to_string(b.instrs.size()) +
+                                         " instrs)");
         bool has_opt = false;
         for (const auto &ins : b.instrs) {
-            record << " | " << escape_record(ins);
+            record << " | " << escape_record_verbatim(ins);
             std::string mn = get_mnemonic(ins);
             if (is_fused_instr(mn)) has_opt = true;
         }
@@ -1592,7 +1475,8 @@ std::string graphviz_from_vel_text(const std::string &vel_text) {
             tooltip << ins << "\n";
         }
         std::string node_id = "vb" + std::to_string(bi);
-        emit_record(os, node_id, record.str(), st, tooltip.str());
+        emit_record(os, node_id, record.str(), st, tooltip.str(),
+                    /*tooltip_verbatim=*/true);
     }
 
     std::unordered_map<std::string, size_t> idx_by_name;

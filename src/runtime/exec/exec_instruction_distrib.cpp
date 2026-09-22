@@ -137,7 +137,9 @@ void exec_instr_loadmod(ProcessVM *vm, const DecodedInstr &instr) {
 
     runtime::VM &vm_ref = vm->scheduler.vm_reference;
     const uint64_t init_pc =
-        vm_ref.loader_public.load_module_dynamic(vm_ref, std::move(file_bytes));
+        vm_ref.loader_public.load_module_dynamic(
+            vm_ref, std::move(file_bytes),
+            loader::ArtifactOrigin::from_file(util::intern_name(path)));
     // Tras un load exitoso, registrar el source_path en el Executable que
     // acaba de anadirse (sera el ultimo del pool).  Permite que
     // unloadmodule(path) lo localice por path mas tarde.  Si load fallo

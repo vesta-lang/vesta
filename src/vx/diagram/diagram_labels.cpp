@@ -20,10 +20,58 @@
 
 #include "vx/diagram/diagram_labels.h"
 
+#include "vx/annotation_names.h" // la grafia de una anotacion, en su tabla
+#include "vx/token.h"            // y la de una palabra clave, en el lexico
+
 #include <sstream>
 #include <string>
 
 namespace vx {
+
+namespace {
+
+/* Una PALABRA CLAVE se escribe como la escribe el lexico, y una ANOTACION como
+ * la nombra su tabla.  Ninguna de las dos se vuelve a teclear aqui: son los dos
+ * vocabularios del lenguaje y ya tienen dueno (@c token_kind_name y
+ * @c vx/annotation_names.h), asi que una segunda grafia no daria un error --
+ * daria un diagrama que dice otra cosa que el compilador. */
+inline void add_keyword(std::string &s, TokenKind k) {
+    s += token_kind_name(k);
+    s += ' ';
+}
+
+/// `@Nombre ` -- la anotacion tal y como se escribe.
+inline void add_annotation(std::string &s, const char *name) {
+    s += '@';
+    s += name;
+    s += ' ';
+}
+
+/// `@Nombre("objetivo") ` -- una anotacion de aspecto, con su pointcut.
+inline void add_advice(std::string &s, const char *name,
+                       const std::string &target) {
+    s += '@';
+    s += name;
+    s += "(\"";
+    s += target;
+    s += "\") ";
+}
+
+/* Lo que NO es vocabulario del lenguaje sino de este dibujo: separadores y
+ * rotulos.  Aqui si es una constante porque aqui es donde nace. */
+constexpr const char *kCtor = "<ctor> ";
+constexpr const char *kDtor = "<dtor> ";
+constexpr const char *kArrow = ") -> ";
+constexpr const char *kSep = ", ";
+constexpr const char *kAssign = " = ";
+constexpr const char *kOpenParen = " (";
+constexpr const char *kFieldsSep = " fields, ";
+constexpr const char *kMethods = " methods";
+constexpr const char *kFieldsEnd = " fields)";
+constexpr const char *kVariantsEnd = " variants)";
+constexpr const char *kBitWidth = " : ";
+
+} // namespace
 
 const char *binop_symbol(ast::BinOp op) {
     switch (op) {
@@ -253,10 +301,20 @@ std::string fmt_type_helper(const ast::TypeNode *tn) {
     }
     case ast::NodeKind::FunctionTypeNode: {
         auto *ft = static_cast<const ast::FunctionTypeNode *>(tn);
-        std::string s = "fn(";
+        /* `cfn` Y `fn` SON TIPOS DISTINTOS, y el nodo lo sabe (@c is_raw): uno
+         * es una direccion de ocho bytes con llamada directa, el otro un par
+         * {funcion, entorno} de dieciseis.  Escribiendo los dos como `fn`, dos
+         * firmas que NO se pueden intercambiar se leian identicas -- el caso
+         * que lo enseno son `aplica(cfn(i64)->i64)` y
+         * `aplica_lam(fn(i64)->i64)` saliendo iguales.
+         *
+         * El variadico igual: `fn(T...)` acepta cuantos le echen y `fn(T)` uno,
+         * y sin los puntos son la misma linea. */
+        std::string s = ft->is_raw ? "cfn(" : "fn(";
         for (size_t i = 0; i < ft->param_types.size(); ++i) {
             if (i) s += ",";
             s += fmt_type(ft->param_types[i].get());
+            if (ft->is_variadic && i + 1 == ft->param_types.size()) s += "...";
         }
         s += ") -> ";
         s += fmt_type(ft->return_type.get());
@@ -355,6 +413,279 @@ std::string fmt_instr(const ir::IrFunction &fn, const ir::IrInstr &ins,
         s << " (L" << ins.source_line << ")";
     }
     return s.str();
+}
+
+std::unordered_map<std::string, uint32_t>
+class_index_by_name(const ast::ModuleNode &mod) {
+    std::unordered_map<std::string, uint32_t> out;
+    /* El NUMERO, no el nombre del nodo: cada formato le pone su prefijo, que
+     * ya sabe.  Guardar aqui la cadena "C_0" seria una reserva por clase para
+     * escribir dos caracteres que el que dibuja escribe igual. */
+    uint32_t at = 0;
+    for (const auto &dn : mod.decls) {
+        if (!dn || dn->kind != ast::NodeKind::ClassDecl) continue;
+        out.emplace(static_cast<const ast::ClassDecl *>(dn.get())->name, at);
+        ++at;
+    }
+    return out;
+}
+
+ClassBases
+class_bases(const ast::ClassDecl &cd,
+            const std::unordered_map<std::string, uint32_t> &classes) {
+    ClassBases out;
+    if (!cd.super_name.empty()) {
+        const auto at = classes.find(cd.super_name);
+        if (at != classes.end()) {
+            out.super = at->second;
+            out.super_is_local = true;
+        }
+    }
+    /* Una interfaz declarada aqui tiene su propio nodo, asi que la arista va a
+     * el; las de fuera siguen consolidandose en una lista, que es lo que eran
+     * antes TODAS: hojas sin estructura propia. */
+    for (const auto &iname : cd.interface_names) {
+        const auto at = classes.find(iname);
+        if (at != classes.end())
+            out.local_ifaces.push_back(at->second);
+        else
+            out.foreign.push_back(&iname);
+    }
+    return out;
+}
+
+size_t count_stmts(const ast::Stmt *s) {
+    if (!s) return 0;
+    if (s->kind == ast::NodeKind::BlockStmt) {
+        auto *bs = static_cast<const ast::BlockStmt *>(s);
+        size_t total = 0;
+        for (const auto &st : bs->body)
+            total += count_stmts(st.get());
+        return total > 0 ? total : 1;
+    }
+    return 1;
+}
+
+std::string
+fmt_params(const std::vector<std::unique_ptr<ast::ParamDecl>> &params) {
+    std::string s;
+    for (size_t i = 0; i < params.size(); ++i) {
+        if (i) s += kSep;
+        s += fmt_type(params[i]->type.get());
+        s += ' ';
+        s += params[i]->name;
+    }
+    return s;
+}
+
+std::string fmt_function_signature(const ast::FunctionDecl &fd) {
+    std::string s;
+    if (fd.is_async) add_annotation(s, ann::kAsync);
+    add_keyword(s, TokenKind::KW_FN);
+    s += fd.name;
+    s += '(';
+    s += fmt_params(fd.params);
+    s += kArrow;
+    s += fmt_type(fd.return_type.get());
+    return s;
+}
+
+std::string fmt_body_info(const ast::BlockStmt *body, const char *prefix,
+                          const char *suffix, const char *when_empty) {
+    if (!body) return when_empty;
+    std::string s = prefix;
+    s += std::to_string(count_stmts(body));
+    s += suffix;
+    return s;
+}
+
+std::string fmt_class_title(const ast::ClassDecl &cd) {
+    std::string s;
+    if (cd.is_interface) {
+        add_keyword(s, TokenKind::KW_INTERFACE);
+    } else {
+        if (cd.is_aspect) add_annotation(s, ann::kAspect);
+        if (cd.is_final) add_keyword(s, TokenKind::KW_FINAL);
+        add_keyword(s, TokenKind::KW_CLASS);
+    }
+    s += cd.name;
+    if (!cd.type_params.empty()) {
+        s += '<';
+        for (size_t i = 0; i < cd.type_params.size(); ++i) {
+            if (i) s += ',';
+            s += cd.type_params[i];
+        }
+        s += '>';
+    }
+    return s;
+}
+
+std::string fmt_class_summary(const ast::ClassDecl &cd) {
+    std::string s = std::to_string(cd.fields.size());
+    s += kFieldsSep;
+    s += std::to_string(cd.methods.size());
+    s += kMethods;
+    return s;
+}
+
+/// La palabra del acceso, que siempre se escribe.
+static TokenKind access_keyword(uint8_t access) {
+    return access == 1   ? TokenKind::KW_PRIVATE
+           : access == 2 ? TokenKind::KW_PROTECTED
+                         : TokenKind::KW_PUBLIC;
+}
+
+std::string fmt_field_line(const ast::ClassFieldDecl &f) {
+    std::string s;
+    add_keyword(s, access_keyword(f.access));
+    if (f.is_static) add_keyword(s, TokenKind::KW_STATIC);
+    if (f.is_final) add_keyword(s, TokenKind::KW_FINAL);
+    s += fmt_type(f.type.get());
+    s += ' ';
+    s += f.name;
+    return s;
+}
+
+std::string fmt_method_signature(const ast::ClassMethodDecl &m) {
+    std::string s;
+    add_keyword(s, access_keyword(m.access));
+    if (m.is_static) add_keyword(s, TokenKind::KW_STATIC);
+    if (m.is_final) add_keyword(s, TokenKind::KW_FINAL);
+    if (m.is_override) add_annotation(s, ann::kOverride);
+    if (m.is_constructor) s += kCtor;
+    if (m.is_destructor) s += kDtor;
+    if (m.is_inline) add_annotation(s, ann::kInline);
+    // Los tres aspectos se escriben igual salvo la palabra.
+    const char *advice = m.advice_kind == 1   ? ann::kBefore
+                         : m.advice_kind == 2 ? ann::kAfter
+                         : m.advice_kind == 3 ? ann::kAround
+                                              : nullptr;
+    if (advice) add_advice(s, advice, m.advice_target);
+    s += m.return_type ? fmt_type(m.return_type.get())
+                       : std::string(token_kind_name(TokenKind::KW_VOID));
+    s += ' ';
+    s += m.name;
+    s += '(';
+    s += fmt_params(m.params);
+    s += ')';
+    return s;
+}
+
+std::string fmt_struct_title(const ast::StructDecl &sd) {
+    std::string s;
+    add_keyword(s, TokenKind::KW_STRUCT);
+    s += sd.name;
+    s += kOpenParen;
+    s += std::to_string(sd.fields.size());
+    s += kFieldsEnd;
+    return s;
+}
+
+std::string fmt_struct_field_line(const ast::StructFieldDecl &f) {
+    std::string s = fmt_type(f.type.get());
+    s += ' ';
+    s += f.name;
+    if (f.bit_width > 0) {
+        s += kBitWidth;
+        s += std::to_string(f.bit_width);
+    }
+    return s;
+}
+
+std::string fmt_enum_title(const ast::EnumDecl &ed) {
+    std::string s;
+    add_keyword(s, TokenKind::KW_ENUM);
+    s += ed.name;
+    s += kOpenParen;
+    s += std::to_string(ed.variants.size());
+    s += kVariantsEnd;
+    return s;
+}
+
+std::string fmt_enum_variant_line(const ast::EnumVariantDecl &v) {
+    std::string s = v.name;
+    if (v.field_types.empty()) return s;
+    s += '(';
+    for (size_t i = 0; i < v.field_types.size(); ++i) {
+        if (i) s += kSep;
+        s += fmt_type(v.field_types[i].get());
+    }
+    s += ')';
+    return s;
+}
+
+std::string fmt_global_line(const ast::GlobalVarDecl &gv) {
+    std::string s;
+    if (gv.is_const) add_keyword(s, TokenKind::KW_CONST);
+    s += fmt_type(gv.type.get());
+    s += ' ';
+    s += gv.name;
+    if (gv.init) {
+        s += kAssign;
+        s += fmt_expr_brief(gv.init.get(), 32);
+    }
+    return s;
+}
+
+StmtFusion classify_stmt_for_fusion(const ast::Stmt *s) {
+    StmtFusion r;
+    if (!s) return r;
+    switch (s->kind) {
+    case ast::NodeKind::VarDeclStmt: {
+        auto *v = static_cast<const ast::VarDeclStmt *>(s);
+        std::string lbl;
+        if (v->is_const) add_keyword(lbl, TokenKind::KW_CONST);
+        lbl += fmt_type(v->type.get());
+        lbl += ' ';
+        lbl += v->name;
+        if (v->init) {
+            lbl += kAssign;
+            lbl += fmt_expr(v->init.get());
+        }
+        r.group = "var";
+        r.line = std::move(lbl);
+        r.style = StmtStyle::Var;
+        return r;
+    }
+    case ast::NodeKind::ExprStmt: {
+        auto *e = static_cast<const ast::ExprStmt *>(s);
+        if (!e->expr) {
+            r.group = "noop";
+            r.line = "(no-op)";
+            r.style = StmtStyle::Aux;
+            return r;
+        }
+        auto *expr = e->expr.get();
+        r.line = fmt_expr(expr);
+        if (expr->kind == ast::NodeKind::CallExpr ||
+            expr->kind == ast::NodeKind::NewExpr) {
+            r.group = "call";
+            r.style = StmtStyle::Call;
+        } else if (expr->kind == ast::NodeKind::SpawnExpr ||
+                   expr->kind == ast::NodeKind::RSpawnExpr) {
+            r.group = "spawn";
+            r.style = StmtStyle::Spawn;
+        } else if (expr->kind == ast::NodeKind::AssignExpr) {
+            r.group = "assign";
+            r.style = StmtStyle::Assign;
+        } else {
+            r.group = "expr";
+            r.style = StmtStyle::Expr;
+        }
+        return r;
+    }
+    default: return r;
+    }
+}
+
+std::string fmt_extern_line(const ast::ExternFnDecl &ef) {
+    std::string s = fmt_type(ef.return_type.get());
+    s += ' ';
+    s += ef.name;
+    s += '(';
+    s += fmt_params(ef.params);
+    s += ')';
+    return s;
 }
 
 } // namespace vx
