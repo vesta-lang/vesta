@@ -25,6 +25,9 @@
 
 #include "lsp/document_store.h"
 #include "lsp/param_hints.h"
+#include "vx/diag/diag_catalog.h" // has_code: que ningun codigo quede mudo
+
+#include <cstdio>
 
 namespace lsp {
 
@@ -46,6 +49,27 @@ namespace {
 /// intento y no tiene por que devolver un resultado plausible.
 InspectorCtx &self(Ctx &c) {
     return static_cast<InspectorCtx &>(c);
+}
+
+/**
+ * @brief Avisa si @p code no esta en el catalogo multi-idioma.
+ *
+ * Un codigo que no esta no falla: el texto sale vacio y el esquema se publica
+ * con una herramienta sin descripcion o un parametro sin explicar.  Quien no
+ * conoce el sistema se encuentra una lista muda y no tiene como saber que falta
+ * una entrada -- la clase de silencio contra la que esta hecho el resto.
+ *
+ * El aviso sale TAMBIeN del catalogo: escribirlo aqui seria cometer el fallo
+ * que esta comprobacion existe para cazar.  Y va a stderr, que es donde puede
+ * escribir un servidor cuyo stdout es el protocolo.
+ *
+ * @param code  Codigo a comprobar.
+ * @param owner Quien lo usa, para poder nombrarlo.
+ */
+void require_text(const char *code, const char *owner) {
+    if (code == nullptr || *code == '\0' || vx::diag::has_code(code)) return;
+    std::fprintf(stderr, "%s\n",
+                 vx::diag::format("QRY.missingText", {owner, code}).c_str());
 }
 
 // -------------------------------------------------------------------------
@@ -94,6 +118,21 @@ constexpr QueryParam kLineCpuArch[] = {
 
 constexpr QueryParam kArchOnly[] = {
     optional(p::arch, DefaultValue::str("")),
+};
+
+/* El hecho se elige por lo que SIGNIFICA y no por su posicion: el almacen se
+ * reconstruye en cada compilacion, asi que un indice de la consulta anterior
+ * puede senalar a otro hecho -- y eso no falla, contesta otra cosa.  Todos
+ * opcionales: vacio = no filtrar por ese eje. */
+constexpr QueryParam kExplainParams[] = {
+    optional(p::function, DefaultValue::str("")),
+    optional(p::domain, DefaultValue::str("")),
+    optional(p::code, DefaultValue::str("")),
+    optional(p::subject, DefaultValue::uint(UINT32_MAX)),
+};
+
+constexpr QueryParam kReasonParams[] = {
+    optional(p::reason, DefaultValue::str("")),
 };
 
 // -------------------------------------------------------------------------
@@ -170,6 +209,20 @@ nlohmann::json q_asa(Ctx &c, const Args &a) {
 
 nlohmann::json q_asa_facts(Ctx &c, const Args &a) {
     return self(c).inspector->asa_facts(a.str("uri"));
+}
+
+nlohmann::json q_explain(Ctx &c, const Args &a) {
+    return self(c).inspector->explain(a.str("uri"), a.str("function"),
+                                      a.str("domain"), a.str("code"),
+                                      a.uint("subject"));
+}
+
+nlohmann::json q_unknowns(Ctx &c, const Args &a) {
+    return self(c).inspector->unknowns(a.str("uri"), a.str("reason"));
+}
+
+nlohmann::json q_never_queried(Ctx &c, const Args &a) {
+    return self(c).inspector->never_queried(a.str("uri"));
 }
 
 nlohmann::json q_instruction(Ctx &c, const Args &a) {
@@ -258,6 +311,15 @@ constexpr QueryDesc kQueries[] = {
     {"asa", "QRY.asa", {}, Needs::Document, Effect::ReadOnly, q_asa},
     {"asaFacts", "QRY.asaFacts", {}, Needs::Document, Effect::ReadOnly,
      q_asa_facts},
+    /* Las tres que EXISTIAN dentro y solo alcanzaba el volcado de texto: por
+     * que el compilador cree algo, que miro y no supo, y que supo y nadie
+     * consulto.  Cero analisis nuevo; lo unico que faltaba era la fila. */
+    {"explain", "QRY.explain", kExplainParams, Needs::Document,
+     Effect::ReadOnly, q_explain},
+    {"unknowns", "QRY.unknowns", kReasonParams, Needs::Document,
+     Effect::ReadOnly, q_unknowns},
+    {"neverQueried", "QRY.neverQueried", {}, Needs::Document, Effect::ReadOnly,
+     q_never_queried},
     {"complexity", "QRY.complexity", {}, Needs::Document, Effect::ReadOnly,
      q_complexity},
     {"functionReport", "QRY.functionReport", {}, Needs::Document,
@@ -301,6 +363,29 @@ constexpr QueryDesc kQueries[] = {
 
 void register_inspector_queries() {
     query::Registry::instance().add_array(kQueries);
+
+    /* Y se comprueba que TODO codigo de la tabla exista en el catalogo.
+     *
+     * Un codigo que no esta no falla: el texto sale vacio, y el esquema se
+     * publica con una herramienta sin descripcion y un parametro sin explicar.
+     * Quien no conoce el sistema se encuentra una lista muda y no tiene forma
+     * de saber que falta una entrada -- exactamente la clase de silencio
+     * contra la que esta construido el resto.
+     *
+     * Se comprueba AQUI y no en `query/` porque la tabla no conoce el catalogo
+     * ni debe: es la capa que junta los dos lados la que puede cruzarlos.  Y va
+     * a stderr, que es donde puede escribir un servidor cuyo stdout es el
+     * protocolo. */
+    for (const QueryDesc &d : kQueries) {
+        require_text(d.summary, d.name);
+        for (const QueryParam &q : d.params)
+            require_text(q.doc(), q.name());
+    }
+    /* Los paquetes tambien: sus parametros se publican igual que los propios
+     * de la fila, asi que tienen el mismo derecho a tener texto. */
+    for (const Needs one : {Needs::Document, Needs::Target})
+        for (const QueryParam &q : query::bundle_params(one))
+            require_text(q.doc(), q.name());
 }
 
 } // namespace lsp

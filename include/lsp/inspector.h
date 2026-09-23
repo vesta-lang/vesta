@@ -53,7 +53,12 @@
 
 #include "json.hpp"
 
+#include "analysis/asa/fact.h" // Fact: lo que devuelven las consultas del ASA
 #include "lsp/analysis_engine.h"
+
+namespace ir {
+struct IrModule;
+}
 
 namespace lsp {
 
@@ -350,6 +355,61 @@ class Inspector {
     nlohmann::json asa_facts(const std::string &uri);
 
     /**
+     * @brief La DERIVACIoN de un hecho: de que se sigue, eslabon a eslabon.
+     *
+     * Es "todo veredicto lleva su prueba" convertido en consulta.  Existia
+     * dentro (@c analysis::asa::FactStore::explain) y solo lo alcanzaba el
+     * volcado de TEXTO, asi que ni el editor ni nadie podia preguntar POR QUe
+     * el compilador cree algo.
+     *
+     * El hecho se identifica por lo que SIGNIFICA y no por su posicion: el
+     * almacen se reconstruye en cada compilacion, asi que un indice de la
+     * consulta anterior puede senalar a otro hecho -- y eso no falla, contesta
+     * otra cosa.  Si el selector encaja con varios, se devuelven todos con su
+     * derivacion; desambiguar es de quien pregunta, y callarse los demas seria
+     * elegir por el.
+     *
+     * @param uri      Documento.
+     * @param function Funcion (el nombre mangled, el que el IR usa).
+     * @param domain   Dominio del hecho (@c asa.ranges, @c asa.loops, ...).
+     * @param code     Codigo estable dentro del dominio.
+     * @param subject  Identificador del sujeto, o UINT32_MAX para no filtrar.
+     */
+    nlohmann::json explain(const std::string &uri, const std::string &function,
+                           const std::string &domain, const std::string &code,
+                           uint32_t subject);
+
+    /**
+     * @brief Los HUECOS: lo que un analisis miro y no supo, con su motivo.
+     *
+     * Por MOTIVO y no por codigo, porque es el motivo el que decide la accion:
+     * "no supe leer esta forma" se arregla escribiendo otra cosa, "solo se sabe
+     * al ejecutar" admite una guarda, y "cruza algo opaco" se arregla
+     * declarandolo.  Un consumidor que preguntara por codigos tendria que
+     * llevar la lista de cada dominio, y esa lista se queda vieja EN SILENCIO.
+     *
+     * Los dominios se recorren por @c analysis::asa::registered_producers, no
+     * por una lista escrita aqui, por el mismo motivo.
+     *
+     * @param uri    Documento.
+     * @param reason Nombre del motivo (@c shape-not-recognized, ...), o vacio
+     *               para todos.
+     */
+    nlohmann::json unknowns(const std::string &uri, const std::string &reason);
+
+    /**
+     * @brief Lo que se PRODUJO y no consulto nadie.
+     *
+     * Un hecho que no mira nadie es o trabajo tirado o conocimiento bien
+     * calculado y mal sellado que nadie encuentra.  Las dos cosas interesan, y
+     * ninguna se descubre escribiendo tests: un test cubre lo que ya
+     * sospechabas.
+     *
+     * @param uri Documento.
+     */
+    nlohmann::json never_queried(const std::string &uri);
+
+    /**
      * @brief @c vesta/targets: para que se puede compilar y mirar.
      *
      * Las arquitecturas que el generador cubre y, por cada una, las
@@ -467,6 +527,40 @@ class Inspector {
      * @param out  Recibe lo guardado si estaba.
      * @return true si estaba.
      */
+    /**
+     * @brief UN hecho, en JSON.  La forma la escribe SOLO esta funcion.
+     *
+     * La serializacion vivia dentro del bucle de @ref asa_facts.  En cuanto una
+     * segunda consulta devuelve hechos -- @ref explain, @ref unknowns --, o se
+     * comparte o se copia, y dos copias del mismo formato es como el mismo
+     * hecho acaba sin su momento en una de las dos vistas sin que nadie lo
+     * note.
+     *
+     * @param mod Modulo ya deserializado, para resolver linea y texto.
+     * @param uri Documento, para sacar la linea del fuente.
+     * @param f   El hecho.
+     */
+    nlohmann::json fact_json(const ir::IrModule &mod, const std::string &uri,
+                             const analysis::asa::Fact &f);
+
+    /**
+     * @brief Compila pidiendo TODO lo que el ASA sabe.
+     *
+     * Lo comparten las vistas del conocimiento para que ninguna pida menos que
+     * las otras -- ya paso: dos pedian el primer momento y el ultimo y se
+     * perdian el de EN MEDIO, sin fallar.
+     *
+     * @param uri  Documento.
+     * @param text Su texto.
+     * @param[out] out Resultado de compilar.
+     * @param[out] mod Modulo post-opt ya deserializado.
+     * @param[out] err Por que no se pudo, si no se pudo.
+     * @return true si hay modulo con el que contestar.
+     */
+    bool compile_for_asa(const std::string &uri, const std::string &text,
+                         vx::CompileResult &out, ir::IrModule &mod,
+                         std::string &err);
+
     bool view_cached(const std::string &key, std::string &out) const;
 
     /**

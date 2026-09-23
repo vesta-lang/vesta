@@ -4092,3 +4092,201 @@ es = "la convencion declarada pide pasar un argumento en el puntero de pila."
 [VXE942]
 en = "a call with a declared calling convention got no target or no argument block."
 es = "una llamada con convencion declarada llego sin destino o sin bloque de argumentos."
+
+# ===========================================================================
+# El CATALOGO DE CONSULTAS (query::QueryDesc).  Lo que una consulta HACE y lo
+# que significa cada parametro.
+#
+# Va aqui y no junto a la fila por lo mismo que todo lo demas: la fila lleva un
+# CoDIGO y el texto vive en un solo sitio, asi que quien pregunte lo lee en su
+# idioma.  Es lo que se publica en el esquema de herramientas, o sea lo primero
+# que ve quien no conoce el sistema.
+# ===========================================================================
+
+["QRY.param.uri"]
+en = "the document the question is about."
+es = "el documento del que se pregunta."
+
+["QRY.param.os"]
+en = "target operating system; empty = the host."
+es = "sistema operativo del objetivo; vacio = el anfitrion."
+
+["QRY.param.arch"]
+en = "target architecture; empty = the default."
+es = "arquitectura del objetivo; vacio = la de por defecto."
+
+["QRY.param.opt"]
+en = "optimization level to answer for, 0..3; -1 = the usual one."
+es = "nivel de optimizacion con el que contestar, 0..3; -1 = el habitual."
+
+["QRY.param.floatIsa"]
+en = "floating-point instruction set of the generated code; empty = default."
+es = "juego de instrucciones de coma flotante del codigo generado; vacio = el de por defecto."
+
+["QRY.param.cpu"]
+en = "microarchitecture to answer for; empty = the default."
+es = "microarquitectura para la que contestar; vacio = la de por defecto."
+
+["QRY.param.function"]
+en = "restrict the answer to this function; empty = all of them."
+es = "acotar la respuesta a esta funcion; vacio = todas."
+
+["QRY.param.phase"]
+en = "which intermediate form: before or after optimizing."
+es = "que forma del intermedio: antes o despues de optimizar."
+
+["QRY.param.kind"]
+en = "which diagram is wanted."
+es = "que diagrama se quiere."
+
+["QRY.param.format"]
+en = "how to render the diagram."
+es = "como pintar el diagrama."
+
+["QRY.param.cost"]
+en = "annotate the diagram with the cost of each part."
+es = "anotar el diagrama con el coste de cada parte."
+
+["QRY.param.tier"]
+en = "how much runtime the target admits."
+es = "cuanto runtime admite el objetivo."
+
+["QRY.param.mode"]
+en = "restrict to one execution mode; empty = the three of them."
+es = "acotar a un modo de ejecucion; vacio = los tres."
+
+["QRY.param.line"]
+en = "source line, 1-based."
+es = "linea del fuente, empezando en 1."
+
+["QRY.param.character"]
+en = "column within the line, 0-based."
+es = "columna dentro de la linea, empezando en 0."
+
+["QRY.param.domain"]
+en = "which analysis the fact comes from; empty = any."
+es = "de que analisis viene el hecho; vacio = cualquiera."
+
+["QRY.param.code"]
+en = "stable code of the fact within its domain; empty = any."
+es = "codigo estable del hecho dentro de su dominio; vacio = cualquiera."
+
+["QRY.param.subject"]
+en = "identifier of the subject the fact talks about; omit it to not filter."
+es = "identificador del sujeto del que habla el hecho; omitirlo para no filtrar."
+
+["QRY.param.reason"]
+en = "class of gap being asked about; empty = all of them."
+es = "clase de hueco por la que se pregunta; vacio = todas."
+
+["QRY.targets"]
+en = "the targets this compiler can build for, with their microarchitectures."
+es = "los objetivos para los que este compilador puede construir, con sus microarquitecturas."
+
+["QRY.functions"]
+en = "the functions of the module, with where each one starts."
+es = "las funciones del modulo, con donde empieza cada una."
+
+["QRY.bytecode"]
+en = "the bytecode the module lowers to."
+es = "el bytecode al que baja el modulo."
+
+["QRY.ir"]
+en = "the intermediate form, before or after optimizing."
+es = "el intermedio, antes o despues de optimizar."
+
+["QRY.irDiff"]
+en = "what the optimizer changed: the intermediate form before against after."
+es = "que cambio el optimizador: el intermedio de antes frente al de despues."
+
+["QRY.diagram"]
+en = "a diagram of the module: control flow, types or native code."
+es = "un diagrama del modulo: flujo de control, tipos o codigo nativo."
+
+["QRY.macroExpand"]
+en = "the source with its macros already expanded."
+es = "el fuente con sus macros ya expandidas."
+
+["QRY.comptimeValues"]
+en = "what the compiler computed while compiling, and what came out."
+es = "lo que el compilador calculo al compilar, y que salio."
+
+["QRY.asa"]
+en = "everything the compiler knows about the module, as the command line tells it."
+es = "todo lo que el compilador sabe del modulo, tal y como lo cuenta la linea de ordenes."
+
+["QRY.asaFacts"]
+en = "the same, tied to the line each thing belongs to, to show it on the code."
+es = "lo mismo, atado a la linea a la que pertenece cada cosa, para ensenarlo sobre el codigo."
+
+["QRY.explain"]
+en = "why the compiler believes a fact: the chain it follows from, link by link."
+es = "por que el compilador cree un hecho: la cadena de la que se sigue, eslabon a eslabon."
+
+["QRY.unknowns"]
+en = "what an analysis looked at and did not know, with the reason and what to do about it."
+es = "lo que un analisis miro y no supo, con el motivo y que hacer al respecto."
+
+["QRY.neverQueried"]
+en = "what was produced and nobody consulted: thrown work, or knowledge nobody can find."
+es = "lo que se produjo y no consulto nadie: trabajo tirado, o conocimiento que nadie encuentra."
+
+["QRY.complexity"]
+en = "what each function costs, in order of growth."
+es = "lo que cuesta cada funcion, en orden de crecimiento."
+
+["QRY.functionReport"]
+en = "what is declared against what is measured, function by function."
+es = "lo declarado frente a lo medido, funcion por funcion."
+
+["QRY.jitAsm"]
+en = "the native code the just-in-time compiler produces."
+es = "el codigo nativo que produce el compilador en caliente."
+
+["QRY.aotAsm"]
+en = "the native code of the standalone binary."
+es = "el codigo nativo del binario suelto."
+
+["QRY.aotCompat"]
+en = "whether this survives on the target, and what stops it."
+es = "si esto sobrevive en el objetivo, y que lo impide."
+
+["QRY.instruction"]
+en = "what the compiler understood of the instruction on this line, and what it costs."
+es = "que entendio el compilador de la instruccion de esta linea, y lo que cuesta."
+
+["QRY.asmBlock"]
+en = "a whole assembly block, with its flow and what is known of each instruction."
+es = "un bloque de ensamblador entero, con su flujo y lo que se sabe de cada instruccion."
+
+["QRY.asmFlow"]
+en = "the flow between assembly blocks, to draw it over the code."
+es = "el flujo entre bloques de ensamblador, para pintarlo sobre el codigo."
+
+["QRY.paramHints"]
+en = "the name of each parameter, to show it before its argument."
+es = "el nombre de cada parametro, para ensenarlo antes de su argumento."
+
+["QRY.symbolInfo"]
+en = "the symbol under the cursor: name, kind, signature and documentation."
+es = "el simbolo bajo el cursor: nombre, categoria, firma y documentacion."
+
+["QRY.compile"]
+en = "compiles the document and leaves the result on disk."
+es = "compila el documento y deja el resultado en disco."
+
+["QRY.compileProject"]
+en = "compiles the whole project the document belongs to."
+es = "compila el proyecto entero al que pertenece el documento."
+
+["QRY.modes"]
+en = "runs the module interpreted, compiled hot and native, and says whether the three agree."
+es = "ejecuta el modulo interpretado, compilado en caliente y nativo, y dice si los tres coinciden."
+
+# El aviso de que a una consulta le falta su texto tiene que salir del catalogo
+# como todo lo demas.  Escribirlo aqui dentro seria el mismo fallo que la
+# comprobacion existe para cazar.  {0} = la consulta o el parametro, {1} = el
+# codigo que no esta.
+["QRY.missingText"]
+en = "'{0}' uses the code '{1}', which is not in the catalog: it would be published with no text."
+es = "'{0}' usa el codigo '{1}' y no esta en el catalogo: se publicaria sin texto."

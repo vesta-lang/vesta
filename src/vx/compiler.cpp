@@ -1531,9 +1531,6 @@ CompileResult compile_vx_source(const std::string &source,
          * interpretarla distinto.  Lo mismo con `wants_stage`, que era una
          * lambda aqui y una funcion alli. */
         const std::vector<const char *> asa_wanted = opts.asa.domain_list();
-        const auto wants_stage = [&opts](const char *s) {
-            return opts.asa.wants_stage(s);
-        };
         /* El CONTENIDO del modulo.  La clave completa la arma
          * `asa_facts_key`, que le anade la configuracion -- con la capa que
          * corresponda al momento --, los mandos que cambian lo emitido y el
@@ -1546,7 +1543,7 @@ CompileResult compile_vx_source(const std::string &source,
          * fichero entero ante cualquier edicion, con lo que esa granularidad
          * no llegaba a actuar nunca. */
         const uint64_t module_id = wants_facts ? asa_module_id(filename) : 0;
-        if (wants_facts && wants_stage(analysis::asa::kStagePreOpt)) {
+        if (wants_facts && opts.asa.wants_stage(analysis::asa::kStagePreOpt)) {
             const auto s = ensure_facts(
                 irmod_for_section, res.facts, asa_wanted,
                 asa_facts_path_for_stage(
@@ -1590,7 +1587,7 @@ CompileResult compile_vx_source(const std::string &source,
          * ni antes ni despues, asi que si no se recoge aqui no se recoge. */
         ir::ir_optimize(irmod_for_section, opt_level_from_int(opts.opt_level),
                         /*allow_inline=*/!opts.emit_ir_preopt,
-                        wants_stage(analysis::asa::kStageDuringOpt) ? &res.facts
+                        opts.asa.wants_stage(analysis::asa::kStageDuringOpt) ? &res.facts
                                                                     : nullptr);
         res.tiempos.optimizar_us += static_cast<long>(
             std::chrono::duration_cast<std::chrono::microseconds>(
@@ -1601,7 +1598,7 @@ CompileResult compile_vx_source(const std::string &source,
          * que de verdad se va a emitir.  Los dos van al mismo almacen, cada
          * hecho con su momento sellado; no se contradicen, hablan de codigos
          * distintos. */
-        if (wants_facts && wants_stage(analysis::asa::kStagePostOpt)) {
+        if (wants_facts && opts.asa.wants_stage(analysis::asa::kStagePostOpt)) {
             const auto s = ensure_facts(
                 irmod_for_section, res.facts, asa_wanted,
                 asa_facts_path_for_stage(

@@ -277,6 +277,13 @@ inline constexpr ParamSpec mode{"mode", ParamType::String, "QRY.param.mode"};
 inline constexpr ParamSpec line{"line", ParamType::UInt, "QRY.param.line"};
 inline constexpr ParamSpec character{"character", ParamType::UInt,
                                      "QRY.param.character"};
+inline constexpr ParamSpec domain{"domain", ParamType::String,
+                                  "QRY.param.domain"};
+inline constexpr ParamSpec code{"code", ParamType::String, "QRY.param.code"};
+inline constexpr ParamSpec subject{"subject", ParamType::UInt,
+                                   "QRY.param.subject"};
+inline constexpr ParamSpec reason{"reason", ParamType::String,
+                                  "QRY.param.reason"};
 
 } // namespace p
 

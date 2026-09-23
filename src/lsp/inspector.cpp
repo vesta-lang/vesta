@@ -2939,16 +2939,16 @@ nlohmann::json Inspector::targets() {
         nlohmann::json micros = nlohmann::json::array();
         const uint32_t nm = vx::instr_db::microarch_count(e.isa);
         for (uint32_t i = 0; i < nm; ++i) {
-            const char *nombre = vx::instr_db::microarch_name(e.isa, i);
-            if (nombre != nullptr && *nombre != '\0') micros.push_back(nombre);
+            const char *name = vx::instr_db::microarch_name(e.isa, i);
+            if (name != nullptr && *name != '\0') micros.push_back(name);
         }
         ja["microarchs"] = std::move(micros);
 
         nlohmann::json cpus = nlohmann::json::array();
         const uint32_t nc = vx::instr_db::cpu_count(e.isa);
         for (uint32_t i = 0; i < nc; ++i) {
-            const char *nombre = vx::instr_db::cpu_name(e.isa, i);
-            if (nombre != nullptr && *nombre != '\0') cpus.push_back(nombre);
+            const char *name = vx::instr_db::cpu_name(e.isa, i);
+            if (name != nullptr && *name != '\0') cpus.push_back(name);
         }
         ja["cpus"] = std::move(cpus);
         arquitecturas.push_back(std::move(ja));
@@ -3471,6 +3471,239 @@ nlohmann::json Inspector::instruction(const std::string &uri, uint32_t line,
     return out;
 }
 
+/**
+ * @brief Compila el documento pidiendo TODO lo que el ASA sabe.
+ *
+ * Lo comparten las cuatro vistas del conocimiento, que es lo que impide que
+ * una acabe pidiendo un momento menos que las otras -- ya paso: dos pedian el
+ * primero y el ultimo y se perdian el de EN MEDIO, sin fallar.
+ *
+ * @param uri  Documento.
+ * @param text Su texto.
+ * @param[out] mod Modulo post-opt deserializado.
+ * @param[out] err Por que no se pudo, si no se pudo.
+ * @return El resultado de compilar, o nada con @p err puesto.
+ */
+bool Inspector::compile_for_asa(const std::string &uri,
+                                const std::string &text, vx::CompileResult &out,
+                                ir::IrModule &mod, std::string &err) {
+    analyze::register_asm_producer();
+    vx::CompileOptions opts;
+    opts.module_name = "main";
+    opts.asa = analysis::asa::needs_all("lsp-inspector");
+    /* Por REFERENCIA de salida y no devolviendo un puntero de monton:
+     * `CompileResult` es movible, asi que reservarlo aparte era una vuelta al
+     * monton por nada -- y es de los objetos gordos del compilador. */
+    out = compile_document(uri, text, opts);
+    if (!parse_post_opt_module(out, mod)) {
+        err = "el modulo no produjo IR (revisa los diagnosticos)";
+        return false;
+    }
+    return true;
+}
+
+nlohmann::json Inspector::explain(const std::string &uri,
+                                  const std::string &function,
+                                  const std::string &domain,
+                                  const std::string &code, uint32_t subject) {
+    if (!docs_.has(uri)) return {{"error", "documento no abierto"}};
+    const auto text_ref = docs_.text(uri);
+    ir::IrModule mod;
+    std::string err;
+    vx::CompileResult res;
+    if (!compile_for_asa(uri, *text_ref, res, mod, err)) return {{"error", err}};
+
+
+    const analysis::asa::FactStore &store = res.facts;
+    nlohmann::json matches = nlohmann::json::array();
+    for (size_t i = 0; i < store.size(); ++i) {
+        const analysis::asa::Fact &f = store.at(i);
+        const char *fn = f.about.function ? f.about.function : "";
+        const char *dom = f.what.domain ? f.what.domain : "";
+        const char *cod = f.what.code ? f.what.code : "";
+        if (!function.empty() && function != fn) continue;
+        if (!domain.empty() && domain != dom) continue;
+        if (!code.empty() && code != cod) continue;
+        if (subject != UINT32_MAX && f.about.id != subject) continue;
+
+        nlohmann::json m = fact_json(mod, uri, f);
+        /* La CADENA, que es lo que esta consulta existe para dar: los hechos de
+         * los que se sigue, en anchura y sin repetir.  El primero es el propio
+         * hecho, asi que se salta. */
+        nlohmann::json chain = nlohmann::json::array();
+        for (const analysis::asa::FactId d :
+             store.explain(static_cast<analysis::asa::FactId>(i))) {
+            if (d == static_cast<analysis::asa::FactId>(i)) continue;
+            chain.push_back(fact_json(mod, uri, store.at(d)));
+        }
+        m["derivation"] = std::move(chain);
+        matches.push_back(std::move(m));
+    }
+
+    nlohmann::json out;
+    out["matches"] = std::move(matches);
+    return out;
+}
+
+nlohmann::json Inspector::unknowns(const std::string &uri,
+                                   const std::string &reason) {
+    if (!docs_.has(uri)) return {{"error", "documento no abierto"}};
+    const auto text_ref = docs_.text(uri);
+    ir::IrModule mod;
+    std::string err;
+    vx::CompileResult res;
+    if (!compile_for_asa(uri, *text_ref, res, mod, err)) return {{"error", err}};
+
+
+    const analysis::asa::FactStore &store = res.facts;
+    nlohmann::json gaps = nlohmann::json::array();
+    /* Por MOTIVO, que es lo que decide la accion.  Y el motivo se publica con
+     * su CoDIGO del catalogo multi-idioma al lado: el nombre identifica la
+     * clase y no se traduce nunca; el codigo es por donde sale la frase, con
+     * su accion dentro, en el idioma de quien pregunta. */
+    for (size_t i = 0; i < store.size(); ++i) {
+        const analysis::asa::Fact &f = store.at(i);
+        if (f.seal.certainty != analysis::asa::Certainty::Unknown) continue;
+        const char *reason_name =
+            analysis::asa::unknown_reason_name(f.seal.unknown_reason);
+        if (!reason.empty() && reason != reason_name) continue;
+        nlohmann::json j = fact_json(mod, uri, f);
+        j["reason"] = reason_name;
+        j["reasonCode"] =
+            analysis::asa::unknown_reason_code(f.seal.unknown_reason);
+        gaps.push_back(std::move(j));
+    }
+
+    nlohmann::json out;
+    out["unknowns"] = std::move(gaps);
+    /* Y los dominios que EXISTEN, para que quien pregunte sepa contra que se
+     * esta midiendo.  Salen del registro y no de una lista escrita aqui. */
+    nlohmann::json domains = nlohmann::json::array();
+    for (const char *d : analysis::asa::registered_producers())
+        if (d != nullptr) domains.push_back(d);
+    out["domains"] = std::move(domains);
+    return out;
+}
+
+nlohmann::json Inspector::never_queried(const std::string &uri) {
+    if (!docs_.has(uri)) return {{"error", "documento no abierto"}};
+    const auto text_ref = docs_.text(uri);
+    ir::IrModule mod;
+    std::string err;
+    vx::CompileResult res;
+    if (!compile_for_asa(uri, *text_ref, res, mod, err)) return {{"error", err}};
+
+
+    const analysis::asa::FactStore &store = res.facts;
+    nlohmann::json unread = nlohmann::json::array();
+    for (const analysis::asa::FactId id : store.never_queried())
+        unread.push_back(fact_json(mod, uri, store.at(id)));
+
+    nlohmann::json out;
+    out["neverQueried"] = std::move(unread);
+    /* Con el total al lado: "cuarenta sin mirar" no dice nada sin saber si hay
+     * cincuenta o cinco mil. */
+    out["total"] = static_cast<uint64_t>(store.size());
+    /* Y PARA QUE se compilo, que aqui no es un adorno: esta vista compila el
+     * modulo para ENSENAR lo que se sabe, asi que los consumidores que
+     * normalmente leen hechos -- el optimizador, el linter -- no han corrido y
+     * sale "todos sin mirar".  Es cierto y enganaria sin esto: la pregunta
+     * util es cuantos sobran en una compilacion DE VERDAD.  Va como dato y no
+     * como frase para que quien lo lea decida, en vez de creerse un titular. */
+    out["producedFor"] = "lsp-inspector";
+    const analysis::asa::FactStore::Counts c = store.counts();
+    nlohmann::json by_certainty;
+    by_certainty["proven"] = c.proven;
+    by_certainty["inferred"] = c.inferred;
+    by_certainty["unknown"] = c.unknown;
+    out["byCertainty"] = std::move(by_certainty);
+    return out;
+}
+
+nlohmann::json Inspector::fact_json(const ir::IrModule &mod,
+                                    const std::string &uri,
+                                    const analysis::asa::Fact &f) {
+    nlohmann::json j;
+    j["line"] = linea_del_sujeto(mod, f.about);
+    j["function"] = f.about.function ? f.about.function : "";
+    j["functionDisplay"] =
+        vx::demangle_symbol(f.about.function ? f.about.function : "");
+    j["subject"] = analysis::asa::subject_kind_name(f.about.kind);
+    /* De QUE habla, no solo de que CLASE de cosa: el identificador y la
+     * operacion que lo define.  Sin esto, ocho hechos sobre ocho valores
+     * distintos de la misma linea son ocho filas identicas que dicen "valor" y
+     * no se pueden distinguir. */
+    j["subjectId"] = f.about.id;
+    j["subjectText"] = texto_del_sujeto(mod, f.about);
+    /* Y lo mismo dicho en CoDIGO.
+     *
+     * `%12 = add %7, 40` identifica sin lugar a dudas, y no sirve de nada si no
+     * se tiene el IR delante -- que es casi siempre --.  La linea del fuente es
+     * de lo que uno esta hablando cuando programa, asi que va como lo principal
+     * y la operacion del IR queda para quien la quiera. */
+    {
+        const uint32_t linea = j["line"].get<uint32_t>();
+        std::string src = linea >= 1 ? docs_.line(uri, linea - 1) : "";
+        const size_t ini = src.find_first_not_of(" \t");
+        if (ini == std::string::npos)
+            src.clear();
+        else
+            src = src.substr(ini);
+        // Una linea muy larga no cabe en una celda y tampoco hace falta entera
+        // para reconocerla.
+        if (src.size() > 120) src = src.substr(0, 117) + "...";
+        j["sourceText"] = src;
+    }
+    j["domain"] = f.what.domain ? f.what.domain : "";
+    j["code"] = f.what.code ? f.what.code : "";
+    j["a"] = f.what.a;
+    j["b"] = f.what.b;
+    j["detail"] = f.what.detail ? f.what.detail : "";
+    j["label"] = etiqueta_del_hecho(f.what);
+    j["certainty"] = analysis::asa::certainty_name(f.seal.certainty);
+    j["source"] = analysis::asa::source_name(f.seal.origin.source);
+    // El ambito importa: un hecho puede valer solo para una arquitectura o un
+    // backend, y ensenarlo sin decirlo seria mentir por omision.
+    j["isa"] = f.scope.isa ? f.scope.isa : "";
+    j["os"] = f.scope.os ? f.scope.os : "";
+    j["backend"] = f.scope.backend ? f.scope.backend : "";
+    /* Y los DOS momentos, que es el eje que faltaba y el que mas importa: sin
+     * el, "da 64 vueltas" y "da 16" salen uno al lado del otro sin nada que
+     * diga que hablan del mismo bucle ANTES y DESPUeS de desenrollarlo.  Los
+     * dos son ciertos; lo que miente es ensenarlos sin su momento.
+     *
+     * Y son DOS campos porque son dos preguntas: de que CoDIGO habla el hecho
+     * (va en la identidad del sujeto, y por eso `main:v3` antes y despues de
+     * optimizar no son el mismo valor) y EN QUe momento VALE lo que afirma (va
+     * en el alcance).  No se llaman `stage` a secas a proposito: con ese
+     * nombre, filtrar por el que no era hacia que un hecho presente pareciera
+     * ausente -- pasa de verdad, y no falla. */
+    j["aboutStage"] = f.about.stage ? f.about.stage : "";
+    j["validStage"] = f.scope.stage ? f.scope.stage : "";
+    /* COMO se llego a el.  Sin la regla y sin los hechos de los que se sigue,
+     * un hecho es una afirmacion que hay que creerse. */
+    j["rule"] = f.proof.rule ? f.proof.rule : "";
+    nlohmann::json de = nlohmann::json::array();
+    for (const analysis::asa::FactId id : f.proof.from)
+        de.push_back(id);
+    j["from"] = std::move(de);
+    /* Y quien lo emitio, con el sitio exacto que miro: el numero de valor o de
+     * bloque del que salio, que es lo que permite cruzarlo con el IR. */
+    j["producer"] = f.seal.origin.producer ? f.seal.origin.producer : "";
+    /* El ancla se ensena ENTERA -- a que apunta y cual --: con solo el numero,
+     * quien lea el volcado no puede saber si es un valor, un bloque o una
+     * linea, que es justo lo que dejo de ser ambiguo. */
+    j["site"] = f.seal.origin.site.id;
+    j["site_kind"] = analysis::asa::anchor_kind_name(f.seal.origin.site.kind);
+    /* En que se apoya, por analisis.  Grueso, pero dice si un hecho es de
+     * cosecha propia o depende de lo que otro dedujo antes. */
+    nlohmann::json apoyos = nlohmann::json::array();
+    for (const char *p : f.seal.support.on)
+        if (p != nullptr && *p != '\0') apoyos.push_back(p);
+    j["restsOn"] = std::move(apoyos);
+    return j;
+}
+
 nlohmann::json Inspector::asa_facts(const std::string &uri) {
     if (!docs_.has(uri)) return {{"error", "documento no abierto"}};
     const auto text_ref = docs_.text(uri);
@@ -3497,95 +3730,8 @@ nlohmann::json Inspector::asa_facts(const std::string &uri) {
         res.asa_summaries;
 
     nlohmann::json hechos = nlohmann::json::array();
-    for (size_t i = 0; i < facts_store.size(); ++i) {
-        const analysis::asa::Fact &f = facts_store.at(i);
-        nlohmann::json j;
-        j["line"] = linea_del_sujeto(mod, f.about);
-        j["function"] = f.about.function ? f.about.function : "";
-        j["functionDisplay"] =
-            vx::demangle_symbol(f.about.function ? f.about.function : "");
-        j["subject"] = analysis::asa::subject_kind_name(f.about.kind);
-        // De QUE habla, no solo de que CLASE de cosa: el identificador y la
-        // operacion que lo define.  Sin esto, ocho hechos sobre ocho valores
-        // distintos de la misma linea son ocho filas identicas que dicen
-        // "valor" y no se pueden distinguir.
-        j["subjectId"] = f.about.id;
-        j["subjectText"] = texto_del_sujeto(mod, f.about);
-        /* Y lo mismo dicho en CoDIGO.
-         *
-         * `%12 = add %7, 40` identifica sin lugar a dudas, y no sirve de nada
-         * si no se tiene el IR delante -- que es casi siempre --.  La linea del
-         * fuente es de lo que uno esta hablando cuando programa, asi que va
-         * como lo principal y la operacion del IR queda para quien la quiera.
-         */
-        {
-            const uint32_t linea = j["line"].get<uint32_t>();
-            std::string src = linea >= 1 ? docs_.line(uri, linea - 1) : "";
-            const size_t ini = src.find_first_not_of(" \t");
-            if (ini == std::string::npos)
-                src.clear();
-            else
-                src = src.substr(ini);
-            // Una linea muy larga no cabe en una celda y tampoco hace falta
-            // entera para reconocerla.
-            if (src.size() > 120) src = src.substr(0, 117) + "...";
-            j["sourceText"] = src;
-        }
-        j["domain"] = f.what.domain ? f.what.domain : "";
-        j["code"] = f.what.code ? f.what.code : "";
-        j["a"] = f.what.a;
-        j["b"] = f.what.b;
-        j["detail"] = f.what.detail ? f.what.detail : "";
-        j["label"] = etiqueta_del_hecho(f.what);
-        j["certainty"] = analysis::asa::certainty_name(f.seal.certainty);
-        j["source"] = analysis::asa::source_name(f.seal.origin.source);
-        // El ambito importa: un hecho puede valer solo para una arquitectura o
-        // un backend, y ensenarlo sin decirlo seria mentir por omision.
-        j["isa"] = f.scope.isa ? f.scope.isa : "";
-        j["os"] = f.scope.os ? f.scope.os : "";
-        j["backend"] = f.scope.backend ? f.scope.backend : "";
-        /* Y los DOS momentos, que es el eje que faltaba y el que mas importa:
-         * sin el, "da 64 vueltas" y "da 16" salen uno al lado del otro sin
-         * nada que diga que hablan del mismo bucle ANTES y DESPUeS de
-         * desenrollarlo.  Los dos son ciertos; lo que miente es ensenarlos sin
-         * su momento.
-         *
-         * Y son DOS campos porque son dos preguntas: de que CoDIGO habla el
-         * hecho (va en la identidad del sujeto, y por eso `main:v3` antes y
-         * despues de optimizar no son el mismo valor) y EN QUe momento VALE lo
-         * que afirma (va en el alcance).  No se llaman `stage` a secas a
-         * proposito: con ese nombre, filtrar por el que no era hacia que un
-         * hecho presente pareciera ausente -- pasa de verdad, y no falla. */
-        j["aboutStage"] = f.about.stage ? f.about.stage : "";
-        j["validStage"] = f.scope.stage ? f.scope.stage : "";
-
-        /* COMO se llego a el.  Es la mitad que faltaba: sin la regla y sin los
-         * hechos de los que se sigue, un hecho es una afirmacion que hay que
-         * creerse.  Con ellos se puede recorrer la derivacion hacia atras --
-         * que es lo que el modelo llama "todo veredicto lleva su prueba" y lo
-         * que el editor estaba tirando --. */
-        j["rule"] = f.proof.rule ? f.proof.rule : "";
-        nlohmann::json de = nlohmann::json::array();
-        for (const analysis::asa::FactId id : f.proof.from)
-            de.push_back(id);
-        j["from"] = std::move(de);
-        /* Y quien lo emitio, con el sitio exacto que miro: el numero de valor o
-         * de bloque del que salio, que es lo que permite cruzarlo con el IR. */
-        j["producer"] = f.seal.origin.producer ? f.seal.origin.producer : "";
-        /* El ancla se ensena ENTERA -- a que apunta y cual --: con solo el
-         * numero, quien lea el volcado no puede saber si es un valor, un bloque
-         * o una linea, que es justo lo que dejo de ser ambiguo. */
-        j["site"] = f.seal.origin.site.id;
-        j["site_kind"] =
-            analysis::asa::anchor_kind_name(f.seal.origin.site.kind);
-        /* En que se apoya, por analisis.  Grueso, pero dice si un hecho es de
-         * cosecha propia o depende de lo que otro dedujo antes. */
-        nlohmann::json apoyos = nlohmann::json::array();
-        for (const char *p : f.seal.support.on)
-            if (p != nullptr && *p != '\0') apoyos.push_back(p);
-        j["restsOn"] = std::move(apoyos);
-        hechos.push_back(std::move(j));
-    }
+    for (size_t i = 0; i < facts_store.size(); ++i)
+        hechos.push_back(fact_json(mod, uri, facts_store.at(i)));
 
     /* Que MIRA cada analisis, en una frase.
      *
@@ -3605,7 +3751,7 @@ nlohmann::json Inspector::asa_facts(const std::string &uri) {
         return std::string();
     };
 
-    nlohmann::json dominios = nlohmann::json::array();
+    nlohmann::json domains = nlohmann::json::array();
     for (const auto &r : summaries) {
         nlohmann::json j;
         j["domain"] = r.domain ? r.domain : "";
@@ -3626,12 +3772,12 @@ nlohmann::json Inspector::asa_facts(const std::string &uri) {
             motivos.push_back(std::move(jm));
         }
         j["unknown"] = std::move(motivos);
-        dominios.push_back(std::move(j));
+        domains.push_back(std::move(j));
     }
 
     nlohmann::json out;
     out["facts"] = std::move(hechos);
-    out["domains"] = std::move(dominios);
+    out["domains"] = std::move(domains);
     return out;
 }
 
