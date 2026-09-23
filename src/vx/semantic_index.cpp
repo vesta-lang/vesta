@@ -3,7 +3,6 @@
  * @brief Implementacion del indice semantico por-declaracion (ver
  *        semantic_index.h).
  */
-#include "util/fnv.h" // la semilla y el primo, en UN sitio
 #include "vx/semantic_index.h"
 
 #include <algorithm>
@@ -15,6 +14,7 @@
 #include <unordered_set>
 
 #include "vx/diagnostic.h"
+#include "vx/source_hash.h" // la huella de TOKENS, no de bytes
 #include "vx/token.h" // is_ident_char: que es un identificador, lo dice el lexico
 #include "vx/module/module_resolver.h"
 
@@ -22,15 +22,6 @@ namespace vx {
 
 namespace {
 
-/// @brief FNV-1a 64 bits sobre un rango de bytes.
-uint64_t fnv1a64(const char *data, size_t n) {
-    uint64_t h = util::kFnvOffset;
-    for (size_t i = 0; i < n; ++i) {
-        h ^= static_cast<uint8_t>(data[i]);
-        h *= util::kFnvPrime;
-    }
-    return h;
-}
 
 /// @brief Nombre de una declaracion top-level (vacio si no aplica).
 std::string decl_name(const ast::Node *d) {
@@ -210,7 +201,6 @@ SemanticIndex build_semantic_index(const ast::ModuleNode &mod,
                                    const std::string &module_path) {
     SemanticIndex idx;
     idx.module_path = module_path;
-    idx.module_hash = fnv1a64(source.data(), source.size());
 
     // 1. Aplanar todas las decls con nombre (recorriendo namespaces) y
     //    ordenarlas por offset: los spans son [offset[i], offset[i+1]).
@@ -228,7 +218,22 @@ SemanticIndex build_semantic_index(const ast::ModuleNode &mod,
         module_simple_names.insert(simple_name(f.qname));
 
     const uint32_t src_end = static_cast<uint32_t>(source.size());
-    idx.symbols.reserve(flat.size());
+
+    /* Los tramos primero, y TODAS las huellas de una sola pasada.
+     *
+     * De TOKENS y no de bytes, que es lo que este indice promete -- una huella
+     * "estable frente a su POSICIoN" --: con los bytes crudos, anyadir un
+     * comentario dentro de una funcion o cambiar sus tabuladores por espacios
+     * la movia, y el simbolo contaba como cambiado junto con TODO su cierre
+     * transitivo.  Medido: `factorial` cambiaba de huella por un comentario, y
+     * otra vez por reindentar, sin tocar una sola linea de codigo.
+     *
+     * Es la misma leccion que la cache de MoDULO ya habia aprendido y pagado
+     * -- *"tocar un comentario costaba mas que cambiar el cuerpo de una
+     * funcion"* --, aplicada aqui, que es donde de verdad importa: este indice
+     * existe PARA bajar la granularidad de la invalidacion. */
+    std::vector<SourceSpan> spans;
+    spans.reserve(flat.size());
     for (size_t k = 0; k < flat.size(); ++k) {
         const uint32_t beg = flat[k].offset;
         const uint32_t end =
@@ -236,15 +241,26 @@ SemanticIndex build_semantic_index(const ast::ModuleNode &mod,
         // Defensa: offsets fuera de rango o invertidos -> span vacio.
         const uint32_t b = beg <= src_end ? beg : src_end;
         const uint32_t e = (end >= b && end <= src_end) ? end : src_end;
-        const uint32_t len = e - b;
+        spans.push_back(SourceSpan{b, e - b});
+    }
+    /* Sin las lineas: el indice promete ser estable frente a la POSICIoN, y
+     * meterlas aqui traeria el mismo problema por otra puerta -- un comentario
+     * ANTES de una funcion desplaza las suyas --.  La regla del proyecto es que
+     * la posicion entra en la clave solo cuando el artefacto la lleva, y esto
+     * es un indice de dependencias, no un artefacto con depuracion dentro. */
+    const TokenHashes hashes =
+        hash_tokens_by_span(source, /*with_lines=*/false, spans);
+    idx.module_hash = hashes.whole;
 
+    idx.symbols.reserve(flat.size());
+    for (size_t k = 0; k < flat.size(); ++k) {
         SymbolEntry se;
         se.name = flat[k].qname;
         se.kind = flat[k].kind;
-        se.src_offset = b;
-        se.src_length = len;
+        se.src_offset = spans[k].offset;
+        se.src_length = spans[k].length;
         se.is_public = flat[k].is_public;
-        se.content_hash = fnv1a64(source.data() + b, len);
+        se.content_hash = hashes.spans[k];
         /* La cabeza va al pozo: una cadena por tipo distinto, no por
          * simbolo.  Lineal porque son pocas -- los tipos que el modulo usa
          * como primer parametro --, y esto corre una vez por declaracion. */
@@ -260,7 +276,7 @@ SemanticIndex build_semantic_index(const ast::ModuleNode &mod,
         // Deps: identificadores del span que sean nombre de OTRO simbolo del
         // modulo (excluyendo el propio nombre simple).
         std::unordered_set<std::string> ids;
-        scan_identifiers(source.data() + b, len, ids);
+        scan_identifiers(source.data() + spans[k].offset, spans[k].length, ids);
         const std::string self_simple = simple_name(flat[k].qname);
         for (const auto &id : ids) {
             if (id == self_simple) continue;
@@ -288,7 +304,12 @@ namespace {
 constexpr uint32_t VXIDX_MAGIC = 0x58495856u; // 'VXIX' little-endian
 // Ecosistema alpha: SIN compat de versiones.  Un sidecar con version distinta
 // se rechaza y se regenera; no hay ramas de parseo legacy.
-constexpr uint16_t VXIDX_VERSION = 3; // v3: la cabeza del receptor
+/* v4: las huellas pasan a ser de TOKENS y no de bytes.  El formato no cambia
+ * -- los mismos campos, del mismo tamanyo --, pero lo que SIGNIFICAN si: un
+ * sidecar de antes trae huellas de otra cuenta, y compararlas contra las nuevas
+ * diria que ha cambiado todo el modulo.  Seria seguro (se recompila de mas) y
+ * desconcertante; rechazarlo por version lo dice en vez de disimularlo. */
+constexpr uint16_t VXIDX_VERSION = 4; // v4: huellas de tokens (v3: del receptor)
 
 void put_u16(std::vector<uint8_t> &b, uint16_t v) {
     b.push_back(v & 0xFF);

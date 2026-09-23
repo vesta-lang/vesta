@@ -1022,7 +1022,18 @@ target_link_options(vm PRIVATE
         -Wl,--gc-sections          # Elimina funciones/datos no usados
 
         # --- Reducción de tamaño ---
-        -Wl,--strip-all            # Elimina todos los símbolos
+        # El estripado se puede quitar con `-DVESTA_KEEP_SYMBOLS=ON`, y hace
+        # falta para una clase de fallo concreta: la que SOLO aparece con la
+        # disposición de Release.
+        #
+        # Para eso no sirve Profile: añade `-fno-omit-frame-pointer`, que
+        # cambia el marco y mueve la escritura fuera de rango a relleno --
+        # medido, 0 de 20 reproducciones donde Release da 5 de 30 --.  Ni
+        # Debug, por lo mismo.  Lo que hace falta es Release TAL CUAL con los
+        # nombres de sus funciones, y esos vienen de no estripar, no de `-g`
+        # (ver la nota de `-g1` mas arriba).  Por defecto se estripa, como
+        # siempre.
+        $<$<NOT:$<BOOL:${VESTA_KEEP_SYMBOLS}>>:-Wl,--strip-all>
         -Wl,--as-needed            # Solo enlaza libs realmente usadas
         -Wl,--build-id=none        # No genera build-id (reduce tamaño)
 

@@ -50,8 +50,20 @@ namespace vx {
  * cambiar un digito rompe el enlace, y el fallo seria mudo: el despachador no
  * encuentra la funcion.
  *
- * Los tres primeros argumentos son fijos -- el proceso, la clave y cuantos
- * argumentos reales hay -- y detras van los del usuario.
+ * Los argumentos del usuario NO viajan como argumentos de la llamada al
+ * despachador: van a un BLOQUE de memoria del anfitrion y lo que se pasa es su
+ * direccion.  Son cuatro cosas fijas -- el proceso, la clave, cuantos son y
+ * donde estan --, sean cuantos sean.
+ *
+ * Es lo unico que no pone un tope.  Pasandolos como argumentos, el despachador
+ * tiene que declarar tantos parametros como quepan, y cualquier numero que se
+ * escriba ahi es un limite del LENGUAJE metido por la puerta de atras: el
+ * anterior eran seis, y una llamada con siete perdia el septimo sin decir nada
+ * -- el septimo de `NtAllocateVirtualMemory` es su proteccion de pagina --.
+ *
+ * Y del ANFITRION (@c host_alloca) porque quien lo lee es codigo nativo: la
+ * memoria de la maquina es paginada, asi que una direccion suya solo vale
+ * dentro de su pagina y no se le puede dar a una funcion de fuera.
  *
  * @param label   El nombre con el que la funcion quedo registrada.
  * @param e       La llamada.
@@ -63,22 +75,50 @@ bool Lowering::emit_naked_dispatch(const std::string &label, ast::CallExpr *e,
                                    ir::IrType ret_ir, ir::IrValueId &out_dst) {
     out_mod_->register_native_import("vrt", "naked_dispatch");
 
-    std::vector<ir::IrValueId> arg_ids;
-    arg_ids.reserve(e->args.size() + 3);
-    arg_ids.push_back(emit_getproc(e->loc.line));
-    arg_ids.push_back(emit_const(
-        ir::IrType::I64, jit::fnv1a64_name(label.c_str()), e->loc.line));
-    arg_ids.push_back(emit_const(
-        ir::IrType::I64, static_cast<uint64_t>(e->args.size()), e->loc.line));
+    const size_t nargs = e->args.size();
 
-    for (auto &a : e->args) {
-        const ir::IrValueId av = lower_expr(a.get());
+    /* El bloque de los valores, uno por argumento.  Se reserva aunque no haya
+     * ninguno: asi el despachador recibe siempre una direccion y no tiene que
+     * distinguir el caso vacio. */
+    const ir::IrValueId v_block = fn_->new_value(ir::IrType::PTR);
+    {
+        ir::IrInstr al{};
+        al.op = ir::IrOp::ALLOCA;
+        al.type = ir::IrType::I8;
+        al.dst = v_block;
+        al.imm = static_cast<uint64_t>((nargs == 0 ? 1 : nargs) * 8);
+        al.host_alloca = true;
+        al.source_line = e->loc.line;
+        emit(current_block_, std::move(al));
+        fn_->values[v_block].memory = ir::MemorySpace::HostByConstruction;
+    }
+
+    for (size_t ai = 0; ai < nargs; ++ai) {
+        const ir::IrValueId av = lower_expr(e->args[ai].get());
         if (av == ir::IR_NO_VALUE) {
             out_dst = ir::IR_NO_VALUE;
             return false;
         }
-        arg_ids.push_back(av);
+        /* A su hueco.  Todos ocupan ocho bytes: el despachador reparte
+         * palabras, y que un argumento sea mas estrecho lo sabe la
+         * declaracion del llamado, no esto. */
+        ir::IrValueId v_at = v_block;
+        if (ai != 0) {
+            const ir::IrValueId v_off = emit_const(
+                ir::IrType::I64, static_cast<uint64_t>(ai * 8), e->loc.line);
+            v_at = emit_ptr_add(v_block, v_off, e->loc.line);
+        }
+        emit_store_typed(v_at, av, ir::IrType::I64, e->loc.line);
     }
+
+    std::vector<ir::IrValueId> arg_ids;
+    arg_ids.reserve(4);
+    arg_ids.push_back(emit_getproc(e->loc.line));
+    arg_ids.push_back(emit_const(
+        ir::IrType::I64, jit::fnv1a64_name(label.c_str()), e->loc.line));
+    arg_ids.push_back(
+        emit_const(ir::IrType::I64, static_cast<uint64_t>(nargs), e->loc.line));
+    arg_ids.push_back(v_block);
 
     out_dst =
         (ret_ir == ir::IrType::VOID) ? ir::IR_NO_VALUE : fn_->new_value(ret_ir);

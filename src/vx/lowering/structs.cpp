@@ -28,6 +28,7 @@
 #include "vx/comptime/comptime_introspect.h"
 #include "util/os/thread_slot.h" // el estado por hilo NO va en thread_local
 #include "ir/ir_type_info.h" // vocabulario UNICO de anchura/clase de un IrType
+#include "vx/diag/diag_catalog.h" // lo que lee una persona sale del catalogo
 #include <algorithm>
 #include <functional>
 #include <map>
@@ -80,7 +81,18 @@ void Lowering::emit_struct_field_defaults(ir::IrValueId base_addr,
         }
         // Campo escalar con default comptime-constante: lower + STORE.
         ir::IrValueId v_val = lower_expr(fi.default_init);
-        if (v_val == ir::IR_NO_VALUE) continue;
+        if (v_val == ir::IR_NO_VALUE) {
+            /* Y si el default NO baja, se DICE.  Esto era un `continue`, o sea
+             * que el campo se quedaba con lo que hubiera -- cero -- y nadie
+             * avisaba: un default que no se aplica no da un error, da otro
+             * valor.  Donde mordio fue en un campo PUNTERO A FUNCION
+             * (`resolve_syscall resolve_method = resolve;`): el cero es una
+             * direccion, asi que el programa compilaba, arrancaba y se moria al
+             * llamar, lejos de aqui y sin relacion aparente con el default. */
+            error_at(fi.default_init->loc,
+                     vx::diag::format("VX2135", {fi.name, lay.name}));
+            continue;
+        }
         const ir::IrType ir_ft = ir_type_from_primitive(fi.type.kind);
         v_val = cast_if_needed(v_val, fn_->values[v_val].type, ir_ft, line,
                                /*is_explicit=*/true);

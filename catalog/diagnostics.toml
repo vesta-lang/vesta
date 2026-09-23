@@ -649,6 +649,17 @@ es = "un artefacto de origen desconocido"
 en = "the artifact handed in by the program embedding the VM"
 es = "el artefacto que entrego el programa que empotra la VM"
 
+# Llamar a una funcion @Naked: el despachador recibe los argumentos en un
+# bloque, y lo que no puede hacer lo DICE.  Recortar en silencio dejaba al
+# llamado leyendo un registro que nadie habia puesto.
+[VX7044]
+en = "the call to '{0}' says it has arguments but hands in no block holding them"
+es = "la llamada a '{0}' dice traer argumentos pero no entrega el bloque que los guarda"
+
+[VX7045]
+en = "the call to '{0}' passes {1} arguments by the platform convention, and only {2} can be placed that way; declare where they go with register(\"...\") on its parameters"
+es = "la llamada a '{0}' pasa {1} argumentos por la convencion de la plataforma, y por ahi solo se pueden colocar {2}; di por donde van con register(\"...\") en sus parametros"
+
 # --- diagramas (VX7050-VX7059) ---
 
 [VX7050]
@@ -4043,6 +4054,13 @@ es = "la cadena de definiciones era demasiado larga para seguirla"
 [VX2134]
 en = "[fnaddr] addresses={0} crossing={1} (native-call={2} inline-asm={3} store={4} return={5} via-callee={6})"
 es = "[fnaddr] direcciones={0} cruzan={1} (llamada-nativa={2} asm={3} almacen={4} retorno={5} por-callee={6})"
+
+# Un default que no se aplica no da un error, da otro valor: el campo se queda
+# a cero.  Y cero es una direccion valida, asi que en un campo puntero a
+# funcion el programa compila, arranca y se muere al llamar.
+[VX2135]
+en = "the default value of field '{0}' of '{1}' could not be lowered, so the field would be left at zero"
+es = "el valor por defecto del campo '{0}' de '{1}' no se ha podido bajar, asi que el campo quedaria a cero"
 
 # Una convencion de llamada DECLARADA que no se puede cumplir.  No se apana ni
 # se devuelve un valor cualquiera: para el nucleo NT el cero es STATUS_SUCCESS,

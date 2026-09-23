@@ -123,6 +123,22 @@ enum class AbiCallReason : uint8_t {
 const char *abi_call_reason_code(AbiCallReason r);
 
 /**
+ * @brief La ranura que nombra @p name en el banco del objetivo activo.
+ *
+ * Vive aqui y no en quien pregunta porque un nombre de registro es de una
+ * ISA: `r10` es de x86-64, `x10` de arm64, y el numero que le toca a cada uno
+ * lo sabe el GENERADOR.  Quien baja una llamada solo tiene el texto que puso
+ * el programador en `register("...")`, y no tiene por que saber de que
+ * arquitectura es.
+ *
+ * @param name Nombre del registro, tal cual se escribio en la declaracion.
+ * @param out  Recibe la ranura si el nombre es de este objetivo.
+ * @return @c false si el nombre no nombra ningun registro de aqui -- que NO es
+ *         lo mismo que "va por la pila", y por eso se distingue.
+ */
+bool abi_call_slot_of(const std::string &name, uint16_t *out);
+
+/**
  * @brief Construye (o reutiliza) el thunk del objetivo activo para la
  *        convencion @p slots.
  *

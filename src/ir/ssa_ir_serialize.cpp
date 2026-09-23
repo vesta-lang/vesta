@@ -1574,4 +1574,15 @@ bool parse_ir_module_cache(const uint8_t *data, size_t len, IrModule &out) {
     return true;
 }
 
+void adopt_cached_module(IrModule &dst, IrModule &&src) {
+    /* Esta lista es la de lo que rellena @ref parse_ir_module_cache, que esta
+     * justo encima.  Se tocan juntas; ver la cabecera para las tres veces que
+     * olvidarse de un campo aqui costo un fallo mudo. */
+    dst.functions = std::move(src.functions);
+    dst.source_files = std::move(src.source_files);
+    dst.static_data = std::move(src.static_data);
+    dst.globals = std::move(src.globals);
+    dst.native_imports = std::move(src.native_imports);
+}
+
 } // namespace ir

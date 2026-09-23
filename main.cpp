@@ -4413,8 +4413,31 @@ int main(int argc, char *argv[]) {
          * cache: `cache_path` es donde el artefacto del comptime se CONSTRUYE,
          * y esta compilacion lo necesita para ejecutar codigo al compilar.  Lo
          * que sobra al medir es heredar el de antes, no producir el propio. */
-        const bool cache_hit =
-            !util::cache_disabled() && std::filesystem::exists(cache_path);
+        /* Y NO SE HEREDA DE OTRA COMPILACION, aunque el fichero este.
+         *
+         * Esta clave sale del fuente RAIZ -- su ruta y el texto de sus macros
+         * --, y eso no describe el artefacto: el artefacto se construye desde
+         * `cr.comptime_vel_text`, que es la emision del IR ya bajado, con los
+         * tipos de TODOS los modulos que el codigo comptime toca.  Cambiar un
+         * campo de un struct de OTRO modulo cambia lo que el artefacto debe
+         * ser y no cambia esta clave, asi que se servia el de antes: los
+         * desplazamientos bailan y el comptime lee un campo por otro.
+         *
+         * Ya mordio dos veces, y las dos igual de mudas: cuatro casos
+         * devolviendo 0 donde esperaban 42 -- de ahi que la version del
+         * formato entre en la clave, arriba --, y un acceso invalido a 0x1 al
+         * quitarle dos `bool` a un struct de `std.syscall.abi`, que desde
+         * fuera parecia que el compilador estaba roto.
+         *
+         * Reproducido en veinte lineas y aislado a este cajon: con el borrado
+         * compila, con el puesto revienta.  Y medido en cinco ejemplos mas un
+         * banco de ocho macros pesadas hecho a proposito, heredarlo no ahorra
+         * tiempo NINGUNO -- el cajon se puebla y no paga --.  Una cache que no
+         * ahorra y puede servir lo que no es, solo aporta su modo de fallo.
+         *
+         * El artefacto se sigue CONSTRUYENDO aqui, que es lo que esta
+         * compilacion necesita; lo que se quita es heredar el de otra. */
+        const bool cache_hit = false;
         const bool user_already_set_prebuilt =
             !util::flag_text(util::FlagId::McPrebuilt).empty();
         const bool verbose_mc = util::flag_on(util::FlagId::McVerbose);

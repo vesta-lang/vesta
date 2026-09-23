@@ -471,6 +471,18 @@ void mangle_struct_decl_(
     }
     for (auto &f : sd->fields) {
         rewrite_refs_in_type_(f.type.get(), rename_map);
+        /* Y su VALOR POR DEFECTO, que tambien es codigo: `op metodo = doblar;`
+         * nombra ahi una funcion hermana del namespace.  Faltaba en esta
+         * lista, asi que el default seguia diciendo `doblar` cuando la
+         * declaracion ya se llamaba `prueba__doblar`.
+         *
+         * Con un tipo normal eso salia como un error de compilacion claro.  Con
+         * un campo PUNTERO A FUNCION no: el nombre venia de un `import` -- que
+         * entra sin cualificar y si resolvia --, el default no se aplicaba, el
+         * campo se quedaba a CERO, y cero es una direccion, asi que el programa
+         * compilaba, arrancaba y se moria al llamar por ese campo.  Es lo que
+         * pasaba a `resolve_syscall resolve_method = resolve;`. */
+        rewrite_refs_in_expr_(f.default_init.get(), rename_map);
         /* Y lo que un campo de OVERLAY lleva dentro: la expresion de su offset,
          * el resolver de su direccion, el tamanyo y el paso de un array y el
          * resolver por elemento.  Son CoDIGO, y ahi se nombran tipos igual que
@@ -560,6 +572,9 @@ void mangle_class_decl_(
     // Fields + metodos.
     for (auto &f : cd->fields) {
         rewrite_refs_in_type_(f.type.get(), rename_map);
+        // Y su valor por defecto, por lo mismo que en el struct: es codigo y
+        // ahi se nombran hermanos del namespace.
+        rewrite_refs_in_expr_(f.init.get(), rename_map);
     }
     rewrite_bounds_(cd->type_bounds, rename_map);
     for (auto &m : cd->methods) {

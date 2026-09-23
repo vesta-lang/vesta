@@ -3744,7 +3744,13 @@ def _(ctx):
     rc, _ = ctx.run([exe])
     got = exit_code(rc)
     if got != 48:
-        ctx.fail("%s (-m aot): sale %d, se esperaban 48" % (etiqueta, got), "")
+        # CON el log de la construccion.  Iba vacio, y por eso un binario que
+        # sale mal no decia nada de por que: el aviso que el compilador SI
+        # emite -- un bloque de asm que quedo sin cuerpo, con su motivo -- se
+        # quedaba en `ctx.last_aot_log` y nadie lo miraba.  `aot_build` lo
+        # guarda justo para esto.
+        ctx.fail("%s (-m aot): sale %d, se esperaban 48" % (etiqueta, got),
+                 ctx.last_aot_log)
     ctx.ok("%s (-m aot) -> 48/48" % etiqueta)
 r0_case("ctor_comptime_modulo", "constructor comptime de un tipo de otro modulo", "363_ctor_comptime_modulo.vx", 42)
 r0_case("asm_dse", "un asm no es barrera, pero se respeta lo que lee, lo que cambia y lo que escribe", "372_asm_dse.vx", 42)

@@ -23,9 +23,9 @@ struct Terna {
 };
 
 // --- las operaciones: reciben el valor entero ---
-u64 op_par_lee(Par p) => p.                 a;
-u64 op_par_todo(Par p) => p.a + p.          b;
-u64 op_terna_lee(Terna t) => t.             x;
+u64 op_par_lee(Par p) => p.a;
+u64 op_par_todo(Par p) => p.a + p.b;
+u64 op_terna_lee(Terna t) => t.x;
 u64 op_terna_todo(Terna t) => t.x + t.y + t.z;
 
 // --- B: se pasa entero y aqui no se toca ---

@@ -6996,17 +6996,10 @@ void TypeChecker::collect_globals() {
                 // llama, y eso suele ser otro fichero.
                 sig.param_names.push_back(p->name);
             }
-            // Normalizar: si ningun param declaro ABI custom, dejar el vector
-            // vacio (== ABI estandar; consistente con el operator== de Type).
-            {
-                bool any_abi = false;
-                for (const auto &r : sig.param_abi_regs)
-                    if (!r.empty()) {
-                        any_abi = true;
-                        break;
-                    }
-                if (!any_abi) sig.param_abi_regs.clear();
-            }
+            // Forma canonica: sin ABI custom, el vector va VACIO.  La regla
+            // esta en `normalize_abi_regs`, que es la unica: escrita aqui, el
+            // parseo de la interfaz producia la otra forma y nadie lo veia.
+            normalize_abi_regs(sig.param_abi_regs);
 
             // Bug/feature 198: propagar @Naked a la firma para que el lowering
             // enrute las llamadas al dispatcher nativo (interp/JIT).

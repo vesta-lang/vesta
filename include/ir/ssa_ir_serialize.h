@@ -368,6 +368,36 @@ std::vector<uint8_t> emit_ir_module_cache_vec(const IrModule &mod);
 bool parse_ir_module_cache(const uint8_t *data, size_t len, IrModule &out);
 
 /**
+ * @brief Se lleva a @p dst TODO lo que trae un modulo restaurado del cache.
+ *
+ * Existe porque el traslado se hacia campo a campo en el sitio del acierto, y
+ * **se ha olvidado un campo TRES veces** -- cada una con su arreglo y su
+ * comentario en `compiler_project.cpp`:
+ *
+ *   - `static_data` y `globals`: sin ellos, un dep servido del cache no
+ *     aportaba sus ranuras `code.s_*` al fusionar;
+ *   - `native_imports`: sin ellos el enlazador dejaba simbolos colgando, y
+ *     solo con el cache CALIENTE -- en frio compilaba bien;
+ *   - `source_files`: sin ellos, **toda funcion de un modulo cacheado se
+ *     quedaba sin fichero**, porque el remapeo contra una tabla vacia da
+ *     @c IR_NO_SOURCE_FILE.  O sea que un error en una funcion servida del
+ *     cache no sabia decir de que fichero era; y no daba ningun error.
+ *
+ * El patron es el mismo las tres veces: una copia campo a campo que hay que
+ * acordarse de ampliar cuando @c IrModule crece, y olvidarse no rompe la
+ * compilacion -- da un binario distinto, o un diagnostico que miente.
+ *
+ * Por eso vive AQUI y no alli: la lista de lo que hay que llevarse es
+ * exactamente la de lo que @ref parse_ir_module_cache rellena, y las dos se
+ * tocan juntas o no se tocan.  Quien anyada un campo al formato lo anyade en
+ * las dos funciones, que estan una al lado de la otra.
+ *
+ * @param dst Modulo destino.
+ * @param src Modulo recien parseado; queda vaciado.
+ */
+void adopt_cached_module(IrModule &dst, IrModule &&src);
+
+/**
  * @brief Serializa una @c StaticDataStore verbatim (pool + entries + meta).
  *
  * Expuesto para el driver incremental (fragmentos de IR por-simbolo): los

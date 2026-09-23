@@ -17,6 +17,9 @@
 #include "util/env_flags.h"
 #include "jit/naked_native.h"
 
+#include "jit/abi_call_thunk.h" // cumplir una convencion DECLARADA al llamar
+#include "vx/diag/diag_catalog.h" // lo que lee una persona sale del catalogo
+
 #include "jit/code_cache.h"
 #include "jit/vreg_pipeline.h"
 #include "jit/auto_jit.h" // FN.3: lookup/compile/get_or_init_code_cache
@@ -399,6 +402,11 @@ uint64_t compile_native_fn(runtime::ProcessVM *vm, const std::string &name,
  *        ya en @p a[]; devuelve rax.  Reusa el switch por argc (mismo patron
  *        que @c invoke_native_unchecked, pero con args explicitos).
  */
+/// Cuantos sabe colocar @ref invoke_naked por la convencion de la plataforma.
+/// No es un limite del lenguaje: es cuantas formas de puntero a funcion hay
+/// escritas ahi abajo, y pasarse se DICE en vez de recortarse.
+constexpr size_t kInvokeNakedMaxArgs = 6;
+
 uint64_t invoke_naked(void *fn, int argc, const uint64_t *a) {
     using F0 = uint64_t (*)();
     using F1 = uint64_t (*)(uint64_t);
@@ -436,17 +444,17 @@ uint64_t invoke_naked(void *fn, int argc, const uint64_t *a) {
  * y devuelve su rax (que el CALLN escribe a R0).
  */
 extern "C" uint64_t vrt_naked_dispatch(uint64_t proc, uint64_t name_hash,
-                                       uint64_t argc_real, uint64_t a0,
-                                       uint64_t a1, uint64_t a2, uint64_t a3,
-                                       uint64_t a4, uint64_t a5) {
+                                       uint64_t argc_real, uint64_t args_ptr) {
     auto *vm = reinterpret_cast<runtime::ProcessVM *>(proc);
     if (vm == nullptr) return 0;
     static const bool debug = util::flag_on(util::FlagId::NakedDebug);
 
-    // Localizar el nombre de la funcion @Naked por hash: escaneamos los IR de
-    // los executables cargados buscando el que coincide (barato; solo cold
-    // path en la primera llamada, luego cache).
+    // Localizar la funcion @Naked por hash: escaneamos los IR de los
+    // executables cargados buscando el que coincide (barato; solo cold path en
+    // la primera llamada, luego cache).  Se guarda tambien su CONVENCION, que
+    // es lo que dice en que registro entra cada argumento.
     std::string target_name;
+    std::vector<std::string> abi_regs;
     {
         auto &loader = vm->scheduler.vm_reference.loader_public;
         for (auto &exe : loader.executables) {
@@ -454,6 +462,7 @@ extern "C" uint64_t vrt_naked_dispatch(uint64_t proc, uint64_t name_hash,
             for (const auto &f : exe->ir_functions) {
                 if (fnv1a64_name(f.name.c_str()) == name_hash) {
                     target_name = f.name;
+                    abi_regs = f.param_abi_regs;
                     break;
                 }
             }
@@ -479,16 +488,92 @@ extern "C" uint64_t vrt_naked_dispatch(uint64_t proc, uint64_t name_hash,
         return 0;
     }
 
-    const uint64_t args[6] = {a0, a1, a2, a3, a4, a5};
-    int ac = static_cast<int>(argc_real);
-    if (ac < 0) ac = 0;
-    if (ac > 6) ac = 6;
+    const size_t ac = static_cast<size_t>(argc_real);
+    const uint64_t *args = reinterpret_cast<const uint64_t *>(args_ptr);
+    if (ac != 0 && args == nullptr) {
+        runtime::throw_fatal(vm, runtime::FATAL_NULL_POINTER,
+                             vx::diag::format("VX7044", {target_name}).c_str());
+        return 0;
+    }
     if (debug)
-        std::fprintf(stderr,
-                     "[naked] invoke '%s' entry=%p argc=%d a0=%llu a1=%llu\n",
-                     target_name.c_str(), (void *)entry, ac,
-                     (unsigned long long)a0, (unsigned long long)a1);
-    uint64_t rv = invoke_naked(reinterpret_cast<void *>(entry), ac, args);
+        std::fprintf(stderr, "[naked] invoke '%s' entry=%p argc=%zu abi=%zu\n",
+                     target_name.c_str(), (void *)entry, ac, abi_regs.size());
+
+    /* SI LA DECLARACION DICE POR DONDE, SE CUMPLE.
+     *
+     * `register("rXX")` en un parametro fija en que registro entra, y eso una
+     * llamada de C no lo puede hacer: ahi el primer argumento va donde diga la
+     * plataforma.  De una convencion declarada se cumplia la MITAD -- los que
+     * se desbordan a la pila salian bien, los fijados no --, y media convencion
+     * no da un error: da otro resultado.  Con el numero de servicio en el
+     * registro equivocado, el nucleo NT contesta cualquier cosa, y el cero es
+     * @c STATUS_SUCCESS.
+     *
+     * Los que la declaracion no menciona -- los de un variadico -- van por la
+     * regla de la plataforma, que es lo que @ref jit::AbiArgSlots contesta
+     * fuera de rango. */
+    bool declared = false;
+    for (const std::string &r : abi_regs)
+        if (!r.empty()) {
+            declared = true;
+            break;
+        }
+    if (declared) {
+        std::vector<uint16_t> slots(ac, kAbiArgOnStack);
+        for (size_t i = 0; i < ac && i < abi_regs.size(); ++i) {
+            if (abi_regs[i].empty()) continue;
+            /* Que numero es ese registro lo sabe el objetivo, no esto: aqui
+             * solo hay el texto que puso el programador, y de que arquitectura
+             * es no se pregunta desde un sitio neutro. */
+            uint16_t slot = 0;
+            if (!abi_call_slot_of(abi_regs[i], &slot)) {
+                runtime::throw_fatal(
+                    vm, runtime::FATAL_INVALID_SYSCALL,
+                    vx::diag::format(
+                        abi_call_reason_code(AbiCallReason::RegNotInIsa))
+                        .c_str());
+                return 0;
+            }
+            slots[i] = slot;
+        }
+        AbiArgSlots where;
+        where.at = slots.data();
+        where.count = slots.size();
+
+        AbiCallReason why = AbiCallReason::Ok;
+        AbiCallThunkFn thunk = abi_call_thunk_for(where, &why);
+        if (thunk == nullptr) {
+            runtime::throw_fatal(vm, runtime::FATAL_INVALID_SYSCALL,
+                                 vx::diag::format(abi_call_reason_code(why))
+                                     .c_str());
+            return 0;
+        }
+        AbiCallCtx ctx;
+        ctx.target = entry;
+        ctx.args = args;
+        const uint64_t rv = thunk(&ctx);
+        if (debug)
+            std::fprintf(stderr, "[naked] '%s' (abi declarada) -> %llu\n",
+                         target_name.c_str(), (unsigned long long)rv);
+        return rv;
+    }
+
+    /* Sin convencion declarada, la de la plataforma: una llamada de C
+     * corriente, que es lo que la funcion espera.  Eso sabe colocar hasta seis
+     * -- son seis formas de puntero a funcion escritas a mano --, y pasarse se
+     * DICE: recortar en silencio dejaba al llamado leyendo un registro que
+     * nadie habia puesto. */
+    if (ac > kInvokeNakedMaxArgs) {
+        runtime::throw_fatal(
+            vm, runtime::FATAL_ILLEGAL_INSTRUCTION,
+            vx::diag::format("VX7045",
+                             {target_name, std::to_string(ac),
+                              std::to_string(kInvokeNakedMaxArgs)})
+                .c_str());
+        return 0;
+    }
+    uint64_t rv = invoke_naked(reinterpret_cast<void *>(entry),
+                               static_cast<int>(ac), args);
     if (debug)
         std::fprintf(stderr, "[naked] '%s' -> %llu\n", target_name.c_str(),
                      (unsigned long long)rv);

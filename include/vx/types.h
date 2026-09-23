@@ -902,6 +902,32 @@ struct Type {
 };
 
 /**
+ * @brief Deja la lista de registros por parametro en su forma CANONICA: si
+ *        ninguno declara uno propio, VACIA.
+ *
+ * "ABI estandar" se podia escribir de dos maneras -- la lista vacia, y una
+ * lista de cadenas vacias, una por parametro --, y las dos convivian: el
+ * comprobador de tipos normalizaba a la primera y el parseo de la interfaz de
+ * un modulo producia la segunda.
+ *
+ * No daba ningun error, y era imposible de ver: una llamada a una funcion de un
+ * modulo servido del CACHE se quedaba con `[""]` -- que no esta vacia --, asi
+ * que el sitio de llamada la copiaba a la instruccion, y el intermedio de una
+ * compilacion incremental salia distinto del de la misma compilacion desde
+ * cero.  El programa hacia lo mismo; el artefacto no era el mismo.
+ *
+ * Por eso la regla vive aqui, al lado del campo que gobierna, y no en quien la
+ * aplica: dos sitios que normalizan por su cuenta es como se llego a esto.
+ *
+ * @param regs Lista a normalizar, alineada con los parametros.
+ */
+inline void normalize_abi_regs(std::vector<std::string> &regs) {
+    for (const std::string &r : regs)
+        if (!r.empty()) return;
+    regs.clear();
+}
+
+/**
  * @struct Type::FnInfo
  * @brief Lo que solo tiene un tipo FUNCION.
  *
@@ -919,6 +945,9 @@ struct Type::FnInfo {
     /// IDENTIDAD del tipo (ver @c Type::operator==): dos @c cfn con abi_regs
     /// distintos son tipos DISTINTOS, y asi una CALLIND conoce la ABI al
     /// compilar desde el tipo del puntero.
+    ///
+    /// NORMALIZADO con @ref normalize_abi_regs: ver alli por que la lista
+    /// VACIA y la lista de vacios no pueden convivir.
     std::vector<std::string> param_abi_regs;
 
     /// Direccion declarada por parametro (`in`/`out`/`inout`), alineada con

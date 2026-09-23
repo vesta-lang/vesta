@@ -22,8 +22,10 @@
 
 #include "vx/source_hash.h"
 
+#include <cstdint>
 #include <iostream>
 #include <string>
+#include <vector>
 
 static int fallos = 0;
 
@@ -106,6 +108,59 @@ int main() {
     comprobar(vx::hash_de_tokens("", false) ==
                   vx::hash_de_tokens("// solo un comentario\n", false),
               "vacio y solo-comentarios son lo mismo");
+
+    // -- Por TRAMOS ----------------------------------------------------------
+    std::cout << "== hash_tokens_by_span ==\n";
+    {
+        /* Dos funciones seguidas, y el tramo de cada una.  Es la forma que usa
+         * el indice semantico: los tramos van seguidos y cubren el fichero. */
+        const std::string dos = "i64 f(i64 x) { return x + 1; }\n"
+                                "i64 g(i64 y) { return y * 2; }\n";
+        const uint32_t corte = 31; // donde empieza `g`
+        const std::vector<vx::SourceSpan> tramos = {
+            {0, corte},
+            {corte, static_cast<uint32_t>(dos.size()) - corte}};
+
+        const vx::TokenHashes h = vx::hash_tokens_by_span(dos, false, tramos);
+
+        /* La propiedad que ATA las dos funciones: si la del fichero entero no
+         * saliera de la misma cuenta, dos huellas del mismo texto podrian
+         * diferir y nadie se enteraria hasta que una cache sirviera lo que no
+         * era. */
+        comprobar(h.whole == vx::hash_de_tokens(dos, false),
+                  "la del fichero entero coincide con hash_de_tokens");
+        comprobar(h.spans.size() == 2, "una huella por tramo");
+        comprobar(h.spans[0] != h.spans[1],
+                  "dos tramos distintos dan huellas distintas");
+
+        /* Y lo que motivo el arreglo: tocar el FORMATO de una funcion no mueve
+         * su huella, y tocar la de al lado no mueve la suya. */
+        const std::string comentada = "i64 f(i64 x) { /* nota */ return x + 1; }\n"
+                                      "i64 g(i64 y) { return y * 2; }\n";
+        const uint32_t corte2 = 42;
+        const std::vector<vx::SourceSpan> tramos2 = {
+            {0, corte2},
+            {corte2, static_cast<uint32_t>(comentada.size()) - corte2}};
+        const vx::TokenHashes h2 =
+            vx::hash_tokens_by_span(comentada, false, tramos2);
+
+        comprobar(h2.spans[0] == h.spans[0],
+                  "un comentario DENTRO no cambia la huella del tramo");
+        comprobar(h2.spans[1] == h.spans[1],
+                  "y no mueve la del tramo de al lado");
+
+        /* Un tramo sin tokens da lo mismo que un fuente VACIO: una respuesta
+         * que se puede comparar, no un valor que no produce nadie mas. */
+        const std::vector<vx::SourceSpan> vacio = {{0, 0}};
+        const vx::TokenHashes h3 = vx::hash_tokens_by_span(dos, false, vacio);
+        comprobar(h3.spans[0] == vx::hash_de_tokens("", false),
+                  "un tramo vacio da la huella de un fuente vacio");
+
+        // Sin tramos: solo la del fichero, y sigue siendo la misma.
+        const vx::TokenHashes h4 = vx::hash_tokens_by_span(dos, false, {});
+        comprobar(h4.whole == h.whole && h4.spans.empty(),
+                  "sin tramos, la del fichero no cambia");
+    }
 
     std::cout << (fallos == 0 ? "TODO OK\n" : "HAY FALLOS\n");
     return fallos == 0 ? 0 : 1;

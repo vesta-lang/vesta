@@ -65,6 +65,7 @@
 
 #include "util/fnv.h" // la semilla y el primo, en UN sitio
 #include "vx/module/vxi_format.h"
+#include "vx/types.h" // normalize_abi_regs: la forma canonica, en UN sitio
 
 #include <algorithm>
 #include <cstring>
@@ -1265,6 +1266,13 @@ static bool parse_payload_function(const uint8_t *data, size_t size,
         out.param_names.push_back(std::move(nnm));
         out.param_abi_regs.push_back(std::move(anm));
     }
+    /* A la forma canonica, la misma que deja el comprobador de tipos: el
+     * formato guarda una entrada por parametro -- vacia si no declara registro
+     * --, y sin esto una firma que viene de la INTERFAZ traia `[""]` donde una
+     * recien comprobada trae `[]`.  Las dos dicen "ABI estandar" y no son
+     * iguales, asi que la llamada a una funcion de un modulo servido del cache
+     * se llevaba la lista a la instruccion y el intermedio salia distinto. */
+    normalize_abi_regs(out.param_abi_regs);
     // Y que builtin cubre (ver el emisor).  Vacio = ninguno.
     {
         uint32_t pb_off = 0, pb_len = 0;

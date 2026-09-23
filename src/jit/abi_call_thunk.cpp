@@ -265,8 +265,18 @@ std::string thunk_source_x86_64(AbiArgSlots slots, AbiCallReason *why) {
  * pregunta lo DICE, que es lo unico honesto: llamar sin cumplir la convencion
  * es el fallo que todo esto viene a evitar.
  */
+/// La ranura de @p name en el banco general de x86-64, por la tabla canonica.
+bool slot_of_x86_64(const std::string &name, uint16_t *out) {
+    uint16_t width = 0;
+    const int phys = vx::asm_x86_gp_index(name, &width);
+    if (phys < 0) return false;
+    *out = static_cast<uint16_t>(phys);
+    return true;
+}
+
 struct ThunkGen {
     std::string (*source)(AbiArgSlots slots, AbiCallReason *why) = nullptr;
+    bool (*slot_of)(const std::string &name, uint16_t *out) = nullptr;
     vx::AsmArch arch = vx::AsmArch::X86_64;
 };
 
@@ -274,6 +284,7 @@ ThunkGen generator_for_host() {
     ThunkGen g;
 #if defined(__x86_64__) || defined(_M_X64)
     g.source = &thunk_source_x86_64;
+    g.slot_of = &slot_of_x86_64;
     g.arch = vx::AsmArch::X86_64;
 #endif
     return g;
@@ -311,6 +322,12 @@ bool same_convention(const ThunkEntry &e, AbiArgSlots slots) {
 }
 
 } // namespace
+
+bool abi_call_slot_of(const std::string &name, uint16_t *out) {
+    const ThunkGen gen = generator_for_host();
+    if (gen.slot_of == nullptr || out == nullptr) return false;
+    return gen.slot_of(name, out);
+}
 
 const char *abi_call_reason_code(AbiCallReason r) {
     switch (r) {

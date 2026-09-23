@@ -21,6 +21,7 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace vx {
 
@@ -46,6 +47,46 @@ namespace vx {
  *         comentarios o espaciado dan la MISMA (salvo @p con_lineas).
  */
 uint64_t hash_de_tokens(const std::string &fuente, bool con_lineas);
+
+/// Un tramo de fuente, en bytes.  Solo de ENTRADA.
+struct SourceSpan {
+    uint32_t offset = 0;
+    uint32_t length = 0;
+};
+
+/// Lo que se saca de un fuente en una pasada: la huella del fichero y la de
+/// cada tramo pedido, en el mismo orden.
+struct TokenHashes {
+    uint64_t whole = 0;          ///< La del fuente ENTERO.
+    std::vector<uint64_t> spans; ///< Una por tramo pedido.
+};
+
+/**
+ * @brief La huella de varios TRAMOS del mismo fuente, con UNA sola pasada.
+ *
+ * Existe porque hacerlo tramo a tramo obliga a lexar el fichero una vez por
+ * tramo -- cuadratico en el tamanyo del modulo --, y porque la huella de un
+ * tramo tiene que salir de la MISMA cuenta que la del fichero: si fueran dos
+ * cuentas, dos huellas del mismo texto podrian diferir y nadie se enteraria
+ * hasta que una cache sirviera lo que no era.
+ *
+ * Todo lo que entra es @c const y todo lo que sale se DEVUELVE.  Un parametro
+ * de salida por referencia no dice por la firma si se rellena o se anyade, ni
+ * si lo que traia cuenta; y una sola lista con los offsets dentro y las huellas
+ * fuera seria mitad entrada y mitad salida -- justo lo que el lenguaje separa
+ * en su propio eje @c in / @c out / @c inout.
+ *
+ * @param source     Texto del modulo.
+ * @param with_lines Si la LINEA entra en la cuenta.  Ver @ref hash_de_tokens.
+ * @param spans      Los tramos, ORDENADOS por offset y sin solaparse.
+ * @return La del fichero entero -- la misma que @ref hash_de_tokens -- y una
+ *         por tramo.  Cada tramo se CIERRA con la misma marca de fin que el
+ *         fichero, asi que uno SIN NINGUN TOKEN dentro da lo mismo que un
+ *         fuente vacio: una respuesta que se puede comparar, en vez de un valor
+ *         que no produce nadie mas.
+ */
+TokenHashes hash_tokens_by_span(const std::string &source, bool with_lines,
+                                const std::vector<SourceSpan> &spans);
 
 } // namespace vx
 

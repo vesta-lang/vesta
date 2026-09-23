@@ -3293,11 +3293,8 @@ CompileResult compile_vx_project(
                                       << (b * 8);
                             pm.vxi.abi_hash = hh;
                         }
-                        pm.ir.functions = std::move(dep_mod.functions);
-                        pm.ir.static_data = std::move(dep_mod.static_data);
-                        pm.ir.globals = std::move(dep_mod.globals);
-                        pm.ir.native_imports =
-                            std::move(dep_mod.native_imports);
+                        // Igual que en el acierto por ruta: TODO de una vez.
+                        ir::adopt_cached_module(pm.ir, std::move(dep_mod));
                         pm.ok = true;
                         if (verbose_cache) {
                             std::ostringstream tmp;
@@ -3466,22 +3463,14 @@ CompileResult compile_vx_project(
                                     pm.comptime_unit_not_collected.end(),
                                     pm.vxi.comptime_unit_not_collected.begin(),
                                     pm.vxi.comptime_unit_not_collected.end());
-                                pm.ir.functions = std::move(dep_mod.functions);
-                                pm.ir.static_data =
-                                    std::move(dep_mod.static_data);
-                                pm.ir.globals = std::move(dep_mod.globals);
-                                // BugFix M.ni-cache: restaurar tambien los
-                                // native_imports del dep en el cache-hit.  Sin
-                                // esto, el merge cross-modulo (mas abajo) no
-                                // tiene que propagar y el linker deja simbolos
-                                // colgantes (p.ej. `vrt:inline_asm_exec` /
-                                // `vrt:naked_fnaddr` de un dep con cuerpos
-                                // @Naked/inline-asm) -> RelocationError con el
-                                // .vxir caliente (frio compilaba bien).
-                                // parse_ir_module_cache ya los deserializo en
-                                // dep_mod; solo faltaba trasladarlos a pm.ir.
-                                pm.ir.native_imports =
-                                    std::move(dep_mod.native_imports);
+                                /* TODO lo que el modulo restaurado trae, en una
+                                 * sola linea y decidido donde se conoce el
+                                 * formato.  Campo a campo aqui se olvido TRES
+                                 * veces -- `static_data`+`globals`,
+                                 * `native_imports` y `source_files` --, y
+                                 * ninguna dio error. */
+                                ir::adopt_cached_module(pm.ir,
+                                                        std::move(dep_mod));
                                 pm.ok = true;
                                 // Seed del CAS global desde un HIT del cache
                                 // por-path: asi el primer build con .vxir
