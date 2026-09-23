@@ -18,6 +18,7 @@
 #include "vx/diag/diag_catalog.h" // el texto de las trazas, en todos los idiomas
 
 #include "analysis/asa/fact_store.h"
+#include "analysis/asa/needs.h" // la peticion de un consumidor, en una pieza
 #include "analysis/asa/producers.h" // ModuleWalk: el recorrido, una sola vez
 #include "ir/ssa_ir.h"
 
@@ -27,6 +28,18 @@
 
 namespace analysis {
 namespace asa {
+
+std::vector<const char *> all_stages() {
+    return {kStagePreOpt, kStageDuringOpt, kStagePostOpt};
+}
+
+AsaNeeds needs_all(const char *asked_by) {
+    AsaNeeds n;
+    n.all_domains = true;
+    n.stages = all_stages();
+    n.asked_by = asked_by;
+    return n;
+}
 
 /* El VOCABULARIO va en ingles, como los identificadores: estos nombres viajan
  * al fichero de hechos, al volcado y al MCP, y ahi los lee gente y herramientas

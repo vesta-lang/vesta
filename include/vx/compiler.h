@@ -39,6 +39,7 @@
 #include "port/port_options.h"
 #include "analyze/fingerprint.h"     // FunctionContracts
 #include "analysis/asa/fact_store.h" // lo que se supo del modulo al compilarlo
+#include "analysis/asa/needs.h"      // y lo que hacia falta saber, en una pieza
 #include "analysis/asa/producers.h"  // ProductionSummary: que corrio y cuanto
 #include "vxdbg/ids.h"               // huella del mapa de simbolos
 
@@ -73,55 +74,22 @@ struct ModuleNode;
 struct CompileOptions {
     std::string module_name; ///< Nombre logico del modulo (por defecto "main").
     /**
-     * @brief Dominios del ASA que alguien va a consultar.  Vacio = ninguno.
+     * @brief Lo que se necesita del ASA: que dominios, en que momentos.
      *
-     * Vacio POR DEFECTO, y eso es la mitad del diseno: producir conocimiento
-     * que nadie pide no es prevision, es tiempo tirado.  Medido en
-     * `199_cfn_vs_lambda`, producirlo todo llevaba la compilacion de 200 ms a
-     * 1,5 s -- siete veces --, y no habia un solo consumidor esperandolo.
+     * UNA peticion y no tres campos sueltos.  Eran tres -- dominios, momentos
+     * y una marca de "todos" -- y los seis sitios que piden hechos los montaban
+     * a mano; habian divergido en cuatro combinaciones, y la peor era muda: las
+     * vistas del editor pedian el primer y el ultimo momento y se perdian el de
+     * EN MEDIO, que es donde vive por que NO disparo una optimizacion.
      *
-     * Quien lo necesite lo pide, y entonces ademas se GUARDA: la proxima
-     * compilacion del mismo modulo lo lee en vez de rehacerlo.  Asi el coste lo
-     * paga quien lo usa y solo la primera vez.
+     * Vacia por defecto = no producir nada, que es la mitad del diseno:
+     * producir conocimiento que nadie pide no es prevision, es tiempo tirado.
+     * Lo que si se pide, ademas se GUARDA, asi que el coste lo paga quien lo
+     * usa y solo la primera vez.
+     *
+     * @see analysis::asa::AsaNeeds
      */
-    std::vector<const char *> asa_domains;
-
-    /**
-     * @brief EN QUE MOMENTOS se quieren esos dominios.  Vacio = ninguno.
-     *
-     * La otra mitad de la peticion, y sin ella el conocimiento no se podia
-     * usar: quien pide dominios puede decir QUE quiere saber pero no DE QUE
-     * CODIGO -- el que el programa dice, o el que va a ejecutarse --, y son
-     * cosas distintas.  Un hecho lleva su momento sellado, asi que si el
-     * compilador produce en uno y el consumidor pregunta por otro, no ve
-     * NADA: no falla, no dice nada, y encima lo recalcula.  Medido en el
-     * linter de un fichero suelto: dos bases de hechos, seis analisis cada
-     * una, para el mismo modulo.
-     *
-     * Varios a la vez porque los hay que quieren los dos -- `--asa` ensena
-     * las dos fotos y lo util es justamente la diferencia --, y porque asi
-     * los cinco consumidores piden por la MISMA puerta en vez de que cada uno
-     * decida por su cuenta cuando mirar.
-     *
-     * Los valores son @c analysis::asa::kStage*.
-     */
-    std::vector<const char *> asa_stages;
-
-    /**
-     * @brief TODOS los dominios, sin listarlos.  Solo lo pide quien VUELCA.
-     *
-     * `asa_domains` vacio significa NINGUNO -- y eso es la mitad del diseno,
-     * porque producir lo que nadie pide es tiempo tirado --, asi que "todos"
-     * no se podia expresar.  El volcado (`--asa`) y la vista del editor si lo
-     * necesitan: su trabajo es precisamente ensenar lo que se sabe, y una
-     * lista escrita a mano se quedaria corta en cuanto entrara un dominio
-     * nuevo, calladamente.
-     *
-     * Explicito y no un centinela sobre `asa_domains`: "vacio = ninguno" y
-     * "vacio = todos" en el mismo campo es la clase de ambiguedad que acaba
-     * produciendo 544 us por modulo sin que nadie sepa por que.
-     */
-    bool asa_all_domains = false;
+    analysis::asa::AsaNeeds asa;
     bool emit_debug =
         false; ///< Emitir comentarios @line N en el .vel generado.
     /// Carpeta donde volcar la base de conocimiento de depuracion (@c vxdbg).

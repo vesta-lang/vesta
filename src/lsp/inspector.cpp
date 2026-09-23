@@ -2711,9 +2711,11 @@ nlohmann::json Inspector::asa(const std::string &uri) {
      * un trabajo que el compilador ya sabe guardar. */
     vx::CompileOptions opts;
     opts.module_name = "main";
-    opts.asa_all_domains = true;
-    opts.asa_stages = {analysis::asa::kStagePreOpt,
-                       analysis::asa::kStagePostOpt};
+    /* Todo, en los TRES momentos: esta vista existe para ensenar lo que se
+     * sabe.  Pedir solo el primero y el ultimo se saltaba el de en medio, que
+     * es donde vive por que NO disparo una optimizacion -- y no fallaba: esos
+     * hechos sencillamente no salian. */
+    opts.asa = analysis::asa::needs_all("lsp-inspector");
     vx::CompileResult res = compile_document(uri, text, opts);
 
     ir::IrModule mod;
@@ -3479,9 +3481,11 @@ nlohmann::json Inspector::asa_facts(const std::string &uri) {
      * bajo demanda.  Ver la nota larga en @c Inspector::asa. */
     vx::CompileOptions opts;
     opts.module_name = "main";
-    opts.asa_all_domains = true;
-    opts.asa_stages = {analysis::asa::kStagePreOpt,
-                       analysis::asa::kStagePostOpt};
+    /* Todo, en los TRES momentos: esta vista existe para ensenar lo que se
+     * sabe.  Pedir solo el primero y el ultimo se saltaba el de en medio, que
+     * es donde vive por que NO disparo una optimizacion -- y no fallaba: esos
+     * hechos sencillamente no salian. */
+    opts.asa = analysis::asa::needs_all("lsp-inspector");
     vx::CompileResult res = compile_document(uri, text, opts);
 
     ir::IrModule mod;
@@ -3540,6 +3544,20 @@ nlohmann::json Inspector::asa_facts(const std::string &uri) {
         j["isa"] = f.scope.isa ? f.scope.isa : "";
         j["os"] = f.scope.os ? f.scope.os : "";
         j["backend"] = f.scope.backend ? f.scope.backend : "";
+        /* Y los DOS momentos, que es el eje que faltaba y el que mas importa:
+         * sin el, "da 64 vueltas" y "da 16" salen uno al lado del otro sin
+         * nada que diga que hablan del mismo bucle ANTES y DESPUeS de
+         * desenrollarlo.  Los dos son ciertos; lo que miente es ensenarlos sin
+         * su momento.
+         *
+         * Y son DOS campos porque son dos preguntas: de que CoDIGO habla el
+         * hecho (va en la identidad del sujeto, y por eso `main:v3` antes y
+         * despues de optimizar no son el mismo valor) y EN QUe momento VALE lo
+         * que afirma (va en el alcance).  No se llaman `stage` a secas a
+         * proposito: con ese nombre, filtrar por el que no era hacia que un
+         * hecho presente pareciera ausente -- pasa de verdad, y no falla. */
+        j["aboutStage"] = f.about.stage ? f.about.stage : "";
+        j["validStage"] = f.scope.stage ? f.scope.stage : "";
 
         /* COMO se llego a el.  Es la mitad que faltaba: sin la regla y sin los
          * hechos de los que se sigue, un hecho es una afirmacion que hay que

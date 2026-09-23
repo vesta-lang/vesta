@@ -568,12 +568,11 @@ recuperar_hechos_(const std::string &ruta, analysis::asa::FactStore &destino,
  * @param path        Fichero de hechos, o vacio para no tocar disco.
  * @param fingerprint Identidad del modulo: si no coincide, lo guardado no vale.
  */
-/// Pidio quien compila hechos en ese MOMENTO?  Vacio = ninguno, que es el
-/// defecto: producir conocimiento que nadie pide no es prevision.
+/// Pidio quien compila hechos en ese MOMENTO?  Delega en la peticion, que es
+/// donde vive la pregunta: escrita aqui Y en el camino de fichero suelto, los
+/// dos podian acabar contestando distinto al mismo modulo.
 bool wants_stage_(const CompileOptions &opts, const char *stage) {
-    for (const char *w : opts.asa_stages)
-        if (w != nullptr && std::strcmp(w, stage) == 0) return true;
-    return false;
+    return opts.asa.wants_stage(stage);
 }
 
 /**
@@ -5414,12 +5413,10 @@ CompileResult compile_vx_project(
          * fichero suelto -- y por aqui pasa todo lo que declara `namespace`,
          * que es la mayoria. */
         if (wants_stage_(opts, analysis::asa::kStagePreOpt) &&
-            (!opts.asa_domains.empty() || opts.asa_all_domains)) {
+            opts.asa.anything()) {
             /* Vacio hacia la puerta = TODOS, que es lo que pide quien vuelca.
              */
-            const std::vector<const char *> asa_wanted =
-                opts.asa_all_domains ? std::vector<const char *>{}
-                                     : opts.asa_domains;
+            const std::vector<const char *> asa_wanted = opts.asa.domain_list();
             /* Clave y fichero POR MOMENTO, como en el camino de fichero
              * suelto: los dos tienen que construirlas igual o la misma
              * pregunta acaba con dos respuestas segun como compiles. */
@@ -5626,12 +5623,12 @@ CompileResult compile_vx_project(
          * recalculaba. */
         std::vector<const char *> wanted = {"asa.layout"};
         const bool all_domains =
-            opts.asa_all_domains &&
+            opts.asa.all_domains &&
             wants_stage_(opts, analysis::asa::kStagePostOpt);
         if (all_domains)
             wanted.clear(); // vacio hacia la puerta = TODOS
         else if (wants_stage_(opts, analysis::asa::kStagePostOpt))
-            for (const char *d : opts.asa_domains)
+            for (const char *d : opts.asa.domains)
                 if (d != nullptr) wanted.push_back(d);
         /* Producir los hechos y sellarlos en disco corre DENTRO de la ventana
          * que el informe llama "optimizar", asi que sin medirlo se le atribuia

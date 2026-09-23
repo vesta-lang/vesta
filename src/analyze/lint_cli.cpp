@@ -115,27 +115,27 @@ int run(int argc, char **argv) {
      * modulo ya esta en memoria y su identidad se conoce -- y ademas queda
      * guardado: la siguiente pasada del linter sobre el mismo fichero lo lee en
      * vez de rehacerlo.  Antes se producia aqui, despues, y moria con el
-     * proceso. */
-    copts.asa_domains = lint_required_domains(wanted);
-    /* Y EN QUE MOMENTO: el que se lintea es el codigo que de verdad se va a
-     * emitir, asi que POST-optimizacion.  Sin decirlo, el compilador producia
-     * en un momento y esto preguntaba por otro: no veia ni un hecho -- sin
-     * fallar, que es lo peor -- y encima los recalculaba.  Medido: dos bases
-     * de hechos, seis analisis cada una, para el mismo modulo. */
-    /* Y el de ANTES de optimizar, porque hay familias que hablan de lo que el
-     * usuario ESCRIBIo.  "Este bucle da una sola vuelta" mirado DESPUES de
-     * optimizar acusaba al usuario de lo que habia hecho el desenrollador: un
+     * proceso.
+     *
+     * Y EN QUE MOMENTOS: los TRES, y cada uno por su razon.
+     *
+     * El que se lintea es el codigo que de verdad se va a emitir, asi que
+     * POST-optimizacion.  Sin decirlo, el compilador producia en un momento y
+     * esto preguntaba por otro: no veia ni un hecho -- sin fallar, que es lo
+     * peor -- y encima los recalculaba.
+     *
+     * El de ANTES de optimizar, porque hay familias que hablan de lo que el
+     * usuario ESCRIBIo.  "Este bucle da una sola vuelta" mirado DESPUeS
+     * acusaba al usuario de lo que habia hecho el desenrollador: un
      * `for (i = 0; i < 5; i++)` desenrollado deja una cabecera que da una
      * vuelta, y el aviso salia sobre codigo perfectamente escrito.
      *
-     * Y TAMBIEN el de en medio, porque hay conocimiento que solo existe ahi.
-     * Que un bucle sea una copia solo se sabe MIENTRAS EL BUCLE EXISTE: quien
-     * mire el codigo ya optimizado encuentra una instruccion de bloque y
-     * ningun bucle que reconocer.  Sin pedirlo, la familia que lo consulta no
-     * veia ni un hecho -- y sin fallar, que es lo peor. */
-    copts.asa_stages = {analysis::asa::kStagePostOpt,
-                        analysis::asa::kStageDuringOpt,
-                        analysis::asa::kStagePreOpt};
+     * Y el de EN MEDIO, porque hay conocimiento que solo existe ahi: que un
+     * bucle sea una copia solo se sabe MIENTRAS EL BUCLE EXISTE.
+     *
+     * Todo eso vive en `lint_needs`, no aqui, para que el editor pida lo mismo
+     * sin tener que repetir el razonamiento. */
+    copts.asa = lint_needs(wanted, /*live=*/false);
     const bool as_project = vx::vx_source_has_imports(source) ||
                             vx::vx_source_declara_namespace(source);
     vx::CompileResult cr = as_project

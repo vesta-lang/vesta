@@ -2519,10 +2519,7 @@ int main(int argc, char *argv[]) {
          * pintar una tabla.  Ahora los cinco consumidores piden por el mismo
          * sitio, que es lo unico que impide que cada uno acabe con su propio
          * criterio de cuando fiarse de lo guardado. */
-        copts.asa_all_domains = true;
-        copts.asa_stages = {analysis::asa::kStagePreOpt,
-                            analysis::asa::kStageDuringOpt,
-                            analysis::asa::kStagePostOpt};
+        copts.asa = analysis::asa::needs_all("--asa");
         const bool como_proyecto = vx::vx_source_needs_project(vx_source);
         vx::CompileResult cr =
             como_proyecto ? vx::compile_vx_project(vx_path, copts)
@@ -2665,10 +2662,9 @@ int main(int argc, char *argv[]) {
          * Los tres momentos porque el bucle puede ser reconocible en uno y no
          * en otro: lo que se pregunta -- "da un numero fijo de vueltas?" -- no
          * cambia segun quien lo mirara. */
-        copts.asa_domains = {"asa.loops"};
-        copts.asa_stages = {analysis::asa::kStagePreOpt,
-                            analysis::asa::kStageDuringOpt,
-                            analysis::asa::kStagePostOpt};
+        copts.asa.domains = {"asa.loops"};
+        copts.asa.stages = analysis::asa::all_stages();
+        copts.asa.asked_by = "cost-report";
         /* Y ademas el modulo con el inline puesto: el informe necesita los DOS
          * -- el cuerpo escrito para el coste, el codigo real para todo lo
          * demas -- y antes eso eran dos compilaciones del fuente entero. */

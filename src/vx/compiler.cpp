@@ -1523,20 +1523,16 @@ CompileResult compile_vx_source(const std::string &source,
          * atiende el de ANTES.  El de despues se atiende pasado el
          * optimizador, unas lineas mas abajo: son el mismo conocimiento sobre
          * dos codigos distintos, no dos mecanismos. */
-        const bool wants_facts =
-            !filename.empty() &&
-            (!opts.asa_domains.empty() || opts.asa_all_domains);
-        /* Vacio en la peticion a la puerta significa TODOS; aqui arriba
-         * significaba NINGUNO.  Los dos sentidos son correctos en su sitio y
-         * juntarlos en un campo seria la ambiguedad que `asa_all_domains`
-         * viene a quitar. */
-        const std::vector<const char *> asa_wanted =
-            opts.asa_all_domains ? std::vector<const char *>{}
-                                 : opts.asa_domains;
+        const bool wants_facts = !filename.empty() && opts.asa.anything();
+        /* Vacio en la peticion a la puerta significa TODOS; en la del
+         * consumidor significaba NINGUNO.  Los dos sentidos son correctos en su
+         * sitio, y la conversion la hace `domain_list()` una sola vez: escrita
+         * aqui y otra vez en el camino de proyecto, los dos podian
+         * interpretarla distinto.  Lo mismo con `wants_stage`, que era una
+         * lambda aqui y una funcion alli. */
+        const std::vector<const char *> asa_wanted = opts.asa.domain_list();
         const auto wants_stage = [&opts](const char *s) {
-            for (const char *w : opts.asa_stages)
-                if (w != nullptr && std::strcmp(w, s) == 0) return true;
-            return false;
+            return opts.asa.wants_stage(s);
         };
         /* El CONTENIDO del modulo.  La clave completa la arma
          * `asa_facts_key`, que le anade la configuracion -- con la capa que

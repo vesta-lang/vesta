@@ -343,9 +343,11 @@ AnalysisEngine::analyze_document(const std::string &uri,
          * lista la dan las propias familias, no una enumeracion escrita aqui:
          * una escrita se queda vieja en cuanto entra una familia que consulte
          * otro dominio, y se queda vieja EN SILENCIO. */
-        opts.asa_domains = analyze::lint_required_domains({});
-        opts.asa_stages = {analysis::asa::kStagePostOpt,
-                           analysis::asa::kStageDuringOpt};
+        /* `live` = corre a cada pulsacion, asi que se deja fuera el momento de
+         * antes de optimizar.  Esa decision vive en @c lint_needs y no aqui,
+         * porque el terminal y el editor tienen que pedir lo MISMO salvo en lo
+         * que de verdad los diferencia. */
+        opts.asa = analyze::lint_needs({}, /*live=*/true);
         // Multi-modulo: si el buffer tiene `import "..."`, compilar el PROYECTO
         // (resuelve los imports del disco) usando el buffer como overlay del
         // root.  Sin esto el analisis single-file reporta "nombre no declarado"

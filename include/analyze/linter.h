@@ -44,6 +44,7 @@
 #define ANALYZE_LINTER_H
 
 #include "analysis/asa/fact_store.h"
+#include "analysis/asa/needs.h" // la peticion que el linter necesita, armada
 #include "analyze/fingerprint.h"
 #include "vx/diagnostic.h"
 
@@ -147,6 +148,25 @@ void register_lint_family(const char *name, const char *doc,
  */
 std::vector<const char *>
 lint_required_domains(const std::vector<std::string> &wanted);
+
+/**
+ * @brief La peticion al ASA que necesita el linter.
+ *
+ * Los dominios se DERIVAN de las familias (ver arriba) y los momentos son los
+ * tres.  Se ofrece armada para que los dos sitios que corren el linter -- el
+ * terminal y el editor -- no la monten cada uno por su cuenta: asi ya habian
+ * acabado pidiendo momentos distintos, y la diferencia no fallaba, solo hacia
+ * que el editor callara hallazgos que el terminal si daba.
+ *
+ * @param wanted Familias pedidas; vacio = todas.
+ * @param live   Si corre mientras se teclea.  Entonces se deja fuera el
+ *               momento de ANTES de optimizar, que exige canonizar una
+ *               instantanea aparte y no aporta a lo que el linter consulta.
+ *               Va como parametro y no como otra funcion para que la
+ *               diferencia sea visible en la llamada.
+ */
+analysis::asa::AsaNeeds lint_needs(const std::vector<std::string> &wanted,
+                                   bool live);
 
 /// Las familias dadas de alta, en orden de registro.
 std::vector<const LintFamily *> registered_lint_families();

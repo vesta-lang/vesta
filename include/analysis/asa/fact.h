@@ -477,6 +477,25 @@ constexpr const char *kStagePreOpt = "pre-opt";   ///< lo que el programa dice
 constexpr const char *kStageDuringOpt = "in-opt"; ///< lo que un pase descubrio
 constexpr const char *kStagePostOpt = "post-opt"; ///< lo que se va a emitir
 
+/**
+ * @brief Los TRES momentos, para quien quiera todo lo que se sabe.
+ *
+ * Existe porque la lista se estaba escribiendo a mano en seis sitios y ya
+ * habian divergido en CUATRO combinaciones distintas: la linea de ordenes y el
+ * linter pedian los tres, y las dos vistas del editor pedian pre y post -- o
+ * sea que se perdian justo el de EN MEDIO, que es donde vive por que NO se
+ * desenrollo un bucle o por que NO se redujo a una operacion por lotes.  Y no
+ * fallaba: sencillamente no aparecian esos hechos, que es la peor forma de
+ * equivocarse.
+ *
+ * Quien quiera un subconjunto a proposito -- por coste, como el analisis en
+ * vivo mientras se teclea -- lo escribe y dice por que; lo que no puede pasar
+ * es que "todos" signifique cosas distintas segun el sitio.
+ *
+ * @return Los tres, en orden de compilacion.
+ */
+std::vector<const char *> all_stages();
+
 struct Scope {
     const char *isa = "";     ///< @see kIsa*.      "" = cualquiera.
     const char *os = "";      ///< @see kOs*.       "" = cualquiera.

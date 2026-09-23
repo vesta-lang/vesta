@@ -842,6 +842,27 @@ lint_required_domains(const std::vector<std::string> &wanted) {
     return r;
 }
 
+analysis::asa::AsaNeeds lint_needs(const std::vector<std::string> &wanted,
+                                   bool live) {
+    analysis::asa::AsaNeeds n;
+    n.domains = lint_required_domains(wanted);
+    n.stages = analysis::asa::all_stages();
+    n.asked_by = live ? "lint-live" : "lint";
+    if (live) {
+        /* Fuera el momento de ANTES de optimizar: esto corre a cada pulsacion y
+         * ese momento exige canonizar una instantanea aparte.  Lo que el linter
+         * consulta vive en los otros dos.  Se dice aqui y no se omite en
+         * silencio, que es como el editor acabo contestando distinto que el
+         * terminal a la misma pregunta. */
+        std::vector<const char *> sin_pre;
+        for (const char *s : n.stages)
+            if (std::strcmp(s, analysis::asa::kStagePreOpt) != 0)
+                sin_pre.push_back(s);
+        n.stages = std::move(sin_pre);
+    }
+    return n;
+}
+
 std::vector<const LintFamily *> registered_lint_families() {
     ensure_registry();
     std::vector<const LintFamily *> v;
