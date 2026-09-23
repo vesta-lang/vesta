@@ -36,6 +36,7 @@
 #include "lsp/document_store.h"
 #include "lsp/inspector.h"
 #include "lsp/json_rpc.h"
+#include "lsp/queries.h"
 #include "lsp/symbol_index.h"
 
 namespace lsp {
@@ -47,13 +48,21 @@ namespace lsp {
  * Procesa mensajes de forma secuencial sobre un @c JsonRpcTransport.  No
  * es thread-safe por diseno (un solo hilo de eventos).
  */
-class LspServer {
+class LspServer : public HostOps {
   public:
     /**
      * @brief Construye el servidor sobre el transporte dado.
      * @param transport Transporte JSON-RPC (por defecto stdio).
      */
     explicit LspServer(JsonRpcTransport transport);
+
+    // --- HostOps: lo que una consulta necesita y solo sabe hacer el servidor.
+    // Publicas porque las llama la tabla, no porque nadie mas deba usarlas.
+
+    nlohmann::json compile(const std::string &uri, bool project,
+                           const nlohmann::json &params) override;
+    nlohmann::json symbol_info(const std::string &uri, uint32_t line,
+                               uint32_t character) override;
 
     /**
      * @brief Ejecuta el bucle de eventos hasta recibir @c exit o EOF.

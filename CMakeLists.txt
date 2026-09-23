@@ -1181,6 +1181,11 @@ add_executable(vesta_lsp
         src/lsp/param_hints.cpp
         src/lsp/symbol_index.cpp
         src/lsp/inspector.cpp
+        # Las FILAS del catalogo de consultas (query::QueryDesc): el nombre,
+        # los parametros y los defectos de cada pregunta, escritos una vez.  De
+        # aqui salen tanto lo que se anuncia al cliente como lo que se
+        # despacha; antes eran dos listas a mano y ya habian divergido.
+        src/lsp/queries.cpp
         src/lsp/builtin_docs.cpp
         # GENERADO desde catalog/builtin_docs.toml: la documentacion de los
         # builtins en todos los idiomas.  Se regenera con

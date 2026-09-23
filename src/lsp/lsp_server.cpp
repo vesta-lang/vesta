@@ -55,6 +55,17 @@
 
 namespace lsp {
 
+/**
+ * @brief Con que se decora el nombre de una consulta al publicarla por LSP.
+ *
+ * La tabla guarda el nombre DESNUDO (`bytecode`), porque el prefijo es cosa del
+ * transporte: otro publicara el mismo nombre de otra forma.  Se escribe una vez
+ * aqui, y lo usan tanto el anuncio como el despacho -- que es lo que garantiza
+ * que no puedan discrepar en como lo decoran.
+ */
+static constexpr const char kVestaPrefix[] = "vesta/";
+static constexpr size_t kVestaPrefixLen = sizeof(kVestaPrefix) - 1;
+
 namespace {
 
 /**
@@ -78,7 +89,13 @@ int diag_severity_to_lsp(vx::DiagLevel level) {
 } // namespace
 
 LspServer::LspServer(JsonRpcTransport transport)
-    : transport_(std::move(transport)) {}
+    : transport_(std::move(transport)) {
+    /* La tabla se puebla al construir el servidor y no en un estatico global:
+     * un estatico se inicializa en un orden que nadie gobierna entre unidades
+     * de traduccion, y una tabla a medio poblar se nota como una consulta que
+     * "no existe" -- callando. */
+    register_inspector_queries();
+}
 
 void LspServer::send_result(const nlohmann::json &id,
                             const nlohmann::json &result) {
@@ -89,6 +106,29 @@ void LspServer::send_result(const nlohmann::json &id,
     resp["result"] = result;
     transport_.write_message(resp);
 }
+
+// ---------------------------------------------------------------------------
+// HostOps: las dos consultas que NO contesta el inspector.
+//
+// Podrian haberse quedado fuera de la tabla y despacharse a mano, que es como
+// estaban.  Eso es exactamente lo que no puede pasar: una consulta fuera de la
+// tabla es una segunda via, y una segunda via es la que se queda sin anunciar
+// -- que es lo que le paso a `symbolInfo`.
+// ---------------------------------------------------------------------------
+
+nlohmann::json LspServer::compile(const std::string &uri, bool project,
+                                  const nlohmann::json &params) {
+    /* El LSP embebe el compilador: deja un .velb en disco usando el driver
+     * reutilizable (vesta::tc).  NO ejecuta nada -- correrlo aqui escribiria en
+     * el stdout del servidor y romperia el canal JSON-RPC. */
+    return compile_request(project ? "vesta/compileProject" : "vesta/compile",
+                           uri, params);
+}
+
+// `symbol_info` se define junto al resto de lo que mira el codigo por el
+// cursor (@c build_doc_symbols, @c extract_doc_comment), no aqui: es de esa
+// familia, y ponerla antes que ellas obligaria a declararlas por delante solo
+// para ganar unas lineas de sitio.
 
 nlohmann::json LspServer::compile_request(const std::string &method,
                                           const std::string &uri,
@@ -280,17 +320,15 @@ void LspServer::handle_initialize(const nlohmann::json &msg) {
     // forman parte del LSP estandar, asi que se anuncian bajo el campo
     // experimental para que un cliente que las conozca las descubra.
     nlohmann::json experimental;
-    experimental["vestaMethods"] =
-        nlohmann::json::array({"vesta/bytecode",       "vesta/ir",
-                               "vesta/complexity",     "vesta/diagram",
-                               "vesta/functions",      "vesta/aotCompat",
-                               "vesta/jitAsm",         "vesta/aotAsm",
-                               "vesta/modes",          "vesta/compile",
-                               "vesta/compileProject", "vesta/macroExpand",
-                               "vesta/comptimeValues", "vesta/asa",
-                               "vesta/asaFacts",       "vesta/targets",
-                               "vesta/instruction",    "vesta/functionReport",
-                               "vesta/asmBlock",       "vesta/asmFlow"});
+    /* Sale de la TABLA, no de una lista escrita aqui.  La escrita a mano se
+     * quedo corta -- `irDiff`, `paramHints` y `symbolInfo` se despachaban sin
+     * anunciarse, asi que un cliente que descubriera por aqui no sabia que
+     * existian --, y ese fallo es mudo por naturaleza: dos listas a mano no se
+     * contradicen, simplemente una se olvida. */
+    nlohmann::json methods = nlohmann::json::array();
+    for (const query::QueryDesc *d : query::Registry::instance().all())
+        methods.push_back(std::string(kVestaPrefix) + d->name);
+    experimental["vestaMethods"] = std::move(methods);
     caps["experimental"] = std::move(experimental);
 
     nlohmann::json result;
@@ -1247,6 +1285,66 @@ void expand_builtin_tree_word(const std::string &text, size_t offset,
 }
 
 } // namespace
+
+nlohmann::json LspServer::symbol_info(const std::string &uri, uint32_t line,
+                                      uint32_t character) {
+    /* El simbolo bajo el cursor para el hover rico: nombre, categoria, firma y
+     * documentacion.  Las pestanas de intermedio, bytecode, JIT y nativo las
+     * pide el cliente aparte, cada una con SU consulta -- asi el hover se abre
+     * al instante y lo caro solo se calcula si se mira. */
+    nlohmann::json info = nlohmann::json::object();
+    info["found"] = false;
+    if (!docs_.has(uri)) return info;
+
+    // Reusar la extraccion de palabra del hover, que ya maneja UTF-16.
+    nlohmann::json hp;
+    hp["textDocument"]["uri"] = uri;
+    hp["position"]["line"] = line;
+    hp["position"]["character"] = character;
+    std::string u2, word;
+    if (!word_under_cursor(hp, u2, word) || word.empty()) return info;
+
+    const auto text_ref = docs_.text(uri);
+    const std::string &text = *text_ref;
+    const DocSymbols local = build_doc_symbols(text, uri);
+    const SymbolDef *def = nullptr;
+    for (const auto &d : local.defs)
+        if (d.name == word) {
+            def = &d;
+            break;
+        }
+
+    info["name"] = word;
+    if (def != nullptr) {
+        info["found"] = true;
+        info["kind"] = symbol_kind_name(def->kind);
+        info["signature"] = def->signature;
+        info["container"] = def->container;
+        info["doc"] = extract_doc_comment(text, def->byte_offset);
+        info["callable"] = def->kind == SymbolKind::Function ||
+                           def->kind == SymbolKind::Method;
+    } else if (const BuiltinDoc *b = lookup_builtin(word)) {
+        /* Builtin del lenguaje (print, sizeof, ...): documentacion y firma
+         * desde la tabla central.  callable=false -> el hover solo ensena la
+         * pestana de documentacion, porque un builtin no tiene intermedio ni
+         * nativo de usuario que inspeccionar. */
+        info["found"] = true;
+        info["kind"] = "builtin";
+        info["signature"] = b->signature;
+        info["container"] = "";
+        info["doc"] = b->doc;
+        info["callable"] = false;
+    } else {
+        // Identificador sin definicion local (variable local, tipo importado):
+        // aun es util saber el nombre.
+        info["found"] = true;
+        info["kind"] = "unknown";
+        info["signature"] = "";
+        info["doc"] = "";
+        info["callable"] = false;
+    }
+    return info;
+}
 
 bool LspServer::word_under_cursor(const nlohmann::json &params,
                                   std::string &out_uri, std::string &out_word) {
@@ -2444,214 +2542,60 @@ bool LspServer::handle_vesta_request(const std::string &method,
     };
 
     try {
-        // Extraer params.uri (comun a todas las peticiones del inspector).
         if (!msg.contains("params") || !msg.at("params").is_object()) {
             respond_error("faltan params");
             return true;
         }
         const nlohmann::json &params = msg.at("params");
 
-        // El catalogo de objetivos habla del compilador, no de un documento:
-        // se atiende antes de exigir uno.
-        if (method == "vesta/targets") {
-            send_result(id, inspector_.targets());
-            return true;
-        }
+        /* El transporte decora el nombre (`vesta/bytecode`); la tabla lo
+         * guarda desnudo (`bytecode`), porque otro transporte lo decorara de
+         * otra forma.  Des-decorar aqui, en un solo sitio, es lo que hace que
+         * anuncio y despacho no puedan discrepar. */
+        if (method.compare(0, kVestaPrefixLen, kVestaPrefix) != 0)
+            return false;
+        const query::QueryDesc *desc =
+            query::Registry::instance().find(method.substr(kVestaPrefixLen));
+        if (desc == nullptr) return false; // no es una consulta nuestra.
 
-        // La ficha de una instruccion se pide por su LINEA, no por su texto:
-        // asi se responde por lo que el compilador entendio de ella.
-        if (method == "vesta/asmFlow") {
-            // El flujo de todos los bloques, para pintarlo sobre el codigo.
-            send_result(
-                id, inspector_.asm_flow(params.value("uri", std::string()),
-                                        params.value("arch", std::string())));
-            return true;
-        }
-        if (method == "vesta/asmBlock") {
-            // Un bloque de asm entero, con su flujo y lo que se sabe de cada
-            // instruccion.
-            send_result(
-                id, inspector_.asm_block(params.value("uri", std::string()),
-                                         params.value("line", 0u),
-                                         params.value("cpu", std::string()),
-                                         params.value("arch", std::string())));
-            return true;
-        }
-        if (method == "vesta/instruction") {
-            send_result(id, inspector_.instruction(
-                                params.value("uri", std::string()),
-                                params.value("line", 0u),
-                                params.value("cpu", std::string()),
-                                params.value("arch", std::string())));
-            return true;
-        }
+        query::Args args;
+        args.desc = desc;
+        args.raw = &params;
 
-        const std::string uri = params.value("uri", std::string());
-        if (uri.empty()) {
+        InspectorCtx ctx;
+        ctx.inspector = &inspector_;
+        ctx.docs = &docs_;
+        ctx.host = this;
+
+        /* Lo que la fila DECLARA que necesita lo arma el transporte, no el
+         * manejador: armar el objetivo en cada una de las quince consultas que
+         * lo usan son quince sitios donde olvidarse de `cpu`. */
+        if (query::has(desc->needs, query::Needs::Document) &&
+            args.str("uri").empty()) {
             respond_error("falta params.uri");
             return true;
         }
-
-        // Target OS/arch opcional (vistas por plataforma): params.os /
-        // params.arch (vacios = host).  Permite ver el
-        // IR/bytecode/asm/JIT/diagrama que el compilador genera para
-        // Linux/Windows x x86-64/x86-32.
-        lsp::InspectTarget itarget;
-        itarget.os = params.value("os", std::string());
-        itarget.arch = params.value("arch", std::string());
-        // Con que se compila y para que maquina concreta: el nivel de
-        // optimizacion, el juego de instrucciones de coma flotante y la
-        // microarquitectura cambian lo que sale, asi que son parte de la
-        // pregunta.  Sin ellos se responde siempre por el mismo binario.
-        itarget.opt = params.value("opt", -1);
-        itarget.float_isa = params.value("floatIsa", std::string());
-        itarget.cpu = params.value("cpu", std::string());
-
-        nlohmann::json result;
-        if (method == "vesta/bytecode") {
-            const std::string fn = params.value("function", std::string());
-            result = inspector_.bytecode(uri, fn, itarget);
-        } else if (method == "vesta/ir") {
-            const std::string phase =
-                params.value("phase", std::string("post"));
-            result = inspector_.ir(uri, phase, itarget);
-        } else if (method == "vesta/irDiff") {
-            const std::string fn = params.value("function", std::string());
-            result = inspector_.ir_diff(uri, fn);
-        } else if (method == "vesta/complexity") {
-            result = inspector_.complexity(uri);
-        } else if (method == "vesta/functionReport") {
-            // Lo declarado frente a lo medido, por funcion.
-            result = inspector_.function_report(uri);
-        } else if (method == "vesta/diagram") {
-            const std::string kind =
-                params.value("kind", std::string("ir-post"));
-            const std::string format =
-                params.value("format", std::string("mermaid"));
-            const bool cost = params.value("cost", false);
-            // 'function' solo lo usa kind="asm" (CFG del codigo nativo).
-            const std::string fn = params.value("function", std::string());
-            result = inspector_.diagram(uri, kind, format, cost, itarget, fn);
-        } else if (method == "vesta/functions") {
-            result = inspector_.functions(uri);
-        } else if (method == "vesta/aotCompat") {
-            const std::string tier = params.value("tier", std::string("bare"));
-            result = inspector_.aot_compat(uri, tier);
-        } else if (method == "vesta/modes") {
-            // Reporte del modulo en interp/JIT/AOT (todos, o el 'mode' pedido).
-            const std::string md = params.value("mode", std::string());
-            const std::string tier = params.value("tier", std::string("bare"));
-            result = inspector_.modes(uri, md, tier);
-        } else if (method == "vesta/compile" ||
-                   method == "vesta/compileProject") {
-            // El LSP embebe el compilador: produce un .velb en disco usando el
-            // driver reutilizable (vesta::tc).  No ejecuta nada (eso corre en
-            // un proceso aparte: correrlo aqui escribiria en el stdout del LSP
-            // y romperia el canal JSON-RPC).
-            result = compile_request(method, uri, params);
-        } else if (method == "vesta/jitAsm") {
-            const std::string fn = params.value("function", std::string());
-            result = inspector_.jit_asm(uri, fn, itarget);
-        } else if (method == "vesta/aotAsm") {
-            const std::string fn = params.value("function", std::string());
-            result = inspector_.aot_asm(uri, fn, itarget);
-        } else if (method == "vesta/macroExpand") {
-            result = inspector_.macro_expand(uri);
-        } else if (method == "vesta/comptimeValues") {
-            result = inspector_.comptime_values(uri);
-        } else if (method == "vesta/asa") {
-            // Todo lo que el compilador sabe del modulo, tal y como lo cuenta
-            // la linea de ordenes.
-            result = inspector_.asa(uri);
-        } else if (method == "vesta/asaFacts") {
-            // Lo mismo, pero atado a la linea a la que pertenece cada cosa:
-            // para ensenarlo EN el codigo mientras se escribe.
-            result = inspector_.asa_facts(uri);
-        } else if (method == "vesta/paramHints") {
-            // Parameter hints (inlay): nombre de cada parametro antes de su
-            // argumento en las llamadas a funciones conocidas.
-            nlohmann::json arr = nlohmann::json::array();
-            if (docs_.has(uri)) {
-                const auto text_ref = docs_.text(uri);
-                const std::string &text = *text_ref;
-                std::vector<ParamHint> ph = compute_param_hints(text, uri);
-                for (const auto &h : ph) {
-                    nlohmann::json o;
-                    o["line"] = h.line;
-                    o["character"] = h.character;
-                    o["label"] = h.label;
-                    arr.push_back(std::move(o));
-                }
-            }
-            result = nlohmann::json::object();
-            result["hints"] = std::move(arr);
-        } else if (method == "vesta/symbolInfo") {
-            // Informacion del simbolo bajo el cursor para el hover rico:
-            // nombre + categoria + firma + doc (comentarios precedentes).  Las
-            // pestanas IR/bytecode/JIT/AOT las pide el cliente aparte
-            // (on-demand) con vesta/ir, vesta/bytecode, vesta/jitAsm,
-            // vesta/aotAsm.
-            const uint32_t line = params.value("line", 0u);
-            const uint32_t character = params.value("character", 0u);
-            nlohmann::json info = nlohmann::json::object();
-            info["found"] = false;
-            if (docs_.has(uri)) {
-                // Reusar la extraccion de palabra del hover (maneja UTF-16).
-                nlohmann::json hp;
-                hp["textDocument"]["uri"] = uri;
-                hp["position"]["line"] = line;
-                hp["position"]["character"] = character;
-                std::string u2, word;
-                if (word_under_cursor(hp, u2, word) && !word.empty()) {
-                    const auto text_ref = docs_.text(uri);
-                    const std::string &text = *text_ref;
-                    DocSymbols local = build_doc_symbols(text, uri);
-                    const SymbolDef *def = nullptr;
-                    for (const auto &d : local.defs)
-                        if (d.name == word) {
-                            def = &d;
-                            break;
-                        }
-                    info["name"] = word;
-                    if (def) {
-                        info["found"] = true;
-                        info["kind"] = symbol_kind_name(def->kind);
-                        info["signature"] = def->signature;
-                        info["container"] = def->container;
-                        info["doc"] =
-                            extract_doc_comment(text, def->byte_offset);
-                        const bool callable =
-                            def->kind == SymbolKind::Function ||
-                            def->kind == SymbolKind::Method;
-                        info["callable"] = callable;
-                    } else if (const BuiltinDoc *b = lookup_builtin(word)) {
-                        // Builtin del lenguaje (print, sizeof, str_*, ...):
-                        // doc + firma desde la tabla central.  callable=false
-                        // -> el hover solo muestra la pestana Doc (los builtins
-                        // no tienen IR/JIT/AOT de usuario que inspeccionar).
-                        info["found"] = true;
-                        info["kind"] = "builtin";
-                        info["signature"] = b->signature;
-                        info["container"] = "";
-                        info["doc"] = b->doc;
-                        info["callable"] = false;
-                    } else {
-                        // Identificador sin definicion local (var local, tipo
-                        // importado): aun util saber el nombre.
-                        info["found"] = true;
-                        info["kind"] = "unknown";
-                        info["signature"] = "";
-                        info["doc"] = "";
-                        info["callable"] = false;
-                    }
-                }
-            }
-            result = std::move(info);
-        } else {
-            // Metodo vesta/* desconocido: no manejado aqui.
-            return false;
+        if (query::has(desc->needs, query::Needs::Target)) {
+            ctx.target.os = args.str("os");
+            ctx.target.arch = args.str("arch");
+            ctx.target.opt = static_cast<int>(args.integer("opt"));
+            ctx.target.float_isa = args.str("floatIsa");
+            ctx.target.cpu = args.str("cpu");
         }
-        send_result(id, result);
+
+        send_result(id, desc->fn(ctx, args));
+        return true;
+    } catch (const query::MissingArgument &e) {
+        /* Falta un parametro que la fila declara obligatorio.  Es de quien
+         * pregunta, no nuestro, y por eso se dice CUAL: contestar un cero
+         * seria devolver algo que parece un resultado. */
+        respond_error(e.what());
+        return true;
+    } catch (const query::BadQueryDefinition &e) {
+        /* Esto SI es nuestro: un manejador lee algo que su fila no declara, o
+         * sea que el esquema publicado miente.  Se grita en vez de degradar. */
+        respond_error(std::string("fallo en la tabla de consultas: ") +
+                      e.what());
         return true;
     } catch (const std::exception &e) {
         // Cualquier fallo del inspector se convierte en un error de
