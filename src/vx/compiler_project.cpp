@@ -58,6 +58,9 @@ int run_worker_from_source(std::string code, const std::string &file_name,
 #include "vx/project/module_cache_key.h" // cuando un artefacto guardado sirve
 #include "vx/project/module_work.h" // lo que se lleva de cada modulo
 #include "vx/project/module_artifact.h" // el artefacto en cache y su adopcion
+#include "vx/project/module_names.h" // los simbolos derivados del modulo
+#include "ir/synthetic_symbols.h" // la familia de `__module_init`
+#include "vx/project/module_paths.h" // donde van sus ficheros
 #include "vx/source_text.h"   // un solo fin de linea para todo el pipeline
 #include "vx/vxdbg_emit.h"    // grafo de conocimiento del programa
 #include "vxdbg/pack_store.h"
@@ -251,121 +254,6 @@ bool read_file_bytes_(const std::string &path, std::vector<uint8_t> &out) {
     out.resize(static_cast<size_t>(sz));
     if (sz > 0) f.read(reinterpret_cast<char *>(out.data()), sz);
     return f.good();
-}
-
-/* Donde caen los artefactos de un modulo.
- *
- * En la cache, SIEMPRE, y en el cajon de su tipo -- lo reparte
- * `util/cache_paths.h` --.  Antes caian junto al fuente (`lib.vx` ->
- * `lib.vxi`) salvo que se pusiera `VX_CACHE_DIR`, y eso costaba de tres
- * maneras: ensuciaba el arbol de fuentes con ficheros que salian en
- * `git status` sin que nadie supiera si hacian falta; obligaba a limpiar por
- * lista de extensiones -- borrar `.cache` dejaba vivos los `.vxi`, y quien
- * media en frio media en caliente sin enterarse --; y hacia que el mismo
- * proyecto tuviera dos disposiciones distintas segun una variable de entorno,
- * o sea dos caminos que probar.
- *
- * Lo que motivaba tenerlos al lado -- publicar una libreria copiando el `.vx`
- * con su `.vxi` -- no se pierde: son artefactos PORTABLES y siguen juntos, en
- * `.cache/ir`.  Copiar ese cajon es exactamente lo mismo, y ademas se puede
- * hacer de golpe.  @see util::CacheScope
- */
-
-/**
- * @brief El nombre de fichero de un artefacto de @p source_path .
- *
- * Lleva la huella de la ruta CANONICA delante para que dos modulos con el
- * mismo nombre de fichero -- que en un proyecto con varias carpetas es lo
- * normal -- no se pisen ahora que todos comparten cajon; y el nombre del
- * modulo detras, para que mirando el directorio se pueda saber de que es cada
- * uno sin descifrar nada.
- *
- * @param source_path Ruta canonica del modulo.
- * @param tail        Lo que va detras del nombre: objetivo y extension.
- * @return Nombre de hoja, sin directorio.
- */
-static std::string cache_file_name_(const std::string &source_path,
-                                    const std::string &tail) {
-    namespace fs = std::filesystem;
-    const uint64_t h = util::fnv_bytes(util::kFnvOffset, source_path.data(),
-                                       source_path.size());
-    char hex[17];
-    std::snprintf(hex, sizeof(hex), "%016llx",
-                  static_cast<unsigned long long>(h));
-    return std::string(hex) + "_" + fs::path(source_path).stem().string() +
-           tail;
-}
-
-/**
- * @brief Donde va un artefacto de @p source_path del tipo @p kind .
- *
- * @param source_path Ruta canonica del modulo.
- * @param kind        Que tipo de artefacto es; decide el cajon.
- * @param tail        Objetivo y extension (p.ej. @c ".pre.vxfacts" ).
- * @return Ruta completa dentro de la cache.
- */
-static std::string cache_path_(const std::string &source_path,
-                               util::CacheKind kind, const std::string &tail) {
-    namespace fs = std::filesystem;
-    return (fs::path(util::cache_dir(kind)) /
-            cache_file_name_(source_path, tail))
-        .string();
-}
-
-/**
- * @brief Las rutas de cache de un modulo, calculadas UNA vez.
- *
- * Todas comparten el mismo trabajo: mirar si hay cache global, hashear el path
- * canonico y componer un prefijo.  Pedirlas por separado repetia ese trabajo
- * cuatro veces por modulo, y cada compilacion vuelve a preguntar por las mismas
- * -- una al mirar si hay acierto de cache y otra al escribir --.  En un
- * proyecto pequeño da igual; en uno grande es donde se nota.
- */
-struct RutasCache {
-    std::string vxi;    ///< interfaz binaria del modulo.
-    std::string vxir;   ///< su IR serializado.
-    std::string vel;    ///< su .vel suelto, para distribuirlo aparte.
-    std::string hechos; ///< lo que el ASA supo de el al bajarlo.
-};
-
-/**
- * @brief Las rutas de @p source_path, calculadas la primera vez y reusadas.
- *
- * @param source_path Path canonico del modulo.
- * @param tgt_suffix  Separa el cache por objetivo (ver @c vxir_path_for_).
- * @return Las cuatro rutas.  La referencia vive lo que el proceso.
- */
-static const RutasCache &rutas_cache_(const std::string &source_path,
-                                      const std::string &tgt_suffix) {
-    /* Compartida entre los hilos que compilan modulos en paralelo, asi que va
-     * con cerrojo.  Es un puñado de entradas y se tocan una vez por modulo:
-     * el cerrojo cuesta muchisimo menos que rehacer las rutas. */
-    static std::mutex mtx;
-    static std::unordered_map<std::string, RutasCache> tabla;
-    std::string clave = source_path;
-    clave.push_back('\0');
-    clave += tgt_suffix;
-    std::lock_guard<std::mutex> lk(mtx);
-    auto it = tabla.find(clave);
-    if (it != tabla.end()) return it->second;
-    RutasCache r;
-    /* La interfaz y el intermedio comparten cajon a proposito: son la misma
-     * compilacion vista por sus dos caras, nacen y mueren juntos, y la
-     * extension ya los distingue. */
-    r.vxi = cache_path_(source_path, util::CacheKind::ModuleIr,
-                        tgt_suffix + ".vxi");
-    r.vxir = cache_path_(source_path, util::CacheKind::ModuleIr,
-                         tgt_suffix + ".vxir");
-    r.hechos = cache_path_(source_path, util::CacheKind::Facts,
-                           tgt_suffix + ".vxfacts");
-    /* El .vel no se separa por objetivo: es el mismo modulo suelto. */
-    r.vel = cache_path_(source_path, util::CacheKind::Vel, ".vel");
-    return tabla.emplace(std::move(clave), std::move(r)).first->second;
-}
-
-std::string vxi_path_for_(const std::string &source_path,
-                          const std::string &tgt_suffix = "") {
-    return rutas_cache_(source_path, tgt_suffix).vxi;
 }
 
 /**
@@ -624,27 +512,6 @@ ensure_facts_impl_(const ir::IrModule &mod, analysis::asa::FactStore &store,
     return summaries;
 }
 
-/// Idem para el cache de IR del dep (.vxir).  @c tgt_suffix separa el cache por
-/// target (p.ej. ".linux-x86_64") para modulos con @Target -> alternar de
-/// target no recompila (HALLAZGO-2).  Vacio => fichero unico compartido.
-std::string vxir_path_for_(const std::string &source_path,
-                           const std::string &tgt_suffix = "") {
-    return rutas_cache_(source_path, tgt_suffix).vxir;
-}
-
-/// Path del fichero de hechos del ASA: lo que se supo del modulo al bajarlo y
-/// no se puede recalcular mirando el modulo ya compilado.
-std::string vxfacts_path_for_(const std::string &source_path,
-                              const std::string &tgt_suffix = "") {
-    return rutas_cache_(source_path, tgt_suffix).hechos;
-}
-
-///  M5.C: path del @c .vel cacheado per-dep (output secundario
-/// junto al @c .vxi para distribucion de libs precompiladas).
-std::string dep_vel_path_for_(const std::string &source_path) {
-    return rutas_cache_(source_path, std::string()).vel;
-}
-
 /// Lee el fichero a string.  Devuelve cadena vacia en error (el caller
 /// detecta el error via @c diags).
 ///
@@ -751,7 +618,9 @@ reach_from_seeds(const ir::IrModule &mod,
 
     for (size_t i = 0; i < mod.functions.size(); ++i) {
         const ir::IrFunction &fn = mod.functions[i];
-        const bool is_init = fn.name.find("__module_init") != std::string::npos;
+        /* Por PREFIJO, como todos los demas: "contiene" era un criterio
+         * distinto del mismo nombre. */
+        const bool is_init = ir::is_module_init_family(fn.name);
         const bool is_seed = fn.name == "main" || is_init || fn.is_native ||
                              fn.is_naked || (seed_public && fn.is_public);
         if (!is_seed) continue;
@@ -882,7 +751,7 @@ void spill_until_under_ceiling(std::vector<ProjectModuleWork> &work,
             SourceLoc loc;
             loc.set_file(pm.canonical_path);
             diags.diag(std::move(loc), DiagLevel::WARN, "VX4007",
-                       {pm.module_name, dest,
+                       {pm.module_name.str(), dest,
                         util::flag_info(util::FlagId::IrRamMaxMib).name});
             continue;
         }
@@ -890,7 +759,7 @@ void spill_until_under_ceiling(std::vector<ProjectModuleWork> &work,
         pm.ir_spilled_fns = count;
         live -= (held < live ? held : live);
         if (verbose)
-            std::cerr << "[ir] " << pm.module_name << ": " << count
+            std::cerr << "[ir] " << pm.module_name.str() << ": " << count
                       << " funciones a disco, " << (held / 1024u / 1024u)
                       << " MiB libres\n";
     }
@@ -1046,7 +915,7 @@ inline std::string flatten_ns_(const std::string &dotted) {
 ///   - `main` (entry point unico del programa: solo el root lo define
 ///     y se invoca via su nombre canonico).
 void mangle_top_level_(ast::ModuleNode &mod, const std::string &module_name) {
-    const std::string prefix = module_name + "__";
+    const std::string prefix = module_symbol_prefix(module_name);
 
     // Recopilar los nombres a renombrar.
     std::unordered_map<std::string, std::string> rename_map;
@@ -1459,7 +1328,7 @@ NsToModname build_ns_to_modname_(const std::vector<ProjectModuleWork> &work) {
             if (!d || d->kind != ast::NodeKind::NamespaceDecl) continue;
             const auto *ns = static_cast<const ast::NamespaceDecl *>(d.get());
             if (ns->name.empty()) continue;
-            out.emplace(ns->name, pm.module_name);
+            out.emplace(ns->name, pm.module_name.str());
         }
     }
     return out;
@@ -1583,8 +1452,8 @@ build_ns_to_all_modnames_(const std::vector<ProjectModuleWork> &work) {
             const auto *ns = static_cast<const ast::NamespaceDecl *>(d.get());
             if (ns->name.empty()) continue;
             auto &v = out[ns->name];
-            if (std::find(v.begin(), v.end(), pm.module_name) == v.end())
-                v.push_back(pm.module_name);
+            if (std::find(v.begin(), v.end(), pm.module_name.str()) == v.end())
+                v.push_back(pm.module_name.str());
         }
     }
     return out;
@@ -1606,7 +1475,10 @@ build_ns_to_all_modnames_(const std::vector<ProjectModuleWork> &work) {
  */
 std::string vxfacts_path_for(const std::string &source_path,
                              const std::string &tgt_suffix) {
-    return rutas_cache_(source_path, tgt_suffix).hechos;
+    /* Se interna aqui porque quien pregunta lo hace una vez por compilacion. */
+    return module_cache_paths(util::InternedName::intern(source_path),
+                              util::InternedName::intern(tgt_suffix))
+        .facts;
 }
 
 std::vector<analysis::asa::ProductionSummary>
@@ -1739,7 +1611,7 @@ compute_module_levels_(const std::vector<ProjectModuleWork> &work,
         int max_dep_level = -1;
         auto imports =
             collect_imports_(*pm.ast, &ns_to_modname, &auto_imports,
-                             auto_import_owner_dir, pm.canonical_path);
+                             auto_import_owner_dir, pm.canonical_path.str());
         for (const auto &req : imports) {
             // Resolver el dep por NAMESPACE COMPLETO (by_ns) cuando el import
             // es por-namespace: `by_name` colisiona cuando dos modulos
@@ -2167,8 +2039,11 @@ CompileResult compile_vx_project(
         // no se usa mas despues de este punto).
         ResolvedModule *rm_mut = const_cast<ResolvedModule *>(rm);
         work[i].module_id = mid;
-        work[i].canonical_path = rm_mut->canonical_path;
-        work[i].module_name = rm_mut->module_name;
+        /* Internados UNA vez aqui, al nacer el modulo: de aqui en adelante su
+         * identidad se copia como un puntero. */
+        work[i].canonical_path =
+            util::InternedName::intern(rm_mut->canonical_path);
+        work[i].module_name = util::InternedName::intern(rm_mut->module_name);
         work[i].ast = std::move(rm_mut->parsed_ast);
         // Cargar source de disco para el lexer (necesario para el
         // diagnostics: queremos preservar locs).
@@ -2264,7 +2139,7 @@ CompileResult compile_vx_project(
             }
             texto += cu.unit_source;
             if (!cu.empty()) hay_comptime = true;
-            overlay_ct[w.canonical_path] = texto;
+            overlay_ct[w.canonical_path.str()] = texto;
             /* El texto que de VERDAD se compila para este modulo.  El volcado
              * por conjunto se salta los modulos sin codigo comptime -- los que
              * solo aportan tipos --, que son justo los que hacen falta mirar
@@ -2274,13 +2149,9 @@ CompileResult compile_vx_project(
                     util::flag_text(util::FlagId::VolcarUnidad);
                 std::error_code oec;
                 std::filesystem::create_directories(dd, oec);
-                std::ofstream fo(
-                    dd + "/overlay_" + w.module_name + "_" +
-                    std::to_string(
-                        static_cast<unsigned long long>(vxi_fnv1a(
-                            w.canonical_path.data(), w.canonical_path.size())) %
-                        100000ULL) +
-                    ".vx");
+                std::ofstream fo(module_dump_path(dd, "overlay_",
+                                                  w.module_name.str(),
+                                                  w.canonical_path.str(), ".vx"));
                 if (fo) fo << texto;
             }
         }
@@ -2559,7 +2430,8 @@ CompileResult compile_vx_project(
                 // manglado a mano para que coincida con el simbolo del IR
                 // mergeado.  El root conserva su nombre tal cual.
                 const std::string sym_name =
-                    is_root ? fd->name : (pm.module_name + "__" + fd->name);
+                    is_root ? fd->name
+                            : module_member_symbol(pm.module_name.str(), fd->name);
                 // Validacion de firma (no fatal, el usuario manda).
                 bool ret_void =
                     !fd->return_type || (fd->return_type->kind ==
@@ -2802,7 +2674,7 @@ CompileResult compile_vx_project(
         if (verbose_compile) {
             std::ostringstream ln;
             ln << "[L" << module_levels[i] << "][" << (i + 1) << "/"
-               << work.size() << "] compiling " << pm.module_name
+               << work.size() << "] compiling " << pm.module_name.str()
                << (is_root ? " (root)" : "") << "...\n";
             std::lock_guard<std::mutex> lk(verbose_mtx);
             std::cerr << ln.str();
@@ -2822,7 +2694,7 @@ CompileResult compile_vx_project(
         key_in.target_arch = &cc_tgt_arch;
         const ModuleCacheKey cache_key = module_cache_key(key_in);
         const uint64_t source_hash = cache_key.source_hash;
-        const std::string &cache_tgt_suffix = cache_key.target_suffix;
+        const util::InternedName cache_tgt_suffix = cache_key.target_suffix;
 
         // ---- CAS global (content-addressed, cross-proyecto) ----
         // Clave de contenido del modulo (independiente de la ruta).  Se calcula
@@ -2845,14 +2717,14 @@ CompileResult compile_vx_project(
             DepAbiHashes dep_hashes;
             for (const ImportRequest &req : collect_imports_(
                      *pm.ast, &ns_to_modname, &auto_imports,
-                     auto_import_owner_dir, pm.canonical_path)) {
+                     auto_import_owner_dir, pm.canonical_path.str())) {
                 auto itd = by_name.find(req.module_name);
                 if (itd != by_name.end())
                     dep_hashes.push_back(work[itd->second].vxi.abi_hash);
             }
             std::sort(dep_hashes.begin(), dep_hashes.end());
             const uint64_t content_key = module_content_key(
-                source_hash, dep_hashes, cache_tgt_suffix, cas_config_fp);
+                source_hash, dep_hashes, cache_tgt_suffix.str(), cas_config_fp);
             if (is_root) {
                 root_facts_key = content_key;
             } else {
@@ -2876,7 +2748,7 @@ CompileResult compile_vx_project(
                                               std::move(dep_mod));
                         if (verbose_cache) {
                             std::ostringstream tmp;
-                            tmp << "[vx-cas] hit: " << pm.canonical_path
+                            tmp << "[vx-cas] hit: " << pm.canonical_path.str()
                                 << "\n";
                             std::lock_guard<std::mutex> lk(verbose_mtx);
                             std::cerr << tmp.str();
@@ -2894,10 +2766,10 @@ CompileResult compile_vx_project(
         //   3. Existe `<source>.vxir` para reusar el IR.
         // Si los 3 se cumplen, se skipea el recompile del dep.
         if (cache_enabled && !is_root) {
-            const std::string vp =
-                vxi_path_for_(pm.canonical_path, cache_tgt_suffix);
-            const std::string ip =
-                vxir_path_for_(pm.canonical_path, cache_tgt_suffix);
+            const ModuleCachePaths &paths =
+                module_cache_paths(pm.canonical_path, cache_tgt_suffix);
+            const std::string &vp = paths.vxi;
+            const std::string &ip = paths.vxir;
             std::vector<uint8_t> vbytes;
             if (read_file_bytes_(vp, vbytes)) {
                 auto pr = vxi_parse(vbytes.data(), vbytes.size());
@@ -2922,7 +2794,7 @@ CompileResult compile_vx_project(
                         if (verbose_cache) {
                             std::ostringstream tmp;
                             tmp << "[vx-cache] miss (objetivo): '"
-                                << pm.module_name << "' se genero para "
+                                << pm.module_name.str() << "' se genero para "
                                 << pr.module_.target << " y se compila para "
                                 << actual << "\n";
                             std::cerr << tmp.str();
@@ -2944,7 +2816,7 @@ CompileResult compile_vx_project(
                     if (pm.ast) {
                         imps_val = collect_imports_(
                             *pm.ast, &ns_to_modname, &auto_imports,
-                            auto_import_owner_dir, pm.canonical_path);
+                            auto_import_owner_dir, pm.canonical_path.str());
                         for (const auto &r : imps_val)
                             como_importa.emplace(r.module_name, &r);
                     }
@@ -3038,7 +2910,7 @@ CompileResult compile_vx_project(
                                 if (verbose_cache) {
                                     std::ostringstream tmp;
                                     tmp << "[vx-cache] hit: "
-                                        << pm.canonical_path << "\n";
+                                        << pm.canonical_path.str() << "\n";
                                     std::lock_guard<std::mutex> lk(verbose_mtx);
                                     std::cerr << tmp.str();
                                 }
@@ -3050,7 +2922,7 @@ CompileResult compile_vx_project(
             }
             if (verbose_cache) {
                 std::ostringstream tmp;
-                tmp << "[vx-cache] miss: " << pm.canonical_path << "\n";
+                tmp << "[vx-cache] miss: " << pm.canonical_path.str() << "\n";
                 std::lock_guard<std::mutex> lk(verbose_mtx);
                 std::cerr << tmp.str();
             }
@@ -3061,7 +2933,7 @@ CompileResult compile_vx_project(
         // con prefijo `<module>__` para evitar colisiones cross-module.
         // El root NO se mangla (mantiene `main` y demas nombres tal cual).
         if (!is_root) {
-            mangle_top_level_(*pm.ast, pm.module_name);
+            mangle_top_level_(*pm.ast, pm.module_name.str());
         }
 
         // NS.2: aplanar los `namespace X;` inline de ESTE modulo (root o dep).
@@ -3121,7 +2993,7 @@ CompileResult compile_vx_project(
                     pm.comptime_unit_not_collected.end(),
                     cu.not_collected.begin(), cu.not_collected.end());
                 if (util::flag_on(util::FlagId::DumpComptimeUnit)) {
-                    std::cerr << "[comptime-unit] modulo " << pm.module_name
+                    std::cerr << "[comptime-unit] modulo " << pm.module_name.str()
                               << "\n";
                     dump_comptime_unit(cu, std::cerr);
                 }
@@ -3135,19 +3007,13 @@ CompileResult compile_vx_project(
                         util::flag_text(util::FlagId::VolcarUnidad);
                     std::error_code vec;
                     std::filesystem::create_directories(d, vec);
-                    /* Con la HUELLA de su ruta en el nombre.  El nombre de
-                     * modulo es el ultimo segmento del path, y hay dos
-                     * `x86_64.vx` -- el de tipos y el de memoria --, asi que
-                     * uno pisaba al otro y el volcado enseñaba un modulo
-                     * distinto del que se estaba mirando. */
-                    std::ofstream f(
-                        std::string(d) + "/" + pm.module_name + "_" +
-                        std::to_string(
-                            static_cast<unsigned long long>(
-                                vxi_fnv1a(pm.canonical_path.data(),
-                                          pm.canonical_path.size())) %
-                            100000ULL) +
-                        ".unidad.vx");
+                    /* Con la HUELLA de su ruta en el nombre: hay dos
+                     * `x86_64.vx` -- el de tipos y el de memoria --, y sin ella
+                     * uno pisaba al otro.  Ver `module_dump_path`. */
+                    std::ofstream f(module_dump_path(d, std::string(),
+                                                     pm.module_name.str(),
+                                                     pm.canonical_path.str(),
+                                                     ".unidad.vx"));
                     if (f) f << cu.unit_source;
                 }
             } else if (!cu.not_collected.empty()) {
@@ -3160,7 +3026,7 @@ CompileResult compile_vx_project(
                     pm.comptime_unit_not_collected.end(),
                     cu.not_collected.begin(), cu.not_collected.end());
                 if (util::flag_on(util::FlagId::DumpComptimeUnit)) {
-                    std::cerr << "[comptime-unit] modulo " << pm.module_name
+                    std::cerr << "[comptime-unit] modulo " << pm.module_name.str()
                               << "\n";
                     dump_comptime_unit(cu, std::cerr);
                 }
@@ -3211,7 +3077,7 @@ CompileResult compile_vx_project(
         //                                   `alias.A` ( M.7).
         auto imports =
             collect_imports_(*pm.ast, &ns_to_modname, &auto_imports,
-                             auto_import_owner_dir, pm.canonical_path);
+                             auto_import_owner_dir, pm.canonical_path.str());
 
         // LANG.fix-3: pre-importar las .vxi de los deps TRANSITIVOS
         // antes de procesar los imports explicitos.  Si main tiene
@@ -3735,7 +3601,7 @@ CompileResult compile_vx_project(
          * peor, porque un selector como `"std.*"` no casa nada ahi. */
         if (!root_hook_counters.empty())
             lo.set_hook_counters(root_hook_counters);
-        const std::string mod_name = pm.module_name;
+        const std::string &mod_name = pm.module_name.str();
         if (!lo.run(pm.ir, mod_name)) {
             pm.ok = false;
             return;
@@ -3747,7 +3613,7 @@ CompileResult compile_vx_project(
          *
          * Este camino, el de PROYECTO, es justamente el que lo necesita: el de
          * fichero suelto tiene un fichero y ya. */
-        pm.ir.assign_source_file(pm.canonical_path);
+        pm.ir.assign_source_file(pm.canonical_path.str());
 
         // Grafo de conocimiento del programa, por modulo.  Cada uno aporta sus
         // tipos y los simbolos que emitio; el mapa del artefacto se compone
@@ -3765,9 +3631,9 @@ CompileResult compile_vx_project(
                 spans.push_back(
                     {std::move(e.symbol), e.line, e.column, e.length});
             if (!emit_vxdbg_source(*pm.tc, lo.emitted_symbols(),
-                                   std::move(spans), pm.canonical_path,
+                                   std::move(spans), pm.canonical_path.str(),
                                    pm.source, opts.vxdbg_dir, st, dbg_err)) {
-                std::cerr << "[vxdbg] no se pudo emitir " << pm.canonical_path
+                std::cerr << "[vxdbg] no se pudo emitir " << pm.canonical_path.str()
                           << ": " << dbg_err << "\n";
             }
             pm.vxdbg_symbols = st.symbol_links;
@@ -3794,7 +3660,7 @@ CompileResult compile_vx_project(
         // importa "sumar" pero la FunctionSig lleva mangled_label="lib__sumar".
         const std::string strip_prefix =
             is_root ? std::string() // root: sin prefix (no se exporta)
-                    : (pm.module_name + "__");
+                    : module_symbol_prefix(pm.module_name.str());
         export_typechecker_to_vxi(*pm.tc, source_hash, pm.vxi, strip_prefix);
         /* v18: y el conjunto comptime de ESTE modulo, para que el `.vxi` lo
          * lleve.  Extraerlo necesita el AST, y la proxima compilacion que sirva
@@ -3879,10 +3745,10 @@ CompileResult compile_vx_project(
 
         // ---- M3: persistir .vxi + .vxir a disco para futuro cache ----
         if (cache_enabled && !is_root) {
-            const std::string vp =
-                vxi_path_for_(pm.canonical_path, cache_tgt_suffix);
-            const std::string ip =
-                vxir_path_for_(pm.canonical_path, cache_tgt_suffix);
+            const ModuleCachePaths &paths =
+                module_cache_paths(pm.canonical_path, cache_tgt_suffix);
+            const std::string &vp = paths.vxi;
+            const std::string &ip = paths.vxir;
             auto vbytes = vxi_emit(pm.vxi);
             //  M4.ext L.13: capturar el abi_hash recien calculado
             // por vxi_emit (lo escribio en offset 8 del header) para
@@ -3963,10 +3829,12 @@ CompileResult compile_vx_project(
                 dep_emit_opts.opt_level = opt_level_from_int_(opts.opt_level);
                 dep_emit_opts.emit_debug = opts.emit_debug;
                 // emit_stackmaps en su default (true): VSMP siempre presente.
-                dep_emit_opts.module_name = pm.module_name;
+                dep_emit_opts.module_name = pm.module_name.str();
                 ir::EmitResult dep_eres =
                     ir::ir_emit_module(pm.ir, dep_emit_opts);
-                std::string dvel_path = dep_vel_path_for_(pm.canonical_path);
+                const std::string &dvel_path =
+                    module_cache_paths(pm.canonical_path, util::InternedName())
+                        .vel;
                 if (dep_eres.ok) {
                     std::vector<uint8_t> velb_bytes(dep_eres.vel_text.begin(),
                                                     dep_eres.vel_text.end());
@@ -4295,7 +4163,7 @@ CompileResult compile_vx_project(
                                            : std::unordered_set<std::string>{};
         auto root_imports =
             collect_imports_(*root_pm.ast, &ns_to_modname, &auto_imports,
-                             auto_import_owner_dir, root_pm.canonical_path);
+                             auto_import_owner_dir, root_pm.canonical_path.str());
         for (const auto &req : root_imports) {
             if (req.is_plain) continue;           // namespace -> nunca shake
             if (req.is_public_reexport) continue; // re-export consume el dep
@@ -4398,7 +4266,7 @@ CompileResult compile_vx_project(
                 SourceLoc loc;
                 loc.set_file(work[i].canonical_path);
                 res.diagnostics.diag(std::move(loc), DiagLevel::ERR, "VX4006",
-                                     {work[i].module_name, spill_err});
+                                     {work[i].module_name.str(), spill_err});
                 res.ok = false;
                 return res;
             }
@@ -4418,7 +4286,8 @@ CompileResult compile_vx_project(
         // los deps no se registran y los `new dep.Class()` crashean.  El
         // root encadena llamadas a las del dep via injeccion de CALLs en
         // su propia __module_init (mas abajo).
-        const std::string dep_mod_init = "__module_init_" + work[i].module_name;
+        const std::string dep_mod_init =
+            module_init_symbol(work[i].module_name.str());
         /* Se renombran TODAS las `__module_init*` del dep, no solo la
          * principal.  Desde que se parte en tandas, cada modulo trae ademas
          * sus `__module_init_partN`, y esos nombres son los MISMOS en todos
@@ -4430,11 +4299,11 @@ CompileResult compile_vx_project(
          * -- las tandas SI se llaman por nombre desde ella. */
         std::unordered_map<std::string, std::string> init_renames;
         for (auto &fn : dep_ir.functions) {
-            if (fn.name.rfind("__module_init", 0) != 0) continue;
+            if (!ir::is_module_init_family(fn.name)) continue;
             const std::string renamed =
-                (fn.name == "__module_init")
+                ir::is_module_init(fn.name)
                     ? dep_mod_init
-                    : fn.name + "_" + work[i].module_name;
+                    : module_init_part_symbol(fn.name, work[i].module_name.str());
             init_renames.emplace(fn.name, renamed);
             fn.name = renamed;
         }
@@ -4560,7 +4429,7 @@ CompileResult compile_vx_project(
             // Verifica que existe un @c __module_init_<dep> entre las
             // funciones mergeadas (algunos deps sin clases/globals no
             // tienen uno; saltar silente).
-            const std::string nm = "__module_init_" + work[i].module_name;
+            const std::string nm = module_init_symbol(work[i].module_name.str());
             for (const auto &fn : merged.functions) {
                 if (fn.name == nm) {
                     dep_init_names.push_back(nm);
@@ -4571,7 +4440,7 @@ CompileResult compile_vx_project(
         if (!dep_init_names.empty()) {
             bool found = false;
             for (auto &fn : merged.functions) {
-                if (fn.name != "__module_init") continue;
+                if (!ir::is_module_init(fn.name)) continue;
                 if (fn.blocks.empty()) continue;
                 auto &entry = fn.blocks.front();
                 std::vector<ir::IrInstr> head;
@@ -4594,7 +4463,7 @@ CompileResult compile_vx_project(
             // con classes, creamos un stub que solo encadena llamadas.
             if (!found) {
                 ir::IrFunction stub;
-                stub.name = "__module_init";
+                stub.name = ir::kModuleInit;
                 stub.ret_type = ir::IrType::I64;
                 const ir::IrBlockId entry = stub.new_block("entry");
                 for (const auto &dn : dep_init_names) {
@@ -4964,7 +4833,7 @@ CompileResult compile_vx_project(
                 pre_snapshot, facts, asa_wanted,
                 root_facts_key != 0
                     ? asa_facts_path_for_stage(
-                          rutas_cache_(root_path, std::string()).hechos,
+                          vxfacts_path_for(root_path, std::string()),
                           analysis::asa::kStagePreOpt)
                     : std::string(),
                 asa_facts_key(asa_module_id(root_path), opts,
@@ -5180,7 +5049,7 @@ CompileResult compile_vx_project(
             merged, facts, wanted,
             root_facts_key != 0
                 ? asa_facts_path_for_stage(
-                      rutas_cache_(root_path, std::string()).hechos,
+                      vxfacts_path_for(root_path, std::string()),
                       analysis::asa::kStagePostOpt)
                 : std::string(),
             asa_facts_key(asa_module_id(root_path), opts,
@@ -5255,7 +5124,7 @@ CompileResult compile_vx_project(
     emit_opts.emit_debug = opts.emit_debug;
     // emit_opts.emit_stackmaps queda en su default (true): VSMP siempre.
     emit_opts.module_name =
-        opts.module_name.empty() ? work.back().module_name : opts.module_name;
+        opts.module_name.empty() ? work.back().module_name.str() : opts.module_name;
     /* `merged` sale ya optimizado de la fase anterior.  El emisor optimizaba su
      * copia otra vez -- el mismo trabajo, el mismo modulo -- y eso era la mayor
      * parte de lo que costaba emitir.
@@ -5313,7 +5182,7 @@ CompileResult compile_vx_project(
                  * -- el programa compilaba y daba otro resultado. */
                 const bool sintetica = f.name.rfind("__macro_", 0) == 0 ||
                                        f.name.rfind("__ctblock_", 0) == 0 ||
-                                       f.name == "__module_init";
+                                       ir::is_module_init(f.name);
                 const std::string desnudo = f.name.rfind("__macro_", 0) == 0
                                                 ? f.name.substr(8)
                                                 : f.name;
@@ -5401,7 +5270,7 @@ CompileResult compile_vx_project(
                      * clases y los macros. */
                     bool tiene_init = false;
                     for (const ir::IrFunction &f : solo_ct.functions)
-                        if (f.name == "__module_init") {
+                        if (ir::is_module_init(f.name)) {
                             tiene_init = true;
                             break;
                         }
@@ -5422,8 +5291,8 @@ CompileResult compile_vx_project(
                          * sitio que ensambla el artefacto tenia un `if (ok)`
                          * sin `else`, asi que la compilacion seguia sin
                          * artefacto y sin decir nada. */
-                        res.comptime_vel_text +=
-                            "\n@InitPc(\"__module_init\")\n";
+                        res.comptime_vel_text += std::string("\n@InitPc(\"") +
+                                                 ir::kModuleInit + "\")\n";
                     /* La seccion @ir del conjunto: la del programa entero no
                      * vale, describe otras funciones. */
                     util::byte_buffer_release(
@@ -5715,7 +5584,7 @@ CompileResult compile_vx_project(
     // cache asociando (paths, hashes, .velb final).
     res.dep_paths.reserve(work.size());
     for (const auto &pm : work) {
-        res.dep_paths.push_back(pm.canonical_path);
+        res.dep_paths.push_back(pm.canonical_path.str());
     }
     return res;
 }

@@ -134,6 +134,16 @@ struct SourceLoc {
      * @param f Ruta o nombre logico.
      */
     void set_file(const std::string &f) { file_name = util::intern_name(f); }
+
+    /**
+     * @brief Apunta a un fichero cuyo nombre YA esta internado.
+     *
+     * Sin cerrojo: quien ya tiene el nombre internado no tiene por que volver
+     * a pasar por el pozo.
+     *
+     * @param f Nombre internado.
+     */
+    void set_file(util::InternedName f) noexcept { file_name = f.ptr(); }
 };
 
 /**

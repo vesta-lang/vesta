@@ -15,6 +15,7 @@
 #include "analysis/facts/ir_facts.h"
 #include "analysis/memory/fn_targets.h"
 #include "ir/ssa_ir.h"
+#include "ir/synthetic_symbols.h" // la familia de `__module_init`
 
 #include <deque>
 #include <unordered_set>
@@ -26,9 +27,11 @@ namespace {
 using ir::IrOp;
 
 /// Nombres que el programa usa como PUNTO DE ENTRADA: alguien los llama desde
-/// fuera del modulo, asi que sus parametros no se pueden estrechar.
+/// fuera del modulo, asi que sus parametros no se pueden estrechar.  Del
+/// arranque cuenta TODA la familia -- tandas y las de las dependencias
+/// renombradas --, no solo la principal: todas las llama el arranque.
 bool es_entrada(const std::string &n) {
-    return n == "main" || n == "__module_init" ||
+    return n == "main" || ir::is_module_init_family(n) ||
            n.size() >= 5 && n.compare(n.size() - 5, 5, ".main") == 0;
 }
 

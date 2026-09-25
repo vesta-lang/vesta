@@ -18,6 +18,7 @@
 #include "util/thread_owned.h" // una ranura por hilo, sin `thread_local`
 
 #include <mutex>
+#include <ostream>
 #include <unordered_set>
 
 namespace util {
@@ -47,6 +48,11 @@ std::mutex &pool_mutex() {
 } // namespace
 
 const std::string *intern_name(const std::string &name) {
+    /* El nombre vacio tiene UNA identidad, la de `empty_name()`.  Si el pozo
+     * guardara otra, un mismo nombre tendria dos punteros, y quien los usa como
+     * clave -- que es para lo que se interna -- veria dos cosas distintas.  Y
+     * de paso no toca el cerrojo. */
+    if (name.empty()) return empty_name();
     /* Lo ULTIMO que pidio este hilo, para no tomar el cerrojo global cuando la
      * respuesta es la misma que la vez anterior -- que es lo normal --.
      *
@@ -82,5 +88,9 @@ const std::string *intern_name(const std::string &name) {
 }
 
 // Definido en la cabecera (variable en linea): ver `empty_name`.
+
+std::ostream &operator<<(std::ostream &os, InternedName n) {
+    return os << n.str();
+}
 
 } // namespace util

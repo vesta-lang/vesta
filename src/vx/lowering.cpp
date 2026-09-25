@@ -19,6 +19,7 @@
 #include "util/os/thread_slot.h" // el estado por hilo NO va en thread_local
 #include "lowering/lowering_internal.h" // helpers que comparten las unidades del lowering
 #include "ir/ir_type_info.h" // vocabulario UNICO de anchura/clase de un IrType
+#include "ir/synthetic_symbols.h" // el nombre de las tandas de `__module_init`
 
 #include <algorithm>
 
@@ -1827,7 +1828,7 @@ bool split_module_init_into_chunks(ir::IrFunction &init, ir::IrModule &out) {
     for (size_t c = 0; c < chunks.size(); ++c) {
         const size_t first = chunks[c].first, limit = chunks[c].second;
         ir::IrFunction f;
-        f.name = base + "_part" + std::to_string(c);
+        f.name = ir::module_init_part_name(base, c);
         f.ret_type = ir::IrType::VOID;
 
         std::vector<ir::IrBlockId> newid(nblocks, ir::IrBlockId(0));

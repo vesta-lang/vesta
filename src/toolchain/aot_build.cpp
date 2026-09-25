@@ -61,6 +61,7 @@ VESTA_ALLOC_MODULE_HERE("toolchain");
 #include "ir/ir_optimizer.h"
 #include "ir/ssa_ir.h"
 #include "ir/ssa_ir_serialize.h"
+#include "ir/synthetic_symbols.h" // `__module_init`
 #include "jit/vec_isa.h"
 #include "jit/vreg_pipeline.h"
 #include "toolchain/native_backend.h" // backend de codegen nativo por arch (H.5)
@@ -1664,7 +1665,7 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
         // libreria Vesta compilaba a 0 funciones.
         const bool is_library = (by_name.count("main") == 0);
         add_live("main");
-        add_live("__module_init");
+        add_live(ir::kModuleInit);
         // AUTO multiversion (--float-isa auto): el dispatch (auto_init)
         // referencia las VARIANTES por nombre derivado (NAME$sse2/...),
         // no la funcion base NAME -> la poda no la veria.  Mantener viva

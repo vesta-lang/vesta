@@ -69,7 +69,7 @@ void adopt_cached_artifact(ProjectModuleWork &pm, VxiModule &&vxi,
      * guardo y pasa a ser el de quien lo usa: aqui ya no hay fuente al que
      * volver, y lo que venga se optimiza y se emite tal cual.  (Solo lo hacia
      * el acierto del almacen comun; el de la cache por ruta, no.) */
-    ir::ir_verify_if_asked(ir, "cache", pm.module_name);
+    ir::ir_verify_if_asked(ir, "cache", pm.module_name.str());
     pm.vxi = std::move(vxi);
     /* v20: si declaraba clases, que el tree-shake lo preguntara despues y aqui
      * no hay AST al que preguntarselo. */

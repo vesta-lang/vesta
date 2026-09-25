@@ -27,6 +27,7 @@
 #include <iostream>
 #include "vx/comptime/comptime_introspect.h"
 #include "ir/ir_type_info.h" // vocabulario UNICO de anchura/clase de un IrType
+#include "ir/synthetic_symbols.h" // la familia de `__module_init`
 #include <algorithm>
 #include <functional>
 #include <map>
@@ -1652,7 +1653,7 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
             call_init.op = ir::IrOp::CALL;
             call_init.type = ir::IrType::VOID;
             call_init.dst = ir::IR_NO_VALUE;
-            call_init.func_name = "__module_init";
+            call_init.func_name = ir::kModuleInit;
             call_init.source_line = fd->loc.line;
             fn.append(current_block_, std::move(call_init));
         }
@@ -1663,10 +1664,7 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
     // __spawn_* y wrappers internos).  El bytecode VM, JIT y ports
     // heredan la instrumentacion porque vive en el IR.
     if (instrument_mode_ != "none" && instrument_mode_ != "" &&
-        fd->name != "__module_init" && fd->name.rfind("__new_", 0) != 0 &&
-        fd->name.rfind("__async_", 0) != 0 &&
-        fd->name.rfind("__lambda_", 0) != 0 &&
-        fd->name.rfind("__spawn_", 0) != 0) {
+        !ir::is_compiler_generated(fd->name)) {
         emit_instrument_enter(fd->name, fd->loc.line);
     }
 
@@ -1715,10 +1713,7 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
         emit_cleanups_all();
         // Instrumentacion: vx_trace:exit antes del RET implicito.
         if (instrument_mode_ != "none" && instrument_mode_ != "" &&
-            fd->name != "__module_init" && fd->name.rfind("__new_", 0) != 0 &&
-            fd->name.rfind("__async_", 0) != 0 &&
-            fd->name.rfind("__lambda_", 0) != 0 &&
-            fd->name.rfind("__spawn_", 0) != 0) {
+            !ir::is_compiler_generated(fd->name)) {
             emit_instrument_exit(fd->name, ir::IR_NO_VALUE, fd->loc.line);
         }
         // Caida por el final, sin `return` escrito.  Tambien es una salida:
@@ -1991,11 +1986,7 @@ bool Lowering::should_instrument(const std::string &fn_name) const {
     if (hook_excluded_.count(fn_name)) return false;
     // Los envoltorios que fabrica el compilador no son codigo del usuario:
     // medirlos ensucia el perfil con nombres que no aparecen en su fuente.
-    if (fn_name == "__module_init") return false;
-    if (fn_name.rfind("__new_", 0) == 0) return false;
-    if (fn_name.rfind("__async_", 0) == 0) return false;
-    if (fn_name.rfind("__lambda_", 0) == 0) return false;
-    if (fn_name.rfind("__spawn_", 0) == 0) return false;
+    if (ir::is_compiler_generated(fn_name)) return false;
     return true;
 }
 

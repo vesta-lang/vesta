@@ -12,6 +12,7 @@
 #ifndef VX_PROJECT_MODULE_CACHE_KEY_H
 #define VX_PROJECT_MODULE_CACHE_KEY_H
 
+#include "util/name_pool.h" // util::InternedName
 #include "util/named_alloc.h"
 
 #include <cstdint>
@@ -62,10 +63,10 @@ struct ModuleCacheKeyInput {
 struct ModuleCacheKey {
     /// Clave del contenido y de todo lo que cambia lo compilado.
     uint64_t source_hash = 0;
-    /// Sufijo del fichero de cache: separa por objetivo los modulos que usan
-    /// `@Target` y marca la pasada con maquina de compilacion.  Vacio en el
-    /// caso normal.
-    std::string target_suffix;
+    /// Sufijo del fichero de cache, INTERNADO: separa por objetivo los modulos
+    /// que usan `@Target` y marca la pasada con maquina de compilacion.  El
+    /// nombre vacio en el caso normal.
+    util::InternedName target_suffix;
 };
 
 /**

@@ -17,6 +17,7 @@
 
 #include "ctpe/evaluable.h"
 #include "ir/ssa_ir_serialize.h"
+#include "ir/synthetic_symbols.h" // la familia de `__module_init`
 #include "vx/comptime/comptime_vm.h"
 
 #include <cstdio>
@@ -111,7 +112,7 @@ void replace_body_with_const(ir::IrFunction &fn, uint64_t value, ir::IrType t) {
     for (const auto &blk : fn.blocks)
         for (const auto &in : blk.instrs)
             if ((in.op == ir::IrOp::CALL || in.op == ir::IrOp::TAILCALL) &&
-                in.func_name.rfind("__module_init", 0) == 0)
+                ir::is_module_init_family(in.func_name))
                 module_inits.push_back(in.func_name);
 
     if (util::flag_on(util::FlagId::CtpeDebug))

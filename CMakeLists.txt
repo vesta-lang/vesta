@@ -2794,6 +2794,13 @@ add_executable(test_util_env_flags tests/util/test_env_flags.cpp)
 target_include_directories(test_util_env_flags PRIVATE ${VM_INCLUDES})
 target_link_libraries(test_util_env_flags PRIVATE vmcore sqlite3 capstone keystone)
 
+# Lo que promete un nombre internado: escrito en un flujo sale el TEXTO, y no se
+# convierte solo en puntero ni en `bool` (eso se comprueba al compilar).  Existe
+# porque un `const std::string*` pelado imprimia direcciones sin aviso.
+add_executable(test_util_interned_name tests/util/test_interned_name.cpp)
+target_include_directories(test_util_interned_name PRIVATE ${VM_INCLUDES})
+target_link_libraries(test_util_interned_name PRIVATE vmcore sqlite3 capstone keystone)
+
 # La parte COMUN de todo buffer de bytes.  Va SUELTO, sin `vmcore`: la cabecera
 # es independiente, y enlazar media maquina virtual para comprobar un puntero y
 # dos tamanyos hace que un test de treinta lineas tarde lo que tarda el enlace.

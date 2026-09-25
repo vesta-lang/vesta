@@ -47,6 +47,7 @@
  */
 
 #include "port/c/c_backend.h"
+#include "ir/synthetic_symbols.h" // la familia de `__module_init`
 #include "util/fs_utils.h" // fs::get_executable_path()
 
 #include <cctype>
@@ -2116,7 +2117,7 @@ void CBackend::emit_prelude(EmitContext &ctx, const ir::IrModule &mod) {
                     if (sym.rfind("vmath_", 0) == 0) continue;
                     // Por prefijo: tambien las tandas en que se parte
                     // (`__module_init_partN`) y las de las dependencias.
-                    if (sym.rfind("__module_init", 0) == 0) continue;
+                    if (ir::is_module_init_family(sym)) continue;
                     if (sym.rfind("__new_", 0) == 0) continue;
                     // Skip vx_trace:* (provistos por snippet inline).
                     // Match por basename para tolerar tanto "vx_trace"
@@ -2233,7 +2234,7 @@ void CBackend::emit_prelude(EmitContext &ctx, const ir::IrModule &mod) {
         // sea necesario.  El runtime de VestaVM lo necesita; C no.
         // Por prefijo: cubre las tandas (`__module_init_partN`) y las de las
         // dependencias, que son la misma maquinaria.
-        if (n.rfind("__module_init", 0) == 0) continue;
+        if (ir::is_module_init_family(n)) continue;
         // Skip el ayudante de construccion: lo emite @c emit_class_bodies.
         if (new_helper_target(n) != nullptr) continue;
         bool is_lambda = (fn.name.rfind("__lambda_", 0) == 0);
@@ -2271,7 +2272,7 @@ bool CBackend::should_skip_function(const ir::IrFunction &fn,
     // 1. @c __module_init: el runtime VestaVM lo usa para registrar
     //    clases dinamicamente.  En C standalone con structs estaticos
     //    no se necesita -- las clases son literales.  Skip.
-    if (n.rfind("__module_init", 0) == 0) return true;
+    if (ir::is_module_init_family(n)) return true;
     // 2. El ayudante de construccion: lo reemplaza @c X__new del backend
     //    (definido en emit_class_bodies).  El codigo que lo llamaba se
     //    redirige a X__new en emit_call.
@@ -3121,7 +3122,7 @@ void CBackend::emit_call(EmitContext &ctx, ir::IrValueId dst,
     // Skip llamadas a @c __module_init: la funcion no se emite (es para
     // VestaVM runtime).  Las clases en C son literales con structs
     // estaticos -- nada que inicializar dinamicamente.
-    if (func_name.rfind("__module_init", 0) == 0) {
+    if (ir::is_module_init_family(func_name)) {
         if (opts_.emit_comments) {
             ctx.indent();
             ctx.out

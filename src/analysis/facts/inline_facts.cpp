@@ -14,6 +14,7 @@
 #include "analysis/facts/inline_facts.h"
 
 #include "ir/ssa_ir.h"
+#include "ir/synthetic_symbols.h" // la familia de `__module_init`
 #include "util/env_flags.h" // el interruptor para medir A/B las reservas
 
 namespace analysis {
@@ -71,7 +72,7 @@ bool es_op_de_marco(ir::IrOp op) {
  *    una decena de instrucciones y varios juntos reventaban el asignador.
  */
 bool en_lista_de_un_bloque(const std::string &name) {
-    return empieza_por(name, "__module_init") ||
+    return ir::is_module_init_family(name) ||
            empieza_por(name, "__lambda_") || empieza_por(name, "__spawn_") ||
            empieza_por(name, "__async_") || empieza_por(name, "__rspawn_") ||
            empieza_por(name, "__vx_str") || name == "__uncaught";
@@ -84,7 +85,7 @@ bool en_lista_de_un_bloque(const std::string &name) {
  * con su medida.
  */
 bool en_lista_de_varios_bloques(const std::string &name) {
-    return empieza_por(name, "__module_init") || empieza_por(name, "__lambda");
+    return ir::is_module_init_family(name) || empieza_por(name, "__lambda");
 }
 
 /**

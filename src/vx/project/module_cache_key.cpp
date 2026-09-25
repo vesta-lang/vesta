@@ -8,6 +8,7 @@
 #include "util/env_flags.h"
 #include "util/fnv.h"      // la semilla, el primo y la mezcla, en UN sitio
 #include "util/fs_utils.h" // fs::get_executable_path()
+#include "util/name_pool.h"
 #include "vx/compiler.h"
 #include "vx/module/vxi_format.h" // vxi_fnv1a, VXI_FORMAT_VERSION
 #include "vx/source_hash.h"       // la identidad de un fuente son sus tokens
@@ -123,9 +124,10 @@ ModuleCacheKey module_cache_key(const ModuleCacheKeyInput &in) {
     // PE<->ELF es acierto.  Los modulos SIN @Target comparten el fichero unico.
     const std::string &os = *in.target_os;
     const std::string &arch = *in.target_arch;
+    std::string suffix;
     if ((!os.empty() || !arch.empty()) &&
         in.source->find("@Target") != std::string::npos)
-        key.target_suffix = "." + os + "-" + arch;
+        suffix = "." + os + "-" + arch;
     /* Compilar con la maquina de compilacion cargada da un resultado DISTINTO
      * al de compilar sin ella: sin la maquina, una funcion comptime no se puede
      * ejecutar y su valor sale vacio.  Los dos resultados no pueden compartir
@@ -135,8 +137,10 @@ ModuleCacheKey module_cache_key(const ModuleCacheKeyInput &in) {
      * Se marca la pasada CON maquina y no la de sin ella, que es la unica que
      * existe cuando no hay codigo de compilacion de por medio: asi el caso
      * normal conserva sus artefactos de siempre. */
-    if (!util::flag_text(util::FlagId::McPrebuilt).empty())
-        key.target_suffix += ".mc";
+    if (!util::flag_text(util::FlagId::McPrebuilt).empty()) suffix += ".mc";
+    /* Internado una vez por modulo: es la identidad con que se piden sus rutas
+     * de cache. */
+    key.target_suffix = util::InternedName::intern(suffix);
     return key;
 }
 

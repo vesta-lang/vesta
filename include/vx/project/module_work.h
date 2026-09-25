@@ -13,6 +13,7 @@
 
 #include "analyze/fingerprint.h" // analyze::FunctionContracts
 #include "ir/ssa_ir.h"
+#include "util/name_pool.h"
 #include "vx/ast.h"
 #include "vx/diagnostic.h"
 #include "vx/module/vxi_format.h"
@@ -33,8 +34,12 @@ namespace vx {
 /// Estructura de trabajo por modulo durante la compilacion del proyecto.
 struct ProjectModuleWork {
     uint32_t module_id = 0;
-    std::string canonical_path;
-    std::string module_name;
+    /// Ruta canonica de su fuente, INTERNADA: es su identidad, se copia mucho
+    /// y vive lo que el proceso.
+    util::InternedName canonical_path;
+    /// Nombre del modulo, internado por lo mismo.
+    util::InternedName module_name;
+    /// El TEXTO del fuente.  No se interna: es contenido, no un nombre.
     std::string source;
     /// v18: el conjunto comptime de este modulo, tal como se extrajo de su AST.
     /// Se recolecta al compilarlo y se guarda en su `.vxi`, porque la proxima

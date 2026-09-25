@@ -32,6 +32,7 @@
 #include "ir/ir_optimizer.h"
 #include "loader/oop_types.h"
 #include "ir/ir_type_info.h" // vocabulario UNICO de anchura/clase de un IrType
+#include "ir/synthetic_symbols.h" // `__module_init`
 #include <algorithm>
 #include <functional>
 #include <map>
@@ -255,10 +256,7 @@ void Lowering::lower_class_methods(ast::ClassDecl *cd, ir::IrModule &out) {
         // (igual filtro que en lower_function -- saltamos solo helpers
         // sinteticos; los ctors/dtors/metodos normales se instrumentan).
         if (instrument_mode_ != "none" && instrument_mode_ != "" &&
-            fn.name != "__module_init" && fn.name.rfind("__new_", 0) != 0 &&
-            fn.name.rfind("__async_", 0) != 0 &&
-            fn.name.rfind("__lambda_", 0) != 0 &&
-            fn.name.rfind("__spawn_", 0) != 0) {
+            !ir::is_compiler_generated(fn.name)) {
             emit_instrument_enter(fn.name, m->loc.line);
         }
         // `@Hook(enter)` tambien en metodos, ctors y dtors.  Faltaba, y el
@@ -531,10 +529,7 @@ void Lowering::lower_class_methods(ast::ClassDecl *cd, ir::IrModule &out) {
         if (!block_terminated_) {
             // Instrumentacion: vx_trace:leave antes del RET implicito.
             if (instrument_mode_ != "none" && instrument_mode_ != "" &&
-                fn.name != "__module_init" && fn.name.rfind("__new_", 0) != 0 &&
-                fn.name.rfind("__async_", 0) != 0 &&
-                fn.name.rfind("__lambda_", 0) != 0 &&
-                fn.name.rfind("__spawn_", 0) != 0) {
+                !ir::is_compiler_generated(fn.name)) {
                 emit_instrument_exit(fn.name, ir::IR_NO_VALUE, m->loc.line);
             }
             // Idem para un metodo que cae por el final.
@@ -1356,7 +1351,7 @@ void Lowering::generate_module_init_function(ir::IrModule &out) {
     if (!any_class && !has_runtime_globals) return;
 
     ir::IrFunction fn;
-    fn.name = "__module_init";
+    fn.name = ir::kModuleInit;
     fn.ret_type = ir::IrType::VOID;
     const ir::IrBlockId entry = fn.new_block("entry");
 

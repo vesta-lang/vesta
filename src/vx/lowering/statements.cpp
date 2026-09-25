@@ -21,6 +21,7 @@
 #include "vx/lowering.h"
 #include "vx/comptime/comptime_introspect.h"
 #include "ir/ir_type_info.h" // vocabulario UNICO de anchura/clase de un IrType
+#include "ir/synthetic_symbols.h" // que funciones se invento el compilador
 #include <algorithm>
 #include <functional>
 #include <map>
@@ -1349,7 +1350,7 @@ void Lowering::lower_return(ast::ReturnStmt *s) {
             if (instrument_mode_ != "none" && instrument_mode_ != "" &&
                 fn_ != nullptr) {
                 const std::string &fname = fn_->name;
-                const bool is_helper = is_compiler_generated_fn(fn_->name);
+                const bool is_helper = ir::is_compiler_generated(fn_->name);
                 if (!is_helper) {
                     emit_instrument_exit(fname, sret_retbuf_, s->loc.line);
                 }
@@ -1452,7 +1453,7 @@ void Lowering::lower_return(ast::ReturnStmt *s) {
         if (instrument_mode_ != "none" && instrument_mode_ != "" &&
             fn_ != nullptr) {
             const std::string &fname = fn_->name;
-            const bool is_helper = is_compiler_generated_fn(fn_->name);
+            const bool is_helper = ir::is_compiler_generated(fn_->name);
             if (!is_helper) {
                 emit_instrument_exit(fname, sret_retbuf_, s->loc.line);
             }
@@ -1606,7 +1607,7 @@ void Lowering::lower_return(ast::ReturnStmt *s) {
     if (instrument_mode_ != "none" && instrument_mode_ != "" &&
         fn_ != nullptr) {
         const std::string &fname = fn_->name;
-        const bool is_helper = is_compiler_generated_fn(fn_->name);
+        const bool is_helper = ir::is_compiler_generated(fn_->name);
         if (!is_helper) {
             emit_instrument_exit(fname, v_ret, s->loc.line);
         }

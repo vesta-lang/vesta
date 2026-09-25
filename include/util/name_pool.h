@@ -36,6 +36,9 @@
 #ifndef UTIL_NAME_POOL_H
 #define UTIL_NAME_POOL_H
 
+#include <cstddef>
+#include <functional> // std::hash
+#include <iosfwd>
 #include <string>
 
 namespace util {
@@ -77,6 +80,86 @@ inline const std::string kEmptyName;
 inline const std::string *empty_name() noexcept {
     return &kEmptyName;
 }
+
+/**
+ * @brief Un nombre INTERNADO, como tipo propio y no como puntero suelto.
+ *
+ * Guardado como `const std::string*`, un nombre internado es para el
+ * compilador un puntero cualquiera: se escribe en un flujo -- y sale una
+ * DIRECCION en vez del nombre, sin aviso --, se convierte a `bool`, se compara
+ * con cualquier otro puntero.  Paso al internar las rutas de los modulos: nueve
+ * trazas compilaban e imprimian direcciones, y solo se encontraron buscandolas
+ * a mano.  Con este tipo:
+ *
+ *  - escribirlo en un flujo escribe el TEXTO;
+ *  - no se convierte implicitamente en nada;
+ *  - `==`, `!=` y el hash van por IDENTIDAD, que es para lo que se interna;
+ *  - concatenarlo o compararlo con una `std::string` no compila: quien quiere
+ *    el texto lo pide con @ref str, y queda escrito que lo hace.
+ *
+ * Nunca es nulo: por defecto es el nombre vacio.  Cabe en un registro y se pasa
+ * por valor.
+ */
+class InternedName {
+  public:
+    /// El nombre vacio.
+    InternedName() noexcept : p_(empty_name()) {}
+
+    /**
+     * @brief Interna @p name.  Toma el cerrojo del pozo: ver @ref intern_name.
+     * @param name Texto del nombre.
+     * @return El nombre internado.
+     */
+    static InternedName intern(const std::string &name) {
+        return InternedName(intern_name(name));
+    }
+
+    /**
+     * @brief Adopta un puntero que YA salio del pozo (o de @ref empty_name).
+     * @param p Puntero internado; nulo se toma como el nombre vacio.
+     * @return El nombre.
+     */
+    static InternedName from_interned(const std::string *p) noexcept {
+        return InternedName(p != nullptr ? p : empty_name());
+    }
+
+    /// @brief El texto.  @return Referencia estable, vive lo que el proceso.
+    const std::string &str() const noexcept { return *p_; }
+    /// @brief El texto como cadena de C.  @return Estable.
+    const char *c_str() const noexcept { return p_->c_str(); }
+    /// @brief Si es el nombre vacio.  @return true si no tiene texto.
+    bool empty() const noexcept { return p_->empty(); }
+    /// @brief El puntero internado, para quien indexa por el.
+    /// @return Nunca nulo.
+    const std::string *ptr() const noexcept { return p_; }
+
+    /// Igualdad por IDENTIDAD: dos nombres internados iguales son el mismo.
+    friend bool operator==(InternedName a, InternedName b) noexcept {
+        return a.p_ == b.p_;
+    }
+    friend bool operator!=(InternedName a, InternedName b) noexcept {
+        return a.p_ != b.p_;
+    }
+
+  private:
+    explicit InternedName(const std::string *p) noexcept : p_(p) {}
+    const std::string *p_;
+};
+
+/**
+ * @brief Escribe el TEXTO del nombre, no su direccion.
+ * @param os Flujo.
+ * @param n  Nombre.
+ * @return El flujo.
+ */
+std::ostream &operator<<(std::ostream &os, InternedName n);
+
+/// Hash de @ref InternedName por identidad: el puntero, sin mirar el texto.
+struct InternedNameHash {
+    size_t operator()(InternedName n) const noexcept {
+        return std::hash<const std::string *>()(n.ptr());
+    }
+};
 
 } // namespace util
 
