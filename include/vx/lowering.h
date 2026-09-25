@@ -3083,12 +3083,26 @@ class Lowering {
      * puntero inteligente es `unique` o `shared` no esta en el tipo del sitio
      * de llamada --, asi que quien llama trae la mejor respuesta que tenga.
      *
+     * Del tipo con que se emite la instruccion hay DOS respuestas, y las dos
+     * viven aqui en vez de una en cada camino.  Normalmente sale del tipo
+     * devuelto; cuando la llamada es por NOMBRE hay una mejor, la que se anoto
+     * al registrar la funcion, y esa PISA a la del tipo en dos casos que el
+     * tipo del sitio de la llamada no refleja: `void` cuando lo devuelto va por
+     * hueco, e `i64` cuando la funcion es `@Async` -- lo que devuelve el
+     * bytecode es el asa del futuro, no `T`, y tomarlo del tipo mete un cast
+     * que CAMBIA EL VALOR --.  Quien llama por nombre la trae; quien llama por
+     * un puntero no tiene nombre al que preguntar y la omite.
+     *
      * @param si   Lo que se sabe del retorno.
-     * @param ret  Tipo devuelto, para cuando NO hace falta hueco.
+     * @param ret  Tipo devuelto: de el sale de que MEMORIA es lo devuelto, y
+     *             tambien el tipo de la instruccion si no se trae el del nombre.
      * @param line Linea del fuente.
+     * @param ret_by_name El tipo anotado al registrar la funcion, cuando la
+     *             llamada es por nombre; @c nullptr cuando no hay nombre.
      * @return Con que emitir la instruccion y que devolver.
      */
-    SretCall prepare_sret_call(const SretInfo &si, const Type &ret, int line);
+    SretCall prepare_sret_call(const SretInfo &si, const Type &ret, int line,
+                               const ir::IrType *ret_by_name = nullptr);
 
     /**
      * @brief Anota en un valor SSA lo que su tipo Vesta dice de su memoria.

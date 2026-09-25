@@ -372,16 +372,44 @@ Lowering::SretInfo Lowering::sret_info_for(const std::string &name) const {
 }
 
 Lowering::SretCall Lowering::prepare_sret_call(const SretInfo &si,
-                                               const Type &ret, int line) {
+                                               const Type &ret, int line,
+                                               const ir::IrType *ret_by_name) {
     SretCall sc;
     if (!si.uses_buffer) {
-        /* Lo corriente: cabe en un registro y la instruccion lleva su tipo. */
-        sc.call_type = (ret.kind == PrimitiveKind::VOID ||
-                        ret.kind == PrimitiveKind::COUNT)
-                           ? ir::IrType::VOID
-                           : ir_type_from_primitive(ret.kind);
-        if (sc.call_type != ir::IrType::VOID)
+        /* Lo corriente: cabe en un registro y la instruccion lleva su tipo.
+         *
+         * Cual es ese tipo tiene DOS respuestas y las dos se deciden aqui.  La
+         * del NOMBRE gana cuando la hay, porque sabe dos cosas que el tipo del
+         * sitio de la llamada no dice -- ver la cabecera --; sin nombre al que
+         * preguntar, manda el tipo. */
+        sc.call_type =
+            ret_by_name != nullptr
+                ? *ret_by_name
+                : ((ret.kind == PrimitiveKind::VOID ||
+                    ret.kind == PrimitiveKind::COUNT)
+                       ? ir::IrType::VOID
+                       : ir_type_from_primitive(ret.kind));
+        if (sc.call_type != ir::IrType::VOID) {
             sc.dst = fn_->new_value(sc.call_type);
+            /* Y de QUe MEMORIA es lo que devuelve, aqui y no en cada sitio que
+             * emite una llamada.
+             *
+             * Esto es lo unico que crea el destino cuando el retorno cabe en un
+             * registro, y ademas tiene el tipo delante, asi que es donde la
+             * regla se cumple para todos.  Repartida no se cumplia: el camino
+             * DIRECTO la aplicaba y los que bajan una llamada INDIRECTA no --
+             * y son diez sitios los que emiten una --, asi que un `T*` que
+             * salia de un `cfn` se dereferenciaba con la instruccion de memoria
+             * de la maquina virtual en vez de con la del anfitrion.  La
+             * escritura caia en otra memoria: el programa no fallaba, DABA OTRO
+             * VALOR, y con los pases apagados tambien, porque esto es la
+             * emision y no el optimizador.
+             *
+             * Que un `VirtualPtr<T>` no se marque, y que una referencia a clase
+             * lleve ademas la marca del recolector, lo decide
+             * @ref mark_value_from_type; aqui no se repite la regla. */
+            mark_value_from_type(sc.dst, ret);
+        }
         return sc;
     }
 

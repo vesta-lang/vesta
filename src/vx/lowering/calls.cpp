@@ -602,12 +602,26 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
      * llamada en vez de lo que la funcion declara devolver. */
     const SretInfo si = sret_info_for(callee_sym);
     const bool callee_is_sret = si.uses_buffer;
-    ir::IrValueId v_call_retbuf = ir::IR_NO_VALUE;
-    /* El mismo sitio que el resto de caminos, con la respuesta que este tiene:
-     * la del NOMBRE, que sabe mas que la del tipo. */
+    /* TODO lo que el retorno decide, en el sitio unico: el hueco si hace falta,
+     * el tipo con que se emite la instruccion, el destino y de que memoria es.
+     *
+     * Este camino aporta las dos cosas que solo el tiene.  El tipo del NOMBRE
+     * (@c ret_ir), que es mejor que el del sitio de la llamada; y la FIRMA
+     * declarada como origen de la memoria, que es robusta ante un `return null`
+     * en una rama -- fusionado con la rama buena daria no-host --.  Sin firma no
+     * se afirma nada de la memoria, y por eso ahi va un tipo que no marca.
+     *
+     * Antes estaba repartido: el hueco se pedia aqui, el destino se fabricaba
+     * cien lineas mas abajo con su propia copia del criterio -- y el que este
+     * sitio devolvia se tiraba, un valor SSA huerfano por cada llamada por
+     * nombre del programa -- y la memoria se marcaba en un tercer punto. */
     const SretCall sc_direct =
-        prepare_sret_call(si, e->result_type, e->loc.line);
-    if (callee_is_sret) v_call_retbuf = sc_direct.buffer;
+        prepare_sret_call(si,
+                          callee_sig != nullptr ? callee_sig->return_type
+                                                : Type{PrimitiveKind::VOID},
+                          e->loc.line, &ret_ir);
+    const ir::IrValueId v_call_retbuf =
+        callee_is_sret ? sc_direct.buffer : ir::IR_NO_VALUE;
 
     // Bajar argumentos.  Si es sret, el retbuf va PRIMERO (convencion
     // espejo al lower_function que lo recibe como primer parametro).
@@ -806,17 +820,13 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
             e->loc.line);
     }
 
-    // Para sret la "firma" de retorno es VOID; el dst SSA visible al
-    // resto del lowering es el retbuf (PTR).  Para calls normales el
-    // dst es el valor devuelto via RET.
-    ir::IrValueId dst = ir::IR_NO_VALUE;
-    if (!callee_is_sret) {
-        dst = (ret_ir == ir::IrType::VOID) ? ir::IR_NO_VALUE
-                                           : fn_->new_value(ret_ir);
-    }
+    /* Para sret la "firma" de retorno es VOID y el valor visible al resto del
+     * bajado es el hueco (PTR); para una llamada normal es lo devuelto por RET.
+     * Las dos las contesto arriba, en el sitio unico. */
+    const ir::IrValueId dst = sc_direct.dst;
     ir::IrInstr ins{};
     ins.op = ir::IrOp::CALL;
-    ins.type = callee_is_sret ? ir::IrType::VOID : ret_ir;
+    ins.type = sc_direct.call_type;
     ins.dst = dst;
     /* La CONVENCION viaja en la instruccion, no en el nombre.
      *
@@ -876,22 +886,10 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
         fn_->values[dst].memory = ir::MemorySpace::HostByConstruction;
         fn_->values[dst].is_gc_object = true;
     }
-    // BUG-1 fix: un callee que declara devolver un puntero/array HOST
-    // (`T*` / `T[]` con is_virtual=false, p.ej. resultado de malloc) debe
-    // producir un dst is_host_ptr=true en el llamante.  Sin esto, cuando el
-    // callee NO se inlinea (cruce de modulo, o bloqueado por CALLN extern) o
-    // cuando el retorno fusiona una rama `return null` (no-host) con la rama
-    // host, el dst queda is_host_ptr=false -> el llamante emite `mov` (memoria
-    // VM) en vez de `movh` (memoria host) al dereferenciarlo -> lee 0 /
-    // SIGSEGV. La naturaleza host se decide desde la FIRMA declarada, no desde
-    // el flujo interno del callee, por lo que es robusta ante ramas null.
-    // VirtualPtr<T> (is_virtual=true) sigue siendo memoria VM -> NO se marca.
-    if (dst != ir::IR_NO_VALUE && callee_sig &&
-        (callee_sig->return_type.kind == PrimitiveKind::PTR ||
-         callee_sig->return_type.kind == PrimitiveKind::ARRAY) &&
-        !callee_sig->return_type.is_virtual) {
-        mark_value_from_type(dst, callee_sig->return_type);
-    }
+    /* La memoria de lo devuelto ya se marco arriba, al preparar el retorno, con
+     * la FIRMA declarada por delante.  Aqui estaba escrita otra vez, con la
+     * regla repetida a mano -- puntero o array, y no `VirtualPtr` --, que es lo
+     * que hizo que los caminos indirectos se quedaran sin ella. */
     // native_poo_: liberar los buffers de los args value-string temporales
     // (ya copiados/usados por el callee).  Inc 5 (SSO): solo libera si el
     // arg estaba en HEAP; free(0)=no-op.
@@ -905,7 +903,9 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
         emit_struct_method_on_host_field(
             pr.first, pr.second, pr.second + "__" + "__dtor", e->loc.line);
     }
-    return callee_is_sret ? v_call_retbuf : dst;
+    /* Que se devuelve -- el hueco o el valor -- lo dice el mismo @ref SretCall
+     * que lo preparo; escribirlo aqui otra vez era la cuarta copia. */
+    return sc_direct.result();
 }
 
 ir::IrValueId Lowering::lower_new_expr(ast::NewExpr *e) {
@@ -2668,6 +2668,12 @@ bool Lowering::try_lower_indirect_call(ast::CallExpr *e, ir::IrValueId &out) {
                     (e->result_type.kind == PrimitiveKind::VOID)
                         ? ir::IR_NO_VALUE
                         : fn_->new_value(drt);
+                /* De que memoria es lo que devuelve: este camino no pasa por
+                 * @ref prepare_sret_call -- crea el destino el mismo --, asi
+                 * que la marca hay que ponerla aqui.  Devirtualizar no cambia
+                 * de que memoria es el retorno. */
+                if (ddst != ir::IR_NO_VALUE)
+                    mark_value_from_type(ddst, e->result_type);
                 ir::IrInstr di{};
                 di.op = ir::IrOp::CALL;
                 di.func_name = fname;
