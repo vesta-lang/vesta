@@ -48,6 +48,7 @@
 
 #include "port/c/c_backend.h"
 #include "ir/synthetic_symbols.h" // la familia de `__module_init`
+#include "vx/method_names.h"      // el simbolo del destructor
 #include "util/fs_utils.h" // fs::get_executable_path()
 
 #include <cctype>
@@ -873,7 +874,8 @@ void CBackend::emit_class_bodies(EmitContext &ctx, const ir::IrModule &mod) {
                 << cls.name << " *self) {\n";
         ctx.out << "    if (!self) return;\n";
         if (cls.has_destructor) {
-            ctx.out << "    " << cls.name << "____dtor(self);\n";
+            ctx.out << "    " << vx::destructor_symbol(cls.name)
+                    << "(self);\n";
         }
         ctx.out << "    free(self);\n";
         ctx.out << "}\n\n";

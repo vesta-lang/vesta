@@ -3012,6 +3012,21 @@ struct ClassMethodDecl : Node {
     bool is_static = false;
     bool is_final = false;
     bool is_override = false;
+    /**
+     * @brief El struct base del que el aplanado de la herencia COPIO este
+     *        metodo; vacio si lo declara el propio tipo.
+     *
+     * El aplanado junta los metodos de toda la cadena sin decidir quien
+     * sustituye a quien: eso pide comparar las firmas con los tipos ya
+     * resueltos, y ahi todavia no lo estan (un alias declarado mas abajo no
+     * existe aun).  Lo decide el montaje del layout, y para eso necesita saber
+     * cual de dos metodos con la misma firma es el heredado.
+     *
+     * Antes el aplanado sustituia por NOMBRE, y con sobrecargas una pisaba a
+     * la otra: el derivado se quedaba con una sola y el programa llamaba a la
+     * que no era, sin una queja.
+     */
+    std::string inherited_from;
     /// `@Virtual` (structs): el metodo se despacha dinamicamente por vtable
     /// (modelo AOT: vtable estatica + devirtualizacion a llamada directa cuando
     /// el tipo concreto se conoce).  Opt-in por metodo; el resto es estatico.

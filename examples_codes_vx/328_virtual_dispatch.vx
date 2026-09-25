@@ -12,6 +12,10 @@
  *   - El dispatch dinamico ocurre a traves de un puntero `Base*`: el objeto real
  *     puede ser cualquier derivado, y `p.metodo()` salta al metodo del derivado.
  *   - `@Override @Virtual` redefine un metodo virtual heredado (mismo slot).
+ *   - Lo que identifica a un metodo es su nombre MAS sus parametros, tambien
+ *     al heredar: `area()` y `area(k)` son dos, cada uno con su slot, y el
+ *     derivado puede redefinir los dos.  Una redefinicion ocupa el slot de la
+ *     que sustituye, y un nieto hereda lo que su padre ya redefinio.
  *
  * Es opt-in por metodo: los metodos NO marcados @Virtual usan dispatch estatico
  * (llamada directa, coste cero).  `@Virtual` es incompatible con `Self`.
@@ -23,7 +27,13 @@ struct Figura {
 	// Metodo virtual base: el default para cualquier Figura.
 	@Virtual
 	public i64 area() => 0;
+	// Sobrecarga VIRTUAL: mismo nombre, otros parametros, otro slot.
+	@Virtual
+	public i64 area(i64 k) => k;
 	public i64 get_lado() => this.lado; // NO virtual: dispatch estatico
+	// Sobrecarga NO virtual: dispatch estatico, dos metodos distintos.
+	public i64 escala() => this.lado;
+	public i64 escala(i64 f) => this.lado * f;
 }
 
 struct Cuadrado : Figura {
@@ -31,6 +41,19 @@ struct Cuadrado : Figura {
 	@Override
 	@Virtual
 	public i64 area() => this.lado * this.lado;
+	// Y tambien la sobrecarga: cada una sustituye a la SUYA.
+	@Override
+	@Virtual
+	public i64 area(i64 k) => this.lado * k;
+	public i64 escala() => this.lado + 1;
+	public i64 escala(i64 f) => this.lado * f * 10;
+}
+
+// Nieto: hereda el area() que Cuadrado ya redefinio y redefine solo area(k).
+struct CuadradoDoble : Cuadrado {
+	@Override
+	@Virtual
+	public i64 area(i64 k) => this.lado * k * 2;
 }
 
 struct Triangulo : Figura {
@@ -43,6 +66,7 @@ struct Triangulo : Figura {
 // Recibe cualquier Figura por puntero: el dispatch de area() es DINAMICO.
 // El mismo codigo llama al area() del tipo real en cada caso.
 i64 area_de(Figura* f) => f.area();
+i64 area_k_de(Figura* f, i64 k) => f.area(k);
 
 i32 main() {
 	Cuadrado c;
@@ -58,6 +82,23 @@ i32 main() {
 	// Un unico Figura* apunta a tres tipos distintos; cada llamada resuelve al
 	// area() del tipo real en runtime.
 	i64 total = area_de(&c) + area_de(&t) + area_de(&base); // 25 + 12 + 0 = 37
+
+	// Sobrecargas redefinidas.  Si una pisara a la otra al heredar, el
+	// derivado se quedaria con una sola y estas llamadas irian a la que no es.
+	CuadradoDoble d;
+	d.lado  = 3;
+	bool ok = area_k_de(&c, 10) == 50;       // la de Cuadrado
+	ok      = ok && area_k_de(&t, 10) == 10; // Triangulo no la redefine
+	ok      = ok && area_k_de(&base, 10) == 10;
+	ok      = ok && area_de(&d) == 9;        // heredada de Cuadrado
+	ok      = ok && area_k_de(&d, 10) == 60; // la del nieto
+	ok      = ok && c.escala() == 6;         // no virtual, del Cuadrado
+	ok      = ok && c.escala(2) == 100;
+	ok      = ok && base.escala(2) == 198; // la de Figura
+	if (!ok) {
+		println("sobrecargas heredadas: MAL");
+		return 1;
+	}
 
 	// get_lado() (no virtual) sobre el Cuadrado: dispatch estatico, hereda de
 	// Figura -> 5.

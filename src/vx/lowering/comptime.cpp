@@ -230,7 +230,7 @@ void Lowering::fill_comptime_struct_into(ir::IrValueId base_addr,
 void Lowering::lower_static_local(ast::VarDeclStmt *vd, const Type &sem_type) {
     // Nombre unico por funcion: dos wrappers con `static ctx` no colisionan.
     const std::string fn_name = fn_ ? fn_->name : std::string("?");
-    const std::string mangled = fn_name + "$static$" + vd->name;
+    const std::string mangled = ir::static_local_slot(fn_name, vd->name);
     const bool aggregate = (sem_type.kind == PrimitiveKind::STRUCT ||
                             sem_type.kind == PrimitiveKind::ARRAY);
     uint64_t nbytes = static_cast<uint64_t>(size_of_type(sem_type));
@@ -264,7 +264,8 @@ void Lowering::lower_static_local(ast::VarDeclStmt *vd, const Type &sem_type) {
     // PRIMERA ejecucion de la funcion baja el init y marca done=1; las
     // siguientes lo saltan -> estado persistente entre llamadas.
     const uint64_t done_slot =
-        get_or_create_runtime_global_slot(mangled + "$done", 8);
+        get_or_create_runtime_global_slot(ir::static_local_done_slot(mangled),
+                                          8);
     const int ln = vd->loc.line;
 
     auto emit_addr = [&](uint64_t s) -> ir::IrValueId {

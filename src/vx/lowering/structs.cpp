@@ -339,7 +339,7 @@ ir::IrValueId Lowering::emit_struct_arg_copy_clone(
     }
     // copia.__clone__()  (this = copy, misma memory class -> sin mismatch).
     emit_struct_method_on_host_field(copy, struct_name,
-                                     struct_name + "__" + "__clone__", line);
+                                     copy_hook_symbol(struct_name), line);
     return copy;
 }
 
@@ -517,10 +517,9 @@ uint64_t Lowering::get_or_emit_struct_vtable(const StructLayout &lay) {
         if (mi.is_virtual && mi.vtable_index + 1u > nslots)
             nslots = mi.vtable_index + 1u;
     // Blob de nslots*8 bytes a cero; cada slot recibe una reloc ABS64 al
-    // simbolo del metodo (<owner>__<metodo>) que lo ocupa.  El owner es la
-    // clase que DEFINE el metodo tras el aplanado (defining_class = este
-    // struct, porque el flatten reescribe los heredados con el nombre del
-    // derivado -> el override gana su slot con el simbolo del derivado).
+    // simbolo del metodo que lo ocupa.  Tras el aplanado todos los metodos
+    // son de este struct (los heredados son clones suyos), y una redefinicion
+    // ocupa el slot del heredado -> el override gana su slot.
     std::vector<uint8_t> vt(static_cast<size_t>(nslots) * 8u, 0);
     const uint64_t idx = out_mod_->static_data.push_back(std::move(vt));
     auto &vm = out_mod_->static_data.meta_at(idx);
@@ -529,11 +528,12 @@ uint64_t Lowering::get_or_emit_struct_vtable(const StructLayout &lay) {
         ir::IrModule::SD_FLAG_FORCE_EMIT | ir::IrModule::SD_FLAG_NON_DEDUP;
     for (const auto &mi : lay.methods) {
         if (!mi.is_virtual) continue;
-        const std::string owner =
-            mi.defining_class.empty() ? lay.name : mi.defining_class;
         ir::IrModule::StaticDataMeta::SymRef sr;
         sr.offset = mi.vtable_index * 8u;
-        sr.sym = owner + "__" + mi.name; // reloc datos->codigo
+        /* El simbolo se LEE de la ficha: armado a mano como `dueno__nombre`
+         * perdia la etiqueta de la sobrecarga, y el hueco de una sobrecarga
+         * virtual apuntaba a una etiqueta que no existia. */
+        sr.sym = method_symbol_of(mi); // reloc datos->codigo
         sr.width = 8;
         sr.is_rel = 0;
         vm.sym_refs.push_back(std::move(sr));
@@ -969,7 +969,7 @@ void Lowering::lower_struct_methods(ast::StructDecl *sd, ir::IrModule &out) {
                     cd.type = ir::IrType::VOID;
                     cd.dst = ir::IR_NO_VALUE;
                     cd.operands = {faddr};
-                    cd.func_name = f.type.struct_name + "__" + "__dtor";
+                    cd.func_name = destructor_symbol(f.type.struct_name);
                     cd.source_line = m->loc.line;
                     fn.append(current_block_, std::move(cd));
                 }

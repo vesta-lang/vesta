@@ -59,6 +59,7 @@
 #include "vx/comptime/comptime_vm.h"
 #include "vx/diag/diag_catalog.h"
 #include "vx/diagnostic.h"
+#include "vx/method_names.h" // el simbolo de un metodo, y los de ciclo de vida
 #include "vx/overload.h" // varias declaraciones con un nombre, y cual se elige
 #include "vx/ufcs.h"     // `x.f(a)` y `f(x, a)` son la misma llamada
 #include "vx/ufcs_scoped.h" // y que se puede llamar sobre un tipo DESDE AQUI
@@ -825,31 +826,6 @@ inline const ClassMethodInfo *picked_method(const Layout &lay,
     if (slot >= lay.methods.size())
         return nullptr; // cubre tambien el centinela
     return &lay.methods[slot];
-}
-
-/**
- * @brief El SIMBOLO con el que se emite un metodo: `Duenyo__metodo`.
- *
- * Estaba escrito en SEIS sitios del bajado, cada uno armando la misma cadena a
- * mano.  Mirandolos de cerca no eran lo mismo -- y por eso no se colapsan en un
- * campo --: cada uno elige un dueno distinto A PROPoSITO.  Uno nombra al que
- * DEFINE el metodo, otro al escrito en la llamada, otro a la clase del aspecto.
- *
- * Lo que si se repetia es la REGLA de formar el nombre, y eso es lo que vive
- * aqui.  Cada llamante sigue diciendo de quien es el metodo; como se llama el
- * simbolo lo dice esta funcion, y se cambia en un sitio.
- *
- * @param owner  De quien es el metodo, que lo decide el llamante.
- * @param method Nombre del metodo.
- * @param tag    Lo que separa una SOBRECARGA de sus hermanas -- el mangleado de
- *               sus parametros --, o vacio si el nombre no esta sobrecargado y
- *               el metodo conserva su simbolo exacto.
- */
-inline std::string method_symbol(const std::string &owner,
-                                 const std::string &method,
-                                 const std::string &tag = std::string()) {
-    if (tag.empty()) return owner + "__" + method;
-    return owner + "__" + method + "_" + tag;
 }
 
 /**

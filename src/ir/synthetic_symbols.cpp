@@ -42,9 +42,8 @@ bool is_compiler_generated(const std::string &name) noexcept {
         kLambdaPrefix,      // cuerpo de una lambda
         kSpawnPrefix,       // cuerpo de un spawn
         kRemoteSpawnPrefix, // cuerpo de un spawn remoto
-        "__ovl_",           // resolutores de una vista sobre bytes
+        kOverlayPrefix,     // resolutores de una vista sobre bytes
         kMacroPrefix,       // cuerpo de una macro bajado a funcion
-        "__clone_",         // copia profunda generada para un tipo
         rt::kPrefix,        // todo lo que aporta el runtime
     };
     for (const char *p : kPrefixes)

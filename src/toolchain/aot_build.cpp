@@ -2616,9 +2616,9 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
         // hasta que el trampolin la reemplace.
         if (aot_auto && fn_has_vec_ops(*itf->second)) {
             const std::pair<const char *, jit::FloatIsa> variants[] = {
-                {"$sse2", jit::FloatIsa::SSE2},
-                {"$avx2", jit::FloatIsa::AVX},
-                {"$avx512", jit::FloatIsa::AVX512F}};
+                {ir::kVariantSse2Suffix, jit::FloatIsa::SSE2},
+                {ir::kVariantAvx2Suffix, jit::FloatIsa::AVX},
+                {ir::kVariantAvx512Suffix, jit::FloatIsa::AVX512F}};
             bool ok = true;
             for (const auto &v : variants) {
                 AotFn vf;

@@ -32,6 +32,7 @@
 
 #include "vx/annotation_names.h" // la lista de las que el lenguaje conoce
 #include "vx/hook_points.h"
+#include "vx/method_names.h" // el nombre interno del destructor
 
 #include "vx/contract_when.h"
 
@@ -6313,7 +6314,7 @@ void Parser::parse_struct_body_(ast::StructDecl &sd, bool is_overlay) {
             auto m = std::make_unique<ast::ClassMethodDecl>();
             m->loc = current_.loc;
             (void)consume(); // nombre del struct
-            m->name = "__dtor";
+            m->name = kDestructorMethod;
             m->is_destructor = true;
             m->return_type = nullptr; // void implicito
             m->access = access;
@@ -7268,7 +7269,7 @@ std::unique_ptr<ast::ClassDecl> Parser::parse_class_decl() {
             // valido en el ensamblador, que rechaza '~' en symbol).
             // El campo @c is_destructor permite reidentificar.
             (void)consume(); // class name
-            m->name = "__dtor";
+            m->name = kDestructorMethod;
             m->is_destructor = true;
             m->return_type = nullptr; // void implicito
             m->access = access;

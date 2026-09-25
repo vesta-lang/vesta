@@ -24,11 +24,6 @@ char InlineAnalysis::ID = 0;
 
 namespace {
 
-/// @return true si @p name empieza por @p prefix.
-bool empieza_por(const std::string &name, const char *prefix) {
-    return name.rfind(prefix, 0) == 0;
-}
-
 /**
  * @brief Ops cuya semantica va ligada al MARCO o al runtime.
  *
@@ -140,7 +135,7 @@ InlineFacts compute_inline_facts(const ir::IrFunction &fn) {
     f.is_new_helper = ir::is_new_helper_name(fn.name, nullptr);
     f.blacklisted_single = en_lista_de_un_bloque(fn.name);
     f.blacklisted_multi = en_lista_de_varios_bloques(fn.name);
-    f.is_overlay_resolver = empieza_por(fn.name, "__ovl_resolve_");
+    f.is_overlay_resolver = ir::is_overlay_offset_resolver(fn.name);
     f.asm_returns_manually = asm_sale_por_su_cuenta(fn);
 
     f.block_count = static_cast<uint32_t>(fn.blocks.size());

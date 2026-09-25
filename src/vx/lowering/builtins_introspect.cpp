@@ -142,7 +142,7 @@ bool Lowering::try_lower_introspect_builtins(ast::CallExpr *e, Builtin b,
     // vista RAIZ, enhebrado como 2o param `root` (bind "__ovl_root").  Devuelve
     // ese puntero tipado como la vista T (el CallExpr ya tiene result_type=T).
     if (b == Builtin::Parent && !e->type_args.empty() && e->args.empty()) {
-        const ir::IrValueId rv = lookup("__ovl_root");
+        const ir::IrValueId rv = lookup(ir::kOverlayRootBinding);
         if (rv == ir::IR_NO_VALUE) {
             return builtin_error(
                 e->loc,

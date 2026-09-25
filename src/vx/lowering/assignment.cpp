@@ -1072,7 +1072,7 @@ bool Lowering::try_lower_assign_to_field(ast::AssignExpr *e,
             it_sl->second.has_copy_hook) {
             emit_struct_method_on_host_field(
                 addr, fa->result_type.struct_name,
-                fa->result_type.struct_name + "__" + "__clone__", e->loc.line);
+                copy_hook_symbol(fa->result_type.struct_name), e->loc.line);
         }
         out = rhs;
         return true;

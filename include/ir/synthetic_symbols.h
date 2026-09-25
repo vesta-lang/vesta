@@ -271,6 +271,103 @@ inline std::string template_base_name(const std::string &name) {
 }
 
 // ===========================================================================
+// Vistas sobre bytes (`@overlay`)
+// ===========================================================================
+
+/// Prefijo comun de todo lo que se fabrica para una vista.
+inline constexpr const char kOverlayPrefix[] = "__ovl_";
+/// El resolutor de un campo con `@offset { }`: devuelve su DIRECCION.
+inline constexpr const char kOverlayResolverPrefix[] = "__ovl_resolve_";
+/// El resolutor de un elemento de un array con `@element { }`.
+inline constexpr const char kOverlayElementPrefix[] = "__ovl_element_";
+/// Lo que calcula `extent(v)`: el tamano de la vista en bytes.
+inline constexpr const char kOverlayExtentPrefix[] = "__ovl_extent_";
+/**
+ * @brief El nombre con que se liga, DENTRO de un resolutor, el puntero a la
+ *        vista raiz.  No es un simbolo: es una variable local que el
+ *        programa no puede nombrar, y la lee `parent<T>()`.
+ */
+inline constexpr const char kOverlayRootBinding[] = "__ovl_root";
+
+/**
+ * @brief El resolutor del campo @p field de la vista @p view.
+ * @param view       Vista.
+ * @param field      Campo.
+ * @param is_element El de `@element` (por elemento) en vez del de `@offset`.
+ * @return El simbolo.
+ */
+inline std::string overlay_resolver_symbol(const std::string &view,
+                                           const std::string &field,
+                                           bool is_element) {
+    return (is_element ? kOverlayElementPrefix : kOverlayResolverPrefix) +
+           view + "_" + field;
+}
+/// @brief El que calcula la extension de la vista @p view.  @return Simbolo.
+inline std::string overlay_extent_symbol(const std::string &view) {
+    return kOverlayExtentPrefix + view;
+}
+/**
+ * @brief Si @p name es el resolutor de un campo `@offset { }`.  Los de
+ *        `@element` NO: la pregunta la hace el inliner, que solo excluye
+ *        estos.
+ * @param name Nombre de funcion.
+ * @return true si lo es.
+ */
+inline bool is_overlay_offset_resolver(const std::string &name) noexcept {
+    return has_synthetic_prefix(name, kOverlayResolverPrefix);
+}
+
+// ===========================================================================
+// Nombres con `$`: variantes y ranuras
+// ===========================================================================
+//
+// Un identificador de Vesta no puede llevar `$`, asi que un sufijo con `$` no
+// choca nunca con un nombre del programa.
+
+/**
+ * @brief El cuerpo de una funcion con varias versiones por ancho vectorial:
+ *        la original pasa a elegir, y el cuerpo se llama `<f>$mv` (`main`
+ *        conserva `rt::kMainBody`).
+ */
+inline constexpr const char kMultiVersionSuffix[] = "$mv";
+/// La ranura donde se guarda la version elegida de un cuerpo: `<cuerpo>$fp`.
+inline constexpr const char kChosenVersionSlotSuffix[] = "$fp";
+/**
+ * @brief Las variantes por ancho de un cuerpo multiversion.  Las ESCRIBE el
+ *        bajado (al elegir, guarda la direccion de `<cuerpo><sufijo>`) y las
+ *        COMPILA el nativo con esos mismos nombres: los dos lados leen de aqui.
+ */
+inline constexpr const char kVariantSse2Suffix[] = "$sse2";
+inline constexpr const char kVariantAvx2Suffix[] = "$avx2";
+inline constexpr const char kVariantAvx512Suffix[] = "$avx512";
+
+/// @brief El cuerpo multiversion de @p fn.  @return El simbolo.
+inline std::string multi_version_body_symbol(const std::string &fn) {
+    return fn + kMultiVersionSuffix;
+}
+/// @brief La ranura de la version elegida de @p body.  @return La clave.
+inline std::string chosen_version_slot(const std::string &body) {
+    return body + kChosenVersionSlotSuffix;
+}
+
+/**
+ * @brief La ranura global de una variable `static` local: `<fn>$static$<var>`.
+ *        Lleva el nombre de la funcion para que dos funciones con un `static`
+ *        del mismo nombre no compartan ranura.
+ * @param fn  Funcion que la declara.
+ * @param var Variable.
+ * @return La clave de la ranura.
+ */
+inline std::string static_local_slot(const std::string &fn,
+                                     const std::string &var) {
+    return fn + "$static$" + var;
+}
+/// @brief La marca de "ya inicializada" de la ranura @p slot.  @return Clave.
+inline std::string static_local_done_slot(const std::string &slot) {
+    return slot + "$done";
+}
+
+// ===========================================================================
 // La pregunta de conjunto
 // ===========================================================================
 
@@ -282,8 +379,13 @@ inline std::string template_base_name(const std::string &name) {
  * de instrumentacion, que se piden para ver EL programa, y quien decide que
  * cuenta como codigo del usuario --.  Estaba escrita en seis sitios: uno con la
  * lista completa y cinco con una lista corta, que dejaban pasar como codigo del
- * usuario los cuerpos de un spawn remoto, de una macro, de una vista, de una
- * copia y del runtime.
+ * usuario los cuerpos de un spawn remoto, de una macro, de una vista y del
+ * runtime.
+ *
+ * El gancho de copia `__clone__` NO esta: lo escribe el programa (es un
+ * metodo suyo con un nombre fijo, ver vx/method_names.h), y su simbolo empieza
+ * por el nombre del struct, no por un prefijo.  La lista lo tuvo como
+ * `__clone_` y no coincidia con nada.
  *
  * @param name Nombre de la funcion, ya renombrado.
  * @return true si la genero el compilador.

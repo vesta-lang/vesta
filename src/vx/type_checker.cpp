@@ -1581,9 +1581,16 @@ void TypeChecker::flatten_struct_inheritance() {
                 f.fields.push_back(std::move(nf));
             }
         }
-        // Metodos: raiz->S, el mas derivado gana por nombre.
-        std::unordered_map<std::string, size_t> midx;
+        /* Metodos: TODOS los de la cadena, raiz primero, y cada clon de una
+         * base marcado con su origen.  Aqui no se decide quien sustituye a
+         * quien: eso pide comparar firmas con los tipos resueltos, y todavia
+         * no lo estan.  Lo decide el montaje del layout.
+         *
+         * Antes se sustituia por NOMBRE, y con sobrecargas cada una pisaba a
+         * la anterior: el derivado se quedaba con una sola y la llamada iba a
+         * la que no era, sin una queja. */
         for (auto rit = chain.rbegin(); rit != chain.rend(); ++rit) {
+            const bool from_base = (*rit) != S;
             for (const auto &m : (*rit)->methods) {
                 // Regla 8: PROHIBIDO `Self` en un metodo `@Virtual`.  Son
                 // mecanismos OPUESTOS: `Self` = clon-por-derivado estatico;
@@ -1610,13 +1617,13 @@ void TypeChecker::flatten_struct_inheritance() {
                                 "@Virtual es dispatch dinamico por vtable");
                 }
                 auto clon = clone_method_subst(m.get(), g);
-                auto mi = midx.find(m->name);
-                if (mi != midx.end())
-                    f.methods[mi->second] = std::move(clon);
-                else {
-                    midx[m->name] = f.methods.size();
-                    f.methods.push_back(std::move(clon));
-                }
+                /* El origen se hereda por la cadena: un metodo que la base
+                 * intermedia ya heredo sigue viniendo de la raiz. */
+                if (from_base)
+                    clon->inherited_from =
+                        m->inherited_from.empty() ? (*rit)->name
+                                                  : m->inherited_from;
+                f.methods.push_back(std::move(clon));
             }
         }
         f.changed = true;
@@ -5668,11 +5675,19 @@ void TypeChecker::collect_globals() {
             // ni constructores; @c defining_class lleva el nombre del
             // struct para que el lowering construya el label correcto.
             // Slot de vtable para los metodos @Virtual, asignado por orden de
-            // aparicion.  Como el flatten deja los metodos raiz-primero y el
-            // override reemplaza EN SU POSICION, el slot de un metodo virtual
-            // coincide entre la base y el derivado -> dispatch por Base*
-            // correcto.
+            // aparicion.  El aplanado deja los metodos raiz-primero y AQUI la
+            // redefinicion sustituye al heredado EN SU POSICION, asi que el
+            // slot de un metodo virtual coincide entre la base y el derivado
+            // -> dispatch por Base* correcto.
             uint32_t vslot = 0;
+            /* El decl del AST que ocupa cada hueco de @c layout.methods, en
+             * paralelo: dice si lo que esta es heredado -- solo un heredado
+             * se puede sustituir -- y, si se sustituye, cual hay que quitar. */
+            std::vector<ast::ClassMethodDecl *> slot_decls;
+            /* Los clones de la base que una redefinicion sustituyo.  Se quitan
+             * de @c s->methods al acabar: si se quedaran, el bajado emitiria
+             * dos cuerpos bajo el mismo simbolo. */
+            std::vector<const ast::ClassMethodDecl *> superseded;
             for (const auto &m_uptr : s->methods) {
                 auto *m = m_uptr.get();
                 if (!m) continue;
@@ -5698,18 +5713,42 @@ void TypeChecker::collect_globals() {
                 /* La respuesta esta en los que ya estan en el layout: ni tabla
                  * ni clave de texto.  Comparar dos listas de tipos no reserva
                  * nada, y esto corre para cada struct del programa. */
-                bool already_declared = false;
-                for (const ClassMethodInfo &prev : layout.methods) {
+                int same_sig = -1;
+                for (size_t j = 0; j < layout.methods.size(); ++j) {
+                    const ClassMethodInfo &prev = layout.methods[j];
                     if (prev.is_constructor != mi.is_constructor) continue;
                     if (!mi.is_constructor && prev.name != mi.name) continue;
                     if (!overload::same_signature(
                             prev.param_types, prev.param_names, mi.param_types,
                             mi.param_names))
                         continue;
-                    already_declared = true;
+                    same_sig = static_cast<int>(j);
                     break;
                 }
-                if (already_declared) {
+                /* Misma firma que uno HEREDADO: es una redefinicion, y ocupa
+                 * su hueco -- mismo criterio que las clases --.  Los
+                 * constructores no entran: se siguen tratando como siempre. */
+                if (same_sig >= 0 && !mi.is_constructor &&
+                    !slot_decls[same_sig]->inherited_from.empty()) {
+                    const ClassMethodInfo &prev = layout.methods[same_sig];
+                    /* Redefinir un virtual lo sigue siendo, y en el MISMO hueco
+                     * de la tabla: si no, los virtuales de detras se correrian
+                     * y la base y el derivado dejarian de coincidir. */
+                    if (prev.is_virtual) {
+                        mi.is_virtual = true;
+                        mi.vtable_index = prev.vtable_index;
+                    } else if (m->is_virtual) {
+                        mi.vtable_index = vslot++;
+                    }
+                    if (m->name == kCopyHookMethod) layout.has_copy_hook = true;
+                    superseded.push_back(slot_decls[same_sig]);
+                    slot_decls[same_sig]->layout_slot = ast::kNoMethodSlot;
+                    m->layout_slot = static_cast<uint32_t>(same_sig);
+                    slot_decls[same_sig] = m;
+                    layout.methods[same_sig] = std::move(mi);
+                    continue;
+                }
+                if (same_sig >= 0) {
                     if (m->is_constructor)
                         diags_.diag(m->loc, DiagLevel::ERR, "VX2061",
                                     {s->name});
@@ -5724,12 +5763,27 @@ void TypeChecker::collect_globals() {
                 if (m->is_virtual) mi.vtable_index = vslot++;
                 // copy-hook (copy-constructor implicito).  El compilador lo
                 // invoca en cada sitio de copia del struct.
-                if (m->name == "__clone__") layout.has_copy_hook = true;
+                if (m->name == kCopyHookMethod) layout.has_copy_hook = true;
                 /* En que hueco acaba.  Quien EMITE el metodo tiene la
                  * declaracion en la mano, no el layout, y con sobrecarga
                  * buscarla por nombre deja de identificarla. */
                 m->layout_slot = static_cast<uint32_t>(layout.methods.size());
                 layout.methods.push_back(std::move(mi));
+                slot_decls.push_back(m);
+            }
+            // Fuera los clones sustituidos (ver @c superseded).
+            if (!superseded.empty()) {
+                auto &ms = s->methods;
+                size_t keep = 0;
+                for (size_t k = 0; k < ms.size(); ++k) {
+                    if (std::find(superseded.begin(), superseded.end(),
+                                  ms[k].get()) != superseded.end())
+                        continue;
+                    if (keep != k) ms[keep] = std::move(ms[k]);
+                    ++keep;
+                }
+                ms.erase(ms.begin() + static_cast<std::ptrdiff_t>(keep),
+                         ms.end());
             }
             // Con la lista cerrada, cada metodo recibe su simbolo definitivo.
             close_layout_methods(layout.methods, s->name,
@@ -6600,7 +6654,7 @@ void TypeChecker::collect_globals() {
         if (has_dtor) continue; // el user ya declaro uno
         auto dtor = std::make_unique<ast::ClassMethodDecl>();
         dtor->loc = sd->loc;
-        dtor->name = "__dtor";
+        dtor->name = kDestructorMethod;
         dtor->is_destructor = true;
         dtor->access = 0;
         dtor->body = std::make_unique<ast::BlockStmt>();
@@ -6611,7 +6665,7 @@ void TypeChecker::collect_globals() {
         dtor->layout_slot = static_cast<uint32_t>(lay.methods.size());
         sd->methods.push_back(std::move(dtor));
         ClassMethodInfo mi;
-        mi.name = "__dtor";
+        mi.name = kDestructorMethod;
         mi.is_destructor = true;
         mi.defining_class = sd->name;
         mi.return_type = Type{PrimitiveKind::VOID};
@@ -6712,7 +6766,7 @@ void TypeChecker::collect_globals() {
         // Anadir ClassMethodDecl sintetica al AST con body vacio.
         auto dtor = std::make_unique<ast::ClassMethodDecl>();
         dtor->loc = cd->loc;
-        dtor->name = "__dtor";
+        dtor->name = kDestructorMethod;
         dtor->is_destructor = true;
         dtor->access = 0;
         dtor->body = std::make_unique<ast::BlockStmt>();
@@ -6726,7 +6780,7 @@ void TypeChecker::collect_globals() {
         // marcar @c has_destructor.  El @c vtable_index sigue al final
         // de los metodos existentes.
         ClassMethodInfo mi_info;
-        mi_info.name = "__dtor";
+        mi_info.name = kDestructorMethod;
         mi_info.is_destructor = true;
         mi_info.is_constructor = false;
         mi_info.is_static = false;

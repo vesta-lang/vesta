@@ -377,7 +377,7 @@ void Lowering::lower_class_methods(ast::ClassDecl *cd, ir::IrModule &out) {
                         // un temp VM y llama el dtor sobre el temp.
                         emit_struct_method_on_host_field(
                             saddr, f.type.struct_name,
-                            f.type.struct_name + "__" + "__dtor", m->loc.line);
+                            destructor_symbol(f.type.struct_name), m->loc.line);
                         continue;
                     }
                     if (f.type.kind != PrimitiveKind::CLASS) continue;
@@ -394,11 +394,7 @@ void Lowering::lower_class_methods(ast::ClassDecl *cd, ir::IrModule &out) {
                     for (const auto &im : inner.methods) {
                         if (im.is_destructor) {
                             inner_dtor_idx = im.vtable_index;
-                            const std::string owner =
-                                im.defining_class.empty()
-                                    ? f.type.struct_name.str()
-                                    : im.defining_class;
-                            inner_dtor_name = owner + "__" + im.name;
+                            inner_dtor_name = method_symbol_of(im);
                             break;
                         }
                     }
@@ -507,13 +503,9 @@ void Lowering::lower_class_methods(ast::ClassDecl *cd, ir::IrModule &out) {
                          * misma y llamarla seria repetirla. */
                         if (sup_dtor != nullptr &&
                             sup_dtor->defining_class != cd->name) {
-                            const std::string owner =
-                                sup_dtor->defining_class.empty()
-                                    ? lay.super_name
-                                    : sup_dtor->defining_class;
                             ir::IrInstr sc{};
                             sc.op = ir::IrOp::CALL;
-                            sc.func_name = owner + "__" + sup_dtor->name;
+                            sc.func_name = method_symbol_of(*sup_dtor);
                             sc.type = ir::IrType::VOID;
                             sc.dst = ir::IR_NO_VALUE;
                             sc.operands = {this_vid};

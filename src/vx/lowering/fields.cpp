@@ -55,8 +55,7 @@ std::string Lowering::generate_overlay_resolver(const StructLayout &lay,
                                                 const StructFieldInfo &fi,
                                                 bool is_element) {
     const std::string fn_name =
-        (is_element ? "__ovl_element_" : "__ovl_resolve_") + lay.name + "_" +
-        fi.name;
+        ir::overlay_resolver_symbol(lay.name, fi.name, is_element);
     if (generated_overlay_resolvers_.count(fn_name)) return fn_name; // dedup
     // Insertar YA el nombre: un resolver @element puede RECURSAR
     // (`self.Name[index-1]`); sin esto la generacion compile-time no
@@ -109,7 +108,7 @@ std::string Lowering::generate_overlay_resolver(const StructLayout &lay,
     bind("base", self_pv);
     bind("this", self_pv);
     // F4: `parent<T>()` en el body baja a este valor (el puntero raiz).
-    if (root_pv != ir::IR_NO_VALUE) bind("__ovl_root", root_pv);
+    if (root_pv != ir::IR_NO_VALUE) bind(ir::kOverlayRootBinding, root_pv);
     // @element: `index` en scope.
     if (index_pv != ir::IR_NO_VALUE) bind("index", index_pv);
     for (const auto &sib : lay.fields) {
@@ -163,7 +162,7 @@ std::string Lowering::generate_overlay_resolver(const StructLayout &lay,
 }
 
 std::string Lowering::generate_overlay_extent(const StructLayout &lay) {
-    const std::string fn_name = "__ovl_extent_" + lay.name;
+    const std::string fn_name = ir::overlay_extent_symbol(lay.name);
     if (generated_overlay_resolvers_.count(fn_name)) return fn_name; // dedup
     generated_overlay_resolvers_.insert(fn_name);
 
@@ -1030,7 +1029,7 @@ ir::IrValueId Lowering::lower_class_field_store(ast::FieldAccessExpr *target,
         if (it_sl != tc_.struct_layouts().end() &&
             it_sl->second.has_copy_hook) {
             emit_struct_method_on_host_field(
-                addr, ftyp.struct_name, ftyp.struct_name + "__" + "__clone__",
+                addr, ftyp.struct_name, copy_hook_symbol(ftyp.struct_name),
                 loc.line);
         }
         return rhs;

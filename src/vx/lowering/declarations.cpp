@@ -335,11 +335,7 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
             // dtor).
             if (dtor != nullptr) {
                 if (!class_has_vtable(sem_type.struct_name)) {
-                    const std::string owner = dtor->defining_class.empty()
-                                                  ? sem_type.struct_name.str()
-                                                  : dtor->defining_class;
-                    const std::string dtor_label =
-                        owner + "__" + dtor->name; // <Clase>____dtor
+                    const std::string &dtor_label = method_symbol_of(*dtor);
                     // vaddr del dtor via LABEL_ADDR (dispatch estatico).
                     const ir::IrValueId v_dtor =
                         emit_label_addr(dtor_label, vd->loc.line);
@@ -393,11 +389,7 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
                 if (dtor) {
                     // AOT.2.d: nombre IR del dtor del tipo estatico ->
                     // se invoca antes del free.
-                    const std::string owner = dtor->defining_class.empty()
-                                                  ? sem_type.struct_name.str()
-                                                  : dtor->defining_class;
-                    act.func_name =
-                        owner + "__" + dtor->name; // <Class>____dtor
+                    act.func_name = method_symbol_of(*dtor);
                     // AOT.2.d (4): dtor polimorfico.  Si la clase estatica
                     // tiene vtable (es base/derivada o implementa interfaz),
                     // el dtor es virtual -> despachar por la vtable de la
@@ -430,13 +422,8 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
                 // --target=bare (que no tiene vtable runtime).  Solo cuando
                 // existe vtable (herencia/interfaz real) se conserva el
                 // CALLVIRT.
-                if (!class_has_vtable(sem_type.struct_name)) {
-                    const std::string owner = dtor->defining_class.empty()
-                                                  ? sem_type.struct_name.str()
-                                                  : dtor->defining_class;
-                    act.func_name =
-                        owner + "__" + dtor->name; // <Class>____dtor
-                }
+                if (!class_has_vtable(sem_type.struct_name))
+                    act.func_name = method_symbol_of(*dtor);
                 cleanup_stack_.push_back(std::move(act));
             }
             // fix9 - eliminado el cleanup RAW_ASM `gchandle+drop`
@@ -1098,7 +1085,7 @@ bool Lowering::try_lower_struct_var(ast::VarDeclStmt *vd,
         cc.type = ir::IrType::VOID;
         cc.dst = ir::IR_NO_VALUE;
         cc.operands = {addr}; // this = b (la copia)
-        cc.func_name = sem_type.struct_name + "__" + "__clone__";
+        cc.func_name = copy_hook_symbol(sem_type.struct_name);
         cc.source_line = vd->loc.line;
         emit(current_block_, std::move(cc));
     }
@@ -1123,7 +1110,7 @@ bool Lowering::try_lower_struct_var(ast::VarDeclStmt *vd,
             act.source_line = vd->loc.line;
             act.refresh_name = vd->name;
             // Naming de lower_struct_methods: <Struct>__ + __dtor.
-            act.func_name = sem_type.struct_name + "__" + "__dtor";
+            act.func_name = destructor_symbol(sem_type.struct_name);
             cleanup_stack_.push_back(std::move(act));
         }
         // Ownership escape-sensitive: si el struct tiene campos closure

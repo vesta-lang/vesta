@@ -601,9 +601,10 @@ void Lowering::ensure_auto_multiversion(ir::IrModule &out_module) {
         MvEntry e;
         e.wrapper_name = f.name;
         // main mantiene el nombre historico __vx_main_body; los helpers usan
-        // <nombre>$mv.  El driver suffija $sse2/$avx2/$avx512 a estos nombres.
-        e.body_name =
-            (f.name == "main") ? std::string(ir::rt::kMainBody) : f.name + "$mv";
+        // <nombre>$mv.  El driver suffija las variantes por ancho a estos
+        // nombres (ir::kVariant*Suffix).
+        e.body_name = (f.name == "main") ? std::string(ir::rt::kMainBody)
+                                         : ir::multi_version_body_symbol(f.name);
         e.ret = f.ret_type;
         for (ir::IrValueId pid : f.params)
             e.params.push_back(
@@ -635,7 +636,7 @@ void Lowering::ensure_auto_multiversion(ir::IrModule &out_module) {
             m.section_name = ".data";
             m.flags |= ir::IrModule::SD_FLAG_NON_DEDUP |
                        ir::IrModule::SD_FLAG_FORCE_EMIT;
-            m.shared_key = e.body_name + "$fp";
+            m.shared_key = ir::chosen_version_slot(e.body_name);
         }
         ir::IrFunction w;
         w.name = e.wrapper_name;
@@ -789,14 +790,14 @@ void Lowering::ensure_auto_multiversion(ir::IrModule &out_module) {
         ir::IrValueId v512 = bit_set(7);
         branch(v512, bb_512, bb_not512);
         current_block_ = bb_512;
-        store_all_and_join("$avx512");
+        store_all_and_join(ir::kVariantAvx512Suffix);
         current_block_ = bb_not512;
         ir::IrValueId v2 = bit_set(4);
         branch(v2, bb_2, bb_sse);
         current_block_ = bb_2;
-        store_all_and_join("$avx2");
+        store_all_and_join(ir::kVariantAvx2Suffix);
         current_block_ = bb_sse;
-        store_all_and_join("$sse2");
+        store_all_and_join(ir::kVariantSse2Suffix);
         // join: RET void.
         current_block_ = bb_join;
         {

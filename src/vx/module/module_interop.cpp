@@ -1677,7 +1677,7 @@ void export_typechecker_to_vxi(const TypeChecker &tc, uint64_t source_hash,
             em.target_key = key;
             em.name = mi.name;
             em.return_type = canonical_typename_of(mi.return_type);
-            em.mangled_label = key + "__" + mi.name;
+            em.mangled_label = method_symbol_of(mi);
             em.target_is_class = is_class;
             for (const auto &pt : mi.param_types)
                 em.param_types.push_back(canonical_typename_of(pt));

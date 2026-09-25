@@ -902,7 +902,7 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
     // destruye).
     for (const auto &pr : struct_clone_to_dtor) {
         emit_struct_method_on_host_field(
-            pr.first, pr.second, pr.second + "__" + "__dtor", e->loc.line);
+            pr.first, pr.second, destructor_symbol(pr.second), e->loc.line);
     }
     /* Que se devuelve -- el hueco o el valor -- lo dice el mismo @ref SretCall
      * que lo preparo; escribirlo aqui otra vez era la cuarta copia. */
