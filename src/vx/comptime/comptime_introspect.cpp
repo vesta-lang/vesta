@@ -24,6 +24,7 @@
  */
 
 #include "vx/comptime/comptime_introspect.h"
+#include "ir/synthetic_symbols.h" // el nombre de los cuerpos de macro
 #include <algorithm>              // UCRT64: no transitivo
 #include "vx/diag/diag_catalog.h" // el motivo sale del catalogo, nunca a mano
 #include "vx/lexer.h"
@@ -3116,10 +3117,10 @@ ComptimeEvalResult comptime_eval_expr(const TypeChecker &tc,
                      * (`std__comptime__literal__buf_sum`), que es justamente el
                      * `decl->name` fijado por module_interop; solo ese coincide
                      * con el simbolo cargado en la ComptimeVM. */
-                    const std::string macro_nm =
-                        "__macro_" + (fn_it->second->is_imported_comptime
-                                          ? fn_it->second->name
-                                          : cid->name);
+                    const std::string macro_nm = ir::macro_symbol(
+                        fn_it->second->is_imported_comptime
+                            ? fn_it->second->name
+                            : cid->name);
                     /* El otro nombre posible.  Una funcion comptime declarada
                      * en un fichero CON `namespace` compila a un simbolo con el
                      * prefijo del namespace (`__macro_mimod__gen`), pero desde
@@ -3127,10 +3128,10 @@ ComptimeEvalResult comptime_eval_expr(const TypeChecker &tc,
                      * (`gen`) -- y con la clave desnuda no se encontraba, se
                      * daba por no ejecutable y el resultado salia VACiO sin
                      * decir nada.  Se prueba tambien la otra forma. */
-                    const std::string macro_alt =
-                        "__macro_" + (fn_it->second->is_imported_comptime
-                                          ? cid->name
-                                          : fn_it->second->name);
+                    const std::string macro_alt = ir::macro_symbol(
+                        fn_it->second->is_imported_comptime
+                            ? cid->name
+                            : fn_it->second->name);
                     if (ret_is_str) {
                         std::string out;
                         bool inv =

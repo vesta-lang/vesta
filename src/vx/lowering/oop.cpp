@@ -884,7 +884,7 @@ void Lowering::generate_new_helpers(ir::IrModule &out) {
                     fmap_idx = out.static_data.push_back(std::move(fmap));
                     auto &fm = out.static_data.meta_at(fmap_idx);
                     fm.section_name = ".rodata";
-                    fm.symbol_name = "__vx_fmap_" + cd->name;
+                    fm.symbol_name = ir::rt::field_map_symbol(cd->name);
                     fm.flags |= ir::IrModule::SD_FLAG_FORCE_EMIT |
                                 ir::IrModule::SD_FLAG_NON_DEDUP;
                 }
@@ -900,13 +900,13 @@ void Lowering::generate_new_helpers(ir::IrModule &out) {
                 blobs.descriptor = desc_idx; // de la CLASE: una sola vez
                 auto &dm = out.static_data.meta_at(desc_idx);
                 dm.section_name = ".data.rel.ro";
-                dm.symbol_name = "__vx_tdesc_" + cd->name;
+                dm.symbol_name = ir::rt::type_desc_symbol(cd->name);
                 dm.flags |= ir::IrModule::SD_FLAG_FORCE_EMIT |
                             ir::IrModule::SD_FLAG_NON_DEDUP;
                 if (fmap_idx != UINT64_MAX) {
                     ir::IrModule::StaticDataMeta::SymRef sr;
                     sr.offset = 0; // field_map_ptr @0
-                    sr.sym = "__vx_fmap_" + cd->name;
+                    sr.sym = ir::rt::field_map_symbol(cd->name);
                     sr.width = 8;
                     sr.is_rel = 0;
                     dm.sym_refs.push_back(std::move(sr));

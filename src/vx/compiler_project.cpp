@@ -60,6 +60,7 @@ int run_worker_from_source(std::string code, const std::string &file_name,
 #include "vx/project/module_artifact.h" // el artefacto en cache y su adopcion
 #include "vx/project/module_names.h" // los simbolos derivados del modulo
 #include "ir/synthetic_symbols.h" // la familia de `__module_init`
+#include "ir/runtime_symbols.h"   // lo que aporta el runtime, y su orden
 #include "vx/project/module_paths.h" // donde van sus ficheros
 #include "vx/source_text.h"   // un solo fin de linea para todo el pipeline
 #include "vx/vxdbg_emit.h"    // grafo de conocimiento del programa
@@ -1720,7 +1721,7 @@ void traer_asignador_del_lenguaje(ir::IrModule &mod, const CompileOptions &opts,
 
     bool reserva = false;
     for (const ir::IrFunction &f : mod.functions) {
-        if (f.name == "__vx_malloc") return; // ya esta dentro
+        if (f.name == ir::rt::kMalloc) return; // ya esta dentro
         for (const ir::IrBlock &b : f.blocks)
             for (const ir::IrInstr &in : b.instrs)
                 if (in.op == ir::IrOp::RAW_ALLOC || in.op == ir::IrOp::RAW_FREE)
@@ -4496,45 +4497,39 @@ CompileResult compile_vx_project(
     // prepuso, se detectan y no se duplican).  Orden de ejecucion:
     // __vx_cpu_init (cpuid) -> __vx_memcpy_init -> __vx_strdisp_init.
     {
-        // Que inits existen tras el merge.
-        bool has_cpu = false, has_mc = false, has_sd = false;
+        // Que inits existen tras el merge, por su posicion en el orden.
+        bool has[ir::rt::kDispatchInitCount] = {};
+        bool any = false;
         for (const auto &fn : merged.functions) {
-            if (fn.name == "__vx_cpu_init")
-                has_cpu = true;
-            else if (fn.name == "__vx_memcpy_init")
-                has_mc = true;
-            else if (fn.name == "__vx_strdisp_init")
-                has_sd = true;
+            const int idx = ir::rt::dispatch_init_index(fn.name);
+            if (idx < 0) continue;
+            has[idx] = true;
+            any = true;
         }
-        if (has_cpu || has_mc || has_sd) {
+        if (any) {
             for (auto &fn : merged.functions) {
                 if (fn.name != "main" || fn.blocks.empty()) continue;
                 auto &ins = fn.blocks.front().instrs;
                 // Detectar inits ya presentes (idempotencia).
-                bool have_cpu = false, have_mc = false, have_sd = false;
+                bool have[ir::rt::kDispatchInitCount] = {};
                 for (const auto &x : ins) {
                     if (x.op != ir::IrOp::CALL) continue;
-                    if (x.func_name == "__vx_cpu_init")
-                        have_cpu = true;
-                    else if (x.func_name == "__vx_memcpy_init")
-                        have_mc = true;
-                    else if (x.func_name == "__vx_strdisp_init")
-                        have_sd = true;
+                    const int idx = ir::rt::dispatch_init_index(x.func_name);
+                    if (idx >= 0) have[idx] = true;
                 }
-                // Prepend en orden inverso (insert(begin) invierte): primero
-                // strdisp, luego memcpy, luego cpu -> cpu queda de primero.
-                auto prepend_call = [&](const char *name) {
+                // Se anteponen del ULTIMO al primero: insertar al principio
+                // invierte el orden, asi que el que tiene que correr antes
+                // queda delante.
+                for (int i = ir::rt::kDispatchInitCount - 1; i >= 0; --i) {
+                    if (!has[i] || have[i]) continue;
                     ir::IrInstr c{};
                     c.op = ir::IrOp::CALL;
                     c.type = ir::IrType::VOID;
                     c.dst = ir::IR_NO_VALUE;
-                    c.func_name = name;
+                    c.func_name = ir::rt::kDispatchInits[i];
                     c.source_line = 0;
                     ins.insert(ins.begin(), std::move(c));
-                };
-                if (has_sd && !have_sd) prepend_call("__vx_strdisp_init");
-                if (has_mc && !have_mc) prepend_call("__vx_memcpy_init");
-                if (has_cpu && !have_cpu) prepend_call("__vx_cpu_init");
+                }
                 break;
             }
         }
@@ -4552,7 +4547,7 @@ CompileResult compile_vx_project(
         std::unordered_set<std::string> seen_vx_fns;
         bool has_dup = false;
         for (const auto &fn : merged.functions) {
-            if (fn.name.rfind("__vx_", 0) == 0) {
+            if (ir::rt::is_runtime_symbol(fn.name)) {
                 if (!seen_vx_fns.insert(fn.name).second) {
                     has_dup = true;
                     break;
@@ -4566,7 +4561,7 @@ CompileResult compile_vx_project(
             std::vector<ir::IrFunction> kept;
             kept.reserve(merged.functions.size());
             for (auto &fn : merged.functions) {
-                if (fn.name.rfind("__vx_", 0) == 0 &&
+                if (ir::rt::is_runtime_symbol(fn.name) &&
                     !seen_vx_fns.insert(fn.name).second) {
                     continue; // ya presente: descartar duplicado
                 }
@@ -5180,12 +5175,10 @@ CompileResult compile_vx_project(
                  * registra clases y macros al cargar el artefacto.  Sin el, la
                  * carga deja simbolos sin resolver y el comptime no se entera
                  * -- el programa compilaba y daba otro resultado. */
-                const bool sintetica = f.name.rfind("__macro_", 0) == 0 ||
-                                       f.name.rfind("__ctblock_", 0) == 0 ||
+                const bool sintetica = ir::is_macro_symbol(f.name) ||
+                                       ir::is_ctblock_symbol(f.name) ||
                                        ir::is_module_init(f.name);
-                const std::string desnudo = f.name.rfind("__macro_", 0) == 0
-                                                ? f.name.substr(8)
-                                                : f.name;
+                const std::string desnudo = ir::macro_base_name(f.name);
                 if (sintetica || del_conjunto.count(f.name) ||
                     del_conjunto.count(desnudo)) {
                     if (dentro.insert(f.name).second)
@@ -5452,7 +5445,7 @@ CompileResult compile_vx_project(
         // es lo que sobrevive al merge; sin esto la fase no se disparaba y el
         // constructor acababa resolviendose por el evaluador de AST -- que
         // solo funciona dentro del mismo fichero.
-        if (fn.is_macro_compiled || fn.name.rfind("__macro_", 0) == 0) {
+        if (fn.is_macro_compiled || ir::is_macro_symbol(fn.name)) {
             res.has_lowerable_macros = true;
             break;
         }

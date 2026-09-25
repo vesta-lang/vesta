@@ -21,6 +21,7 @@
 
 #include "util/env_flags.h"
 #include "vx/module/module_interop.h"
+#include "ir/synthetic_symbols.h" // el nombre con que se guarda una plantilla exportada
 
 #include <algorithm>
 #include <cassert>
@@ -2022,7 +2023,8 @@ void inject_generic_templates_from_vxi(
             // El nombre solo tiene que ser unico y que nadie lo escriba: una
             // `comptime const` se inlinea en el uso, no enlaza contra nada, asi
             // que no hace falta que coincida con el mangling real del modulo.
-            const std::string mangled = "__tpl__" + ns_prefix + "__" + sym.name;
+            const std::string mangled =
+                ir::template_symbol(ns_prefix + "__" + sym.name);
             TypeChecker::ComptimeConst c;
             c.type = tc.resolve_type_string(sym.underlying_type);
             if (sym.has_blob_ref) {

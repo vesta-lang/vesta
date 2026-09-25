@@ -1286,7 +1286,7 @@ void Lowering::lower_return(ast::ReturnStmt *s) {
         jc.op = ir::IrOp::CALL;
         jc.type = ir::IrType::VOID;
         jc.dst = ir::IR_NO_VALUE;
-        jc.func_name = "__vx_thread_join_all";
+        jc.func_name = ir::rt::kThreadJoinAll;
         jc.is_call_site = true;
         jc.source_line = s->loc.line;
         emit(current_block_, std::move(jc));
@@ -1546,7 +1546,7 @@ void Lowering::lower_return(ast::ReturnStmt *s) {
         // -> CALL __vx_fulfill(fut, val) + RET (la tarea retorna al pump, no
         // hay HLT del scheduler de la VM).
         if (native_poo_) {
-            emit_call("__vx_fulfill", {async_fut_id_, v_payload},
+            emit_call(ir::rt::kFulfill, {async_fut_id_, v_payload},
                       ir::IrType::VOID, s->loc.line);
             emit_ret_void(s->loc.line);
             return;

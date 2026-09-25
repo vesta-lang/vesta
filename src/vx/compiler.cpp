@@ -16,6 +16,8 @@
  */
 
 #include "util/crono_tramo.h" // partir la fase de emitir en lo que de verdad es
+#include "ir/synthetic_symbols.h" // los cuerpos de macro
+#include "ir/runtime_symbols.h"   // las fibras del runtime
 #include "util/env_flags.h"
 #include "vx/compiler.h"
 #include "vx/source_text.h"    // un solo fin de linea para todo el pipeline
@@ -455,8 +457,7 @@ CompileResult compile_vx_source(const std::string &source,
         for (auto &d : mod->decls) {
             if (d && d->kind == ast::NodeKind::ComptimeBlockStmt) {
                 auto *cb = static_cast<ast::ComptimeBlockStmt *>(d.get());
-                const std::string fname =
-                    "__ctblock_" + std::to_string(ctblock_n++);
+                const std::string fname = ir::ctblock_symbol(ctblock_n++);
                 // comptime i64 __ctblock_N() { <stmts>; return 0; }
                 auto fn = std::make_unique<ast::FunctionDecl>();
                 fn->name = fname;
@@ -892,7 +893,7 @@ CompileResult compile_vx_source(const std::string &source,
     if (!opts.native_poo) {
         bool uses_swapctx = false, defines_swapctx = false;
         for (const auto &f : irmod.functions) {
-            if (f.name == "__vx_swapctx") defines_swapctx = true;
+            if (f.name == ir::rt::kSwapCtx) defines_swapctx = true;
             for (const auto &b : f.blocks)
                 for (const auto &ins : b.instrs)
                     if (ins.op == ir::IrOp::SWAPCTX) uses_swapctx = true;
@@ -941,8 +942,8 @@ CompileResult compile_vx_source(const std::string &source,
                     for (const auto &f : irmod.functions)
                         have.insert(f.name);
                     for (auto &fn : vf_mod.functions) {
-                        if (fn.name != "__vx_swapctx" &&
-                            fn.name != "__fiber_trampoline")
+                        if (fn.name != ir::rt::kSwapCtx &&
+                            fn.name != ir::rt::kFiberTrampoline)
                             continue;
                         if (have.count(fn.name)) continue;
                         irmod.functions.push_back(std::move(fn));
@@ -1577,7 +1578,7 @@ CompileResult compile_vx_source(const std::string &source,
             for (const ir::IrFunction &f : fuente.functions) {
                 /* Un `@Macro` baja como `__macro_<X>`; una comptime fn conserva
                  * su nombre mangled, que es el que da el recolector. */
-                const bool es_macro = f.name.rfind("__macro_", 0) == 0;
+                const bool es_macro = ir::is_macro_symbol(f.name);
                 const bool es_comptime =
                     res.comptime_unit_source.find(f.name) != std::string::npos;
                 if (es_macro || es_comptime) solo_ct.functions.push_back(f);

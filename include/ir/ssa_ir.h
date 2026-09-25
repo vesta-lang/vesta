@@ -50,6 +50,7 @@
 #include <cstddef>
 
 #include "ir/native_effect_vocab.h" // de quien es lo que sale, y que puede fallar
+#include "ir/synthetic_symbols.h" // los nombres que se inventa el compilador
 #include "util/name_pool.h"         // nombres internados: la clave sin copiar
 #include "util/alloc/small_vector.h" // los operandos casi siempre son uno o dos
 #include <cstring>
@@ -3469,24 +3470,9 @@ std::vector<IrEdge> ir_cfg_edges(const IrFunction &fn);
  */
 void print_instr(std::ostream &o, const IrFunction &fn, const IrInstr &ins);
 
-/**
- * @brief @c true si @p nombre es el cuerpo de una funcion de COMPILACION.
- *
- * Las macros y las funciones comptime se emiten con el prefijo @c __macro_ y
- * corren AL COMPILAR: no llegan al programa emitido, y lo que tocan son datos
- * de la propia compilacion.  Quien razona sobre el programa que se ejecuta
- * tiene que saltarselas -- juzgarlas es juzgar otro programa.
- *
- * Vive aqui porque es el IR quien sabe que significan los nombres de sus
- * funciones.  La comprobacion estaba escrita a pelo en varios sitios, y una
- * regla repetida son varias reglas en cuanto una cambia.
- *
- * @param nombre Nombre de la funcion.
- * @return true si es un cuerpo comptime.
- */
-inline bool es_cuerpo_comptime(const std::string &nombre) {
-    return nombre.rfind("__macro_", 0) == 0;
-}
+/* "Es el cuerpo de una funcion de compilacion" vive en
+ * `ir/synthetic_symbols.h` (`is_macro_symbol`), con el resto de nombres que se
+ * inventa el compilador. */
 /**
  * @brief Corre los indices de datos de unas funciones que se traen a otro
  * modulo.
@@ -3515,19 +3501,9 @@ void ir_correr_indices_de_datos(std::vector<IrFunction> &fns,
 /// Sobre UNA funcion, para quien las trae de una en una.
 void ir_correr_indices_de_datos(IrFunction &fn, uint64_t desplazamiento);
 
-/**
- * @brief Es @p name un ayudante de construccion, `__new_<Clase>`?
- * @param name      Nombre de la funcion.
- * @param out_class Si no es nulo y lo es, recibe el nombre de la clase.
- * @return true si lo es.
- *
- * Aqui y no escondido en el optimizador porque es una CONVENCION DE NOMBRES
- * del intermedio, y quien la pregunta ya no es solo el que la puso: el hecho
- * de inlineabilidad (@c analysis/facts/inline_facts.h) la necesita para
- * responder sin abrir el cuerpo.  Dos copias del prefijo serian dos fuentes de
- * verdad, y la que se quedara atras no daria un error: daria otra decision.
- */
-bool is_new_helper_name(const std::string &name, std::string *out_class);
+/* `is_new_helper_name` -- que un nombre sea un ayudante de construccion -- es
+ * una convencion de NOMBRES y vive en `ir/synthetic_symbols.h`, con las demas.
+ * Aqui queda `new_helper_class`, que ademas necesita el modulo. */
 
 /**
  * @brief QUE clase construye el ayudante @p sym.

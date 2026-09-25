@@ -36,6 +36,8 @@
  */
 
 #include "util/crono_tramo.h" // cada paso del emisor, con VESTA_TIMES
+#include "ir/synthetic_symbols.h" // los cuerpos que corren al compilar
+#include "ir/runtime_symbols.h"   // los alias del asignador
 #include "util/env_flags.h"
 #include "util/os/thread_slot.h" // un contador por hilo, sin `thread_local`
 #include "ir/ir_emitter.h"
@@ -7376,13 +7378,13 @@ static std::string emit_function(const IrFunction &fn, const EmitOptions &opts,
     if (mod != nullptr && !mod->alloc_sym.empty() &&
         fn.name == mod->alloc_sym) {
         if (opts.export_all)
-            out.directive(emmit::Directive::EXPORT, "__vx_alloc_entry");
-        out.label("__vx_alloc_entry");
+            out.directive(emmit::Directive::EXPORT, ir::rt::kAllocEntry);
+        out.label(ir::rt::kAllocEntry);
     }
     if (mod != nullptr && !mod->free_sym.empty() && fn.name == mod->free_sym) {
         if (opts.export_all)
-            out.directive(emmit::Directive::EXPORT, "__vx_free_entry");
-        out.label("__vx_free_entry");
+            out.directive(emmit::Directive::EXPORT, ir::rt::kFreeEntry);
+        out.label(ir::rt::kFreeEntry);
     }
 
     /* El cuerpo: prologo, cada bloque y el epilogo. */
@@ -8067,7 +8069,7 @@ EmitResult ir_emit_module(const IrModule &mod_in, const EmitOptions &opts) {
     // entrada, salvo que se emita una biblioteca (donde no hay ninguno).
     bool first_func = !opts.sin_punto_de_entrada;
     for (const auto &fn : mod.functions) {
-        if (omit_comptime_bodies && ir::es_cuerpo_comptime(fn.name)) {
+        if (omit_comptime_bodies && ir::is_macro_symbol(fn.name)) {
             continue;
         }
         if (fn.is_native) {

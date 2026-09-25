@@ -31,6 +31,7 @@
  */
 
 #include "util/alloc/small_vector.h" // las candidatas de una sobrecarga, sin heap
+#include "ir/synthetic_symbols.h" // el nombre de los cuerpos de macro
 #include "util/env_flags.h"
 #include "util/os/thread_slot.h" // buffer por hilo sin pasar por la TLS emulada
 #include "vx/type_checker.h"
@@ -19913,7 +19914,8 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
                     const bool is_pure = fn_it->second->is_pure;
                     const bool vm_ok =
                         comptime_runtime_.invoke_string_macro_memoized(
-                            "__macro_" + id->name, arg_words, vm_out, is_pure);
+                            ir::macro_symbol(id->name), arg_words, vm_out,
+                            is_pure);
                     if (vm_ok) {
                         r.ok = true;
                         r.is_str = true;

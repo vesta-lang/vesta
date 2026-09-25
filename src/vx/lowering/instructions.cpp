@@ -71,7 +71,7 @@ void Lowering::emit_monitor_op(ir::IrValueId v_obj_or_handle, bool enter,
         // sin GC ni handle table.  Baja a CALL a la primitiva nativa
         // (__vx_monenter/__vx_monexit) que el auto-bundle de vx_sync.vx
         // fusiona en el .o.  v_obj_or_handle es el host_ptr al ObjectHeader.
-        emit_call(enter ? "__vx_monenter" : "__vx_monexit", {v_obj_or_handle},
+        emit_call(enter ? ir::rt::kMonEnter : ir::rt::kMonExit, {v_obj_or_handle},
                   ir::IrType::VOID, source_line);
         return;
     }
@@ -390,7 +390,7 @@ ir::IrValueId Lowering::emit_getpid(uint32_t line) {
         // AOT: pid() -> CALL __vx_pid (vx_async.vx, devuelve
         // __vasync_current_pid).  Sin la VM; el runtime cooperativo lo provee.
         ins.op = ir::IrOp::CALL;
-        ins.func_name = "__vx_pid";
+        ins.func_name = ir::rt::kPid;
         ins.is_call_site = true;
     } else {
         ins.op = ir::IrOp::GETPID;

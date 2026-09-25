@@ -1664,7 +1664,7 @@ ir::IrValueId Lowering::lower_unary(ast::UnaryExpr *e) {
             // dentro de una tarea, suspende (fibra, fase 3).
             ir::IrInstr aw{};
             aw.op = native_poo_ ? ir::IrOp::CALL : ir::IrOp::AWAIT;
-            if (native_poo_) aw.func_name = "__vx_await";
+            if (native_poo_) aw.func_name = ir::rt::kAwait;
             aw.type = ir::IrType::I64;
             aw.dst = v_raw;
             aw.operands = {v};

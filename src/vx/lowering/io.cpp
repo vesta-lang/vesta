@@ -111,7 +111,7 @@ void Lowering::emit_print_string_literal(const std::string &text,
         // AOT/bare: sin proc -> escribir los bytes via __vx_write (el
         // usuario puede redefinirlo en Vesta).  v_str es host_ptr.
         fn_->values[v_str].memory = ir::MemorySpace::HostByConstruction;
-        emit_io_prim("__vx_write", {v_str, v_len}, line);
+        emit_io_prim(ir::rt::kWrite, {v_str, v_len}, line);
         return;
     }
     const ir::IrValueId v_proc = emit_getproc(line);

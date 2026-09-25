@@ -22,6 +22,7 @@
  */
 
 #include "vx/module/namespace_flatten.h"
+#include "ir/synthetic_symbols.h" // el nombre de los cuerpos de macro
 
 #include <functional>
 #include <unordered_map>
@@ -1012,8 +1013,8 @@ std::string demangle_symbol(const std::string &mangled) {
     if (s.rfind("data.", 0) == 0) s.erase(0, 5);
     /* El cuerpo de una macro es una funcion mas, generada: se ensena por lo que
      * es -- la macro -- y no por el nombre que se le invento para emitirla. */
-    if (s.rfind("__macro_", 0) == 0) s.erase(0, 8);
-    if (s.rfind("__tpl__", 0) == 0) s.erase(0, 7);
+    s = ir::macro_base_name(s);
+    s = ir::template_base_name(s);
 
     /* Los separadores del mangling vuelven a ser puntos de modulo.  Un solo
      * subrayado NO se toca: forma parte del nombre que se escribio

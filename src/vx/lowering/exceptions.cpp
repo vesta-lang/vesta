@@ -365,7 +365,7 @@ void Lowering::lower_try(ast::TryStmt *s) {
 
         if (native_poo_) {
             // AOT: salida normal -> pop del frame setjmp (top = prev).
-            emit_call("__vx_pop_frame", {}, ir::IrType::VOID, s->loc.line);
+            emit_call(ir::rt::kPopFrame, {}, ir::IrType::VOID, s->loc.line);
         } else {
             // Sprint 6.D: tryleave por cada catch via IR ops puros.
             for (size_t i = 0; i < n_catches; ++i) {
@@ -480,7 +480,7 @@ void Lowering::lower_try(ast::TryStmt *s) {
                 cg.op = ir::IrOp::CALL;
                 cg.type = exc_is_ptr ? ir::IrType::PTR : ir::IrType::I64;
                 cg.dst = v_exc;
-                cg.func_name = "__vx_get_value";
+                cg.func_name = ir::rt::kGetValue;
                 cg.source_line = cc.loc.line;
                 emit(current_block_, std::move(cg));
                 bind(cc.var_name, v_exc);
@@ -794,9 +794,9 @@ void Lowering::lower_synchronized(ast::SynchronizedStmt *s) {
         const ir::IrValueId v_buf = stack_alloc_buf(96, s->loc.line, true);
         const ir::IrValueId v_type0 =
             emit_const(ir::IrType::I64, 0, s->loc.line);
-        vcall("__vx_push_frame", {v_buf, v_type0});
+        vcall(ir::rt::kPushFrame, {v_buf, v_type0});
         const ir::IrValueId v_r =
-            emit_call("__vx_setjmp", {v_buf}, ir::IrType::I64, s->loc.line);
+            emit_call(ir::rt::kSetjmp, {v_buf}, ir::IrType::I64, s->loc.line);
         emit_br_cond(v_r, nhandler, nbody, s->loc.line);
 
         // Cleanup para return temprano: pop_frame + monexit.
@@ -816,7 +816,7 @@ void Lowering::lower_synchronized(ast::SynchronizedStmt *s) {
 
         // Salida normal del body: pop_frame + monexit + br merge.
         if (!block_terminated_) {
-            vcall("__vx_pop_frame");
+            vcall(ir::rt::kPopFrame);
             emit_monitor_op(v_obj, /*enter=*/false, s->loc.line);
             emit_br(nmerge, s->loc.line);
             block_terminated_ = true;
@@ -825,16 +825,16 @@ void Lowering::lower_synchronized(ast::SynchronizedStmt *s) {
         // Handler (longjmp reanudo): pop_frame + monexit + rethrow.
         current_block_ = nhandler;
         block_terminated_ = false;
-        vcall("__vx_pop_frame");
+        vcall(ir::rt::kPopFrame);
         emit_monitor_op(v_obj, /*enter=*/false, s->loc.line);
         {
             // rethrow nativo: leer value+type del estado de excepcion y
             // re-lanzar (longjmp al frame externo).  El frame propio ya
             // fue popeado arriba.
             const ir::IrValueId v_v =
-                emit_call("__vx_get_value", {}, ir::IrType::I64, s->loc.line);
+                emit_call(ir::rt::kGetValue, {}, ir::IrType::I64, s->loc.line);
             const ir::IrValueId v_ty =
-                emit_call("__vx_get_type", {}, ir::IrType::I64, s->loc.line);
+                emit_call(ir::rt::kGetType, {}, ir::IrType::I64, s->loc.line);
             ir::IrInstr th{};
             th.op = ir::IrOp::THROW;
             th.type = ir::IrType::VOID;
@@ -1119,10 +1119,10 @@ void Lowering::emit_try_frame_native(
     const ir::IrValueId v_buf = stack_alloc_buf(96, s->loc.line, true);
     // type = 0 (catch-all).  v2: findclass del tipo del catch.
     const ir::IrValueId v_type = emit_const(ir::IrType::I64, 0, s->loc.line);
-    emit_call("__vx_push_frame", {v_buf, v_type}, ir::IrType::VOID,
+    emit_call(ir::rt::kPushFrame, {v_buf, v_type}, ir::IrType::VOID,
               s->loc.line);
     const ir::IrValueId v_r =
-        emit_call("__vx_setjmp", {v_buf}, ir::IrType::I64, s->loc.line);
+        emit_call(ir::rt::kSetjmp, {v_buf}, ir::IrType::I64, s->loc.line);
     // Bloques del dispatch por tipo (type matching v2): tras el setjmp,
     // si el longjmp reanudo (r!=0) saltamos a dispatch_bb que popea el
     // frame, lee el type-id y elige el catch que matchea (o re-throw).
@@ -1157,8 +1157,8 @@ void Lowering::emit_try_frame_native(
 
     // dispatch_bb: pop del frame consumido + leer el type-id.
     current_block_ = dispatch_bb;
-    emit_void_call(dispatch_bb, "__vx_pop_frame");
-    const ir::IrValueId v_t = emit_i64_call(dispatch_bb, "__vx_get_type");
+    emit_void_call(dispatch_bb, ir::rt::kPopFrame);
+    const ir::IrValueId v_t = emit_i64_call(dispatch_bb, ir::rt::kGetType);
     // Cadena de chequeos: por cada catch, si su tipo es desconocido
     // (catch-all, builtin como FatalError, o base no registrada) matchea
     // SIEMPRE; si es una clase con intervalo, matchea si lo<=t<=hi (el
@@ -1226,8 +1226,8 @@ void Lowering::emit_try_frame_native(
     // THROW hace longjmp al handler de outer (propagacion).
     current_block_ = rethrow_bb;
     {
-        const ir::IrValueId v_v = emit_i64_call(rethrow_bb, "__vx_get_value");
-        const ir::IrValueId v_ty = emit_i64_call(rethrow_bb, "__vx_get_type");
+        const ir::IrValueId v_v = emit_i64_call(rethrow_bb, ir::rt::kGetValue);
+        const ir::IrValueId v_ty = emit_i64_call(rethrow_bb, ir::rt::kGetType);
         ir::IrInstr th{};
         th.op = ir::IrOp::THROW;
         th.type = ir::IrType::VOID;

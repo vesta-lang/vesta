@@ -195,7 +195,7 @@ void Lowering::emit_cleanups_range(size_t start, size_t end) {
             // se popea con __vx_pop_frame (no TRYLEAVE op, que el backend
             // nativo no soporta); el monitor se libera con __vx_monexit.
             if (native_poo_) {
-                emit_call("__vx_pop_frame", {}, ir::IrType::VOID,
+                emit_call(ir::rt::kPopFrame, {}, ir::IrType::VOID,
                           it->source_line);
             } else {
                 ir::IrInstr tl{};

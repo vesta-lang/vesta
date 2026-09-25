@@ -25,6 +25,7 @@
 #include "aot/aot_native.h"  // aot_make_start_stub, AotArch
 #include "aot/ar_archive.h"  //  AOT.5: lector de archivos estaticos .a
 #include "aot/link_script.h" //  AOT.5: link-script Vesta (configurable)
+#include "ir/runtime_symbols.h" // los inits del despacho por CPU, en su orden
 
 #include <cstdint>
 #include <cstdio>                 // std::snprintf (cabeceras ar)
@@ -1697,11 +1698,12 @@ bool aot_link(const std::vector<std::string> &inputs,
     // Inits de programa del CPU-dispatch (uno por .o que use el feature).  Se
     // recolectan APARTE (no en globals: cada .o tiene su propio init con su
     // mismo nombre -> no es una definicion multiple) y el linker los ejecuta
-    // TODOS antes de main (en orden cpu -> memcpy -> strdisp, porque memcpy/
+    // TODOS antes de main, en el orden de ir::rt::kDispatchInits (memcpy y
     // strdisp leen el global de features que cpu_init escribe).  Asi un .o
     // Vesta SIN main (libreria que usa strings/memcpy) tambien inicializa sus
-    // slots.
-    std::vector<std::pair<int, uint64_t>> init_cpu, init_memcpy, init_strdisp;
+    // slots.  Una lista por init, indexada por su posicion en ese orden.
+    std::vector<std::pair<int, uint64_t>>
+        dispatch_inits[ir::rt::kDispatchInitCount];
     for (size_t oi = 0; oi < objs.size(); ++oi) {
         ParsedObj &o = objs[oi];
         for (ObjSym &sy : o.syms) {
@@ -1713,16 +1715,9 @@ bool aot_link(const std::vector<std::string> &inputs,
             if (sm.mindex < 0) continue;
             const int wsec = sec_base + sm.mindex;
             const uint64_t off = sm.base + sy.value;
-            if (sy.name == "__vx_cpu_init") {
-                init_cpu.push_back({wsec, off});
-                continue;
-            }
-            if (sy.name == "__vx_memcpy_init") {
-                init_memcpy.push_back({wsec, off});
-                continue;
-            }
-            if (sy.name == "__vx_strdisp_init") {
-                init_strdisp.push_back({wsec, off});
+            const int init_index = ir::rt::dispatch_init_index(sy.name);
+            if (init_index >= 0) {
+                dispatch_inits[init_index].push_back({wsec, off});
                 continue;
             }
             GDef d;
@@ -2186,8 +2181,9 @@ bool aot_link(const std::vector<std::string> &inputs,
             return false;
         }
         const GDef mn = it->second;
-        const bool any_init =
-            !init_cpu.empty() || !init_memcpy.empty() || !init_strdisp.empty();
+        bool any_init = false;
+        for (const auto &lista : dispatch_inits)
+            any_init = any_init || !lista.empty();
         if (any_init) {
             // Sintetizar __vx_premain: llama a CADA init de programa (en orden
             // cpu -> memcpy -> strdisp) y salta a main.  Asi los slots fp de
@@ -2206,12 +2202,9 @@ bool aot_link(const std::vector<std::string> &inputs,
                     pm.push_back(0);
                 prelocs.push_back({pm.size() - 4, t.first, t.second});
             };
-            for (const auto &p : init_cpu)
-                emit_call(p);
-            for (const auto &p : init_memcpy)
-                emit_call(p);
-            for (const auto &p : init_strdisp)
-                emit_call(p);
+            for (const auto &lista : dispatch_inits)
+                for (const auto &p : lista)
+                    emit_call(p);
             pm.push_back(0xE9); // jmp rel32 -> main (tail)
             for (int k = 0; k < 4; ++k)
                 pm.push_back(0);

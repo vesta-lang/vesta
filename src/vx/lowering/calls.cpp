@@ -18,6 +18,7 @@
  * compilar: falla al ejecutar.
  */
 #include "vx/lowering.h"
+#include "ir/synthetic_symbols.h" // el nombre de los cuerpos de macro
 #include "jit/naked_native.h" // la clave del despachador, calculada en UN sitio
 #include "vx/collection_intrinsics.h"
 #include "vx/comptime/comptime_introspect.h"
@@ -848,7 +849,7 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
         if (fn_it != tc_.comptime_fns().end() && fn_it->second &&
             (fn_it->second->is_macro ||
              comptime_fn_needs_vm(tc_, fn_it->second))) {
-            callee_name = "__macro_" + id->name;
+            callee_name = ir::macro_symbol(id->name);
         }
     }
     /*  M.5: si la funcion fue importada cross-module con
@@ -1175,7 +1176,7 @@ ir::IrValueId Lowering::lower_new_expr(ast::NewExpr *e) {
 
 std::string Lowering::generate_lambda_helper(ast::LambdaExpr *e) {
     const size_t lam_idx = lambda_counter_++;
-    const std::string fn_name = "__lambda_" + std::to_string(lam_idx);
+    const std::string fn_name = ir::lambda_symbol(lam_idx);
 
     // Salvar contexto del padre para poder restaurarlo despues.
     /* El guarda se lleva el contexto del padre y lo devuelve al salir. */
@@ -2890,7 +2891,7 @@ bool Lowering::try_lower_comptime_fn_call(ast::CallExpr *e,
             ComptimeRuntime &machine =
                 const_cast<TypeChecker &>(tc_).comptime_runtime();
             if (args_ok) {
-                invoked = machine.invoke_simple_macro("__macro_" + cid->name,
+                invoked = machine.invoke_simple_macro(ir::macro_symbol(cid->name),
                                                       vm_args, r0);
             }
             /* SIN maquina de compilacion cargada el 0 es un MARCADOR legitimo

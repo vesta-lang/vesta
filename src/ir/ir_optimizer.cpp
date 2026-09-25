@@ -657,8 +657,7 @@ static bool is_pure_allocator_name(const std::string &name) {
      * cambiaria el conteo de objetos shared vivos (regresion del bug de
      * 167_z_gc_sweep: con DCE, crear 6 shared sin usar 4 dejaba before=2 en vez
      * de 6).  Debe ir ANTES del check __new_. */
-    if (name.size() >= 7 && name.compare(name.size() - 7, 7, "_shared") == 0)
-        return false;
+    if (is_shared_new_helper(name)) return false;
     /* Y `__new_<Clase>` TAMPOCO es puro, aunque el frontend lo emita para cada
      * `new X()`: dentro corre el CONSTRUCTOR, que puede hacer cualquier cosa --
      * llevar una cuenta, escribir, abrir un fichero --.  Aqui se daba por hecho

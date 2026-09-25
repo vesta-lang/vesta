@@ -24,6 +24,7 @@
 #define VESTA_VX_LOWERING_INTERNAL_H
 
 #include "ir/ssa_ir.h"
+#include "ir/runtime_symbols.h" // lo que el codigo bajado le pide al runtime
 #include "vx/ast.h"
 #include "vx/type_checker.h"
 

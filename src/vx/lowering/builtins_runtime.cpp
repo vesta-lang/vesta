@@ -290,7 +290,7 @@ bool Lowering::try_lower_runtime_builtins(ast::CallExpr *e, Builtin b,
         if (native_poo_) {
             ir::IrInstr call{};
             call.op = ir::IrOp::CALL;
-            call.func_name = "__vx_swapctx";
+            call.func_name = ir::rt::kSwapCtx;
             call.type = ir::IrType::VOID;
             call.dst = ir::IR_NO_VALUE;
             call.is_call_site = true;

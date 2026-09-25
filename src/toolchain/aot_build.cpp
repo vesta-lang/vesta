@@ -62,6 +62,7 @@ VESTA_ALLOC_MODULE_HERE("toolchain");
 #include "ir/ssa_ir.h"
 #include "ir/ssa_ir_serialize.h"
 #include "ir/synthetic_symbols.h" // `__module_init`
+#include "ir/runtime_symbols.h"   // lo que el binario le pide al runtime
 #include "jit/vec_isa.h"
 #include "jit/vreg_pipeline.h"
 #include "toolchain/native_backend.h" // backend de codegen nativo por arch (H.5)
@@ -856,7 +857,7 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
      * deja en paz. */
     bool uncaught_hook_es_del_usuario = false;
     for (const auto &af : aot_mod.functions)
-        if (af.name == "__uncaught") uncaught_hook_es_del_usuario = true;
+        if (af.name == ir::kUncaught) uncaught_hook_es_del_usuario = true;
 
     // ----------------------------------------------------------------
     // Auto-bundle del runtime de excepciones (stdlib/vx/vx_exc.vx).
@@ -871,12 +872,12 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
     if (!aot_no_exceptions) {
         bool uses_exc = false, defines_exc = false;
         for (const auto &af : aot_mod.functions) {
-            if (af.name == "__vx_setjmp") defines_exc = true;
+            if (af.name == ir::rt::kSetjmp) defines_exc = true;
             for (const auto &b : af.blocks)
                 for (const auto &ins : b.instrs)
                     if (ins.op == ir::IrOp::THROW ||
                         (ins.op == ir::IrOp::CALL &&
-                         ins.func_name == "__vx_setjmp"))
+                         ins.func_name == ir::rt::kSetjmp))
                         uses_exc = true;
         }
         if (uses_exc && !defines_exc) {
@@ -965,12 +966,12 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
     {
         bool uses_sync = false, defines_sync = false;
         for (const auto &af : aot_mod.functions) {
-            if (af.name == "__vx_monenter") defines_sync = true;
+            if (af.name == ir::rt::kMonEnter) defines_sync = true;
             for (const auto &b : af.blocks)
                 for (const auto &ins : b.instrs)
                     if (ins.op == ir::IrOp::CALL &&
-                        (ins.func_name == "__vx_monenter" ||
-                         ins.func_name == "__vx_monexit"))
+                        (ins.func_name == ir::rt::kMonEnter ||
+                         ins.func_name == ir::rt::kMonExit))
                         uses_sync = true;
         }
         if (uses_sync && !defines_sync) {
@@ -1046,12 +1047,12 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
     {
         bool uses_thread = false, defines_thread = false;
         for (const auto &af : aot_mod.functions) {
-            if (af.name == "__vx_thread_run") defines_thread = true;
+            if (af.name == ir::rt::kThreadRun) defines_thread = true;
             for (const auto &b : af.blocks)
                 for (const auto &ins : b.instrs)
                     if (ins.op == ir::IrOp::CALL &&
-                        (ins.func_name == "__vx_thread_run" ||
-                         ins.func_name == "__vx_thread_join_all"))
+                        (ins.func_name == ir::rt::kThreadRun ||
+                         ins.func_name == ir::rt::kThreadJoinAll))
                         uses_thread = true;
         }
         if (uses_thread && !defines_thread) {
@@ -1130,17 +1131,17 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
     {
         bool uses_async = false, defines_async = false;
         for (const auto &af : aot_mod.functions) {
-            if (af.name == "__vx_spawn") defines_async = true;
+            if (af.name == ir::rt::kSpawn) defines_async = true;
             for (const auto &b : af.blocks)
                 for (const auto &ins : b.instrs)
                     if (ins.op == ir::IrOp::CALL &&
-                        (ins.func_name == "__vx_spawn" ||
-                         ins.func_name == "__vx_future_new" ||
-                         ins.func_name == "__vx_await" ||
-                         ins.func_name == "__vx_fulfill" ||
-                         ins.func_name == "__vx_msgsend" ||
-                         ins.func_name == "__vx_msgrecv" ||
-                         ins.func_name == "__vx_pid"))
+                        (ins.func_name == ir::rt::kSpawn ||
+                         ins.func_name == ir::rt::kFutureNew ||
+                         ins.func_name == ir::rt::kAwait ||
+                         ins.func_name == ir::rt::kFulfill ||
+                         ins.func_name == ir::rt::kMsgSend ||
+                         ins.func_name == ir::rt::kMsgRecv ||
+                         ins.func_name == ir::rt::kPid))
                         uses_async = true;
         }
         if (uses_async && !defines_async) {
@@ -1218,11 +1219,11 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
     auto resolve_fiber_hook = [&](bool *changed) -> int {
         bool uses_fiber = false, defines_fiber = false;
         for (const auto &af : aot_mod.functions) {
-            if (af.name == "__vx_swapctx") defines_fiber = true;
+            if (af.name == ir::rt::kSwapCtx) defines_fiber = true;
             for (const auto &b : af.blocks)
                 for (const auto &ins : b.instrs)
                     if (ins.op == ir::IrOp::CALL &&
-                        ins.func_name == "__vx_swapctx")
+                        ins.func_name == ir::rt::kSwapCtx)
                         uses_fiber = true;
         }
         if (uses_fiber && !defines_fiber) {
@@ -1333,8 +1334,8 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
         // PANIC bajaba a `abort`, que no recibe argumentos.
         bool needs_panic = false, defines_panic = false;
         for (const auto &af : aot_mod.functions) {
-            if (af.name == "__vx_write") defines_io = true;
-            if (af.name == "__vx_panic_null") defines_panic_null = true;
+            if (af.name == ir::rt::kWrite) defines_io = true;
+            if (af.name == ir::rt::kPanicNull) defines_panic_null = true;
             if (af.name == "__panic") defines_panic = true;
             for (const auto &b : af.blocks)
                 for (const auto &ins : b.instrs) {
@@ -1472,7 +1473,7 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                             // macro VOID de windef.h (restaurada tras
                             // incluir ssa_ir.h).
                             fl.dst = ir::IR_NO_VALUE;
-                            fl.func_name = "__vx_flush";
+                            fl.func_name = ir::rt::kFlush;
                             fl.source_line = ins.source_line;
                             ni.push_back(std::move(fl));
                         }
@@ -1496,11 +1497,11 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
              * ajena seria cambiarle el comportamiento a quien la escribio. */
             if (!uncaught_hook_es_del_usuario) {
                 for (auto &af : aot_mod.functions) {
-                    if (af.name != "__uncaught" || af.blocks.empty()) continue;
+                    if (af.name != ir::kUncaught || af.blocks.empty()) continue;
                     ir::IrInstr rp{};
                     rp.op = ir::IrOp::CALL;
                     rp.dst = ir::IR_NO_VALUE;
-                    rp.func_name = "__uncaught_report";
+                    rp.func_name = ir::kUncaughtReport;
                     if (!af.blocks[0].instrs.empty())
                         rp.source_line = af.blocks[0].instrs[0].source_line;
                     af.blocks[0].instrs.insert(af.blocks[0].instrs.begin(),
@@ -1605,7 +1606,7 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
             call_f.op = ir::IrOp::CALL;
             call_f.type = ir::IrType::VOID;
             call_f.dst = ir::IR_NO_VALUE;
-            call_f.func_name = "__vx_fault_init";
+            call_f.func_name = ir::rt::kFaultInit;
             af.blocks[0].instrs.insert(af.blocks[0].instrs.begin(),
                                        std::move(call_f));
             break;
@@ -1712,7 +1713,7 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                         break;
                     }
             if (has_unwrap) {
-                add_live("__vx_panic_null");
+                add_live(ir::rt::kPanicNull);
                 break;
             }
         }
@@ -1753,7 +1754,7 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                     // THROW baja a CALL __vx_throw en el backend
                     // (no es un CALL en el IR) -> referencia implicita
                     // al runtime de excepciones auto-hospedado.
-                    if (ins.op == ir::IrOp::THROW) add_live("__vx_throw");
+                    if (ins.op == ir::IrOp::THROW) add_live(ir::rt::kThrow);
                     // INLINE_ASM: el cuerpo (func_name) puede referenciar
                     // funciones del modulo via tokens `__vxf_<label>` que
                     // el lowering inserto (inline-asm accede simbolos
@@ -2018,7 +2019,7 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
     {
         bool hay_init = false;
         for (const auto &f : aot_mod.functions)
-            if (f.name == "__vx_cpu_init") {
+            if (f.name == ir::rt::kCpuInit) {
                 hay_init = true;
                 break;
             }
@@ -2029,7 +2030,7 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                 bool ya = false;
                 for (const auto &i2 : ins)
                     if (i2.op == ir::IrOp::CALL &&
-                        i2.func_name == "__vx_cpu_init") {
+                        i2.func_name == ir::rt::kCpuInit) {
                         ya = true;
                         break;
                     }
@@ -2038,7 +2039,7 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                     call_init.op = ir::IrOp::CALL;
                     call_init.type = ir::IrType::VOID;
                     call_init.dst = ir::IR_NO_VALUE;
-                    call_init.func_name = "__vx_cpu_init";
+                    call_init.func_name = ir::rt::kCpuInit;
                     call_init.source_line = 0;
                     ins.insert(ins.begin(), std::move(call_init));
                 }
@@ -2439,11 +2440,11 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
     }
     // __vx_tls_init (TLS callback): lo llama el cargador de Windows (no
     // un CALL visible) -> sembrarlo siempre para que se compile.
-    if (!queued.count("__vx_tls_init"))
+    if (!queued.count(ir::rt::kTlsInit))
         for (const auto &fn : aot_mod.functions)
-            if (fn.name == "__vx_tls_init") {
-                queued["__vx_tls_init"] = true;
-                work.push_back("__vx_tls_init");
+            if (fn.name == ir::rt::kTlsInit) {
+                queued[ir::rt::kTlsInit] = true;
+                work.push_back(ir::rt::kTlsInit);
                 break;
             }
 
@@ -3287,7 +3288,7 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                     std::strtoul(r.symbol.c_str() + 6, nullptr, 10)));
                 continue;
             }
-            if (r.symbol == "__vx_tls_index")
+            if (r.symbol == ir::rt::kTlsIndex)
                 continue; // TLS PE: simbolo del emisor (pass 2, sin dato)
             if (r.symbol.rfind("rodata.", 0) != 0) {
                 std::cerr << "[aot] reloc de dato con simbolo inesperado: '"
@@ -3456,7 +3457,7 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
     // TLS PE: si el modulo tiene __vx_tls_init (callback de plantilla),
     // pasar su ubicacion al emisor para registrarlo en el TLS directory.
     {
-        auto tcb = fn_loc.find("__vx_tls_init");
+        auto tcb = fn_loc.find(ir::rt::kTlsInit);
         if (tcb != fn_loc.end())
             w.set_tls_callback(tcb->second.sec,
                                static_cast<uint32_t>(tcb->second.off));
@@ -3563,9 +3564,7 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
             // se EXPORTAN como globales aunque empiecen por "__": el
             // linker los recolecta de CADA .o y los ejecuta antes de main
             // (cada .o tiene sus propios slots fp; basta correr su init).
-            const bool is_init =
-                (af.name == "__vx_cpu_init" || af.name == "__vx_memcpy_init" ||
-                 af.name == "__vx_strdisp_init");
+            const bool is_init = ir::rt::dispatch_init_index(af.name) >= 0;
             // En un EJECUTABLE (hay main) los helpers __-prefijados
             // quedan LOCALES (program-internos; evita colisiones al
             // enlazar varios .o).  En una LIBRERIA (sin main) son la
@@ -3731,12 +3730,12 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                 w.add_reloc(fl.sec, site,
                             aot::RelocTarget::addr(loc.first, loc.second),
                             aot::RelocKind::SECREL32);
-            } else if (r.symbol == "__vx_tls_index") {
+            } else if (r.symbol == ir::rt::kTlsIndex) {
                 // TLS PE: ref RIP-relativa al _tls_index sintetizado por
                 // el emisor; se pasa como simbolo externo que el emisor
                 // resuelve a la VA del slot.
                 w.add_reloc(fl.sec, site,
-                            aot::RelocTarget::extern_sym("__vx_tls_index"),
+                            aot::RelocTarget::extern_sym(ir::rt::kTlsIndex),
                             aot::RelocKind::REL32);
             } else {
                 const uint32_t N = static_cast<uint32_t>(

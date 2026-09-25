@@ -25,6 +25,7 @@
  * monta aqui, y es la unica parte que se parece a una clase.
  */
 #include "vx/lowering.h"
+#include "ir/synthetic_symbols.h" // el nombre de los cuerpos de macro
 #include "vx/comptime/comptime_introspect.h"
 #include "util/os/thread_slot.h" // el estado por hilo NO va en thread_local
 #include "ir/ir_type_info.h" // vocabulario UNICO de anchura/clase de un IrType
@@ -703,7 +704,7 @@ void Lowering::lower_struct_methods(ast::StructDecl *sd, ir::IrModule &out) {
         // fns-VM).
         const bool is_comptime_ctor = m->is_constructor && m->is_comptime;
         if (is_comptime_ctor) {
-            fn.name = "__macro_" + fn.name;
+            fn.name = ir::macro_symbol(fn.name);
             fn.is_macro_compiled = true;
             const_cast<TypeChecker &>(tc_).comptime_runtime().register_macro(
                 fn.name, ComptimeRuntime::kPcUnresolved);

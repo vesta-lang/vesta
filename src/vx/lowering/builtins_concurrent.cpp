@@ -301,7 +301,7 @@ bool Lowering::try_lower_concurrent_builtins(ast::CallExpr *e, Builtin b,
             const ir::IrValueId v_dst = fn_->new_value(ir::IrType::I32);
             ir::IrInstr ms{};
             ms.op = ir::IrOp::CALL;
-            ms.func_name = "__vx_msgsend";
+            ms.func_name = ir::rt::kMsgSend;
             ms.type = ir::IrType::I32;
             ms.dst = v_dst;
             ms.operands = {v_pid, v_val};
@@ -347,7 +347,7 @@ bool Lowering::try_lower_concurrent_builtins(ast::CallExpr *e, Builtin b,
             const ir::IrValueId v_val = fn_->new_value(ir::IrType::I64);
             ir::IrInstr mr{};
             mr.op = ir::IrOp::CALL;
-            mr.func_name = "__vx_msgrecv";
+            mr.func_name = ir::rt::kMsgRecv;
             mr.type = ir::IrType::I64;
             mr.dst = v_val;
             mr.is_call_site = true;
@@ -394,7 +394,7 @@ bool Lowering::try_lower_concurrent_builtins(ast::CallExpr *e, Builtin b,
         // (__vx_future_new -> handle), bundle-ado desde vx_async.vx.
         ir::IrInstr fu{};
         fu.op = native_poo_ ? ir::IrOp::CALL : ir::IrOp::FUTURE;
-        if (native_poo_) fu.func_name = "__vx_future_new";
+        if (native_poo_) fu.func_name = ir::rt::kFutureNew;
         fu.type = ir::IrType::I64;
         fu.dst = v_fut;
         fu.is_call_site = true; // GC alloc
@@ -423,7 +423,7 @@ bool Lowering::try_lower_concurrent_builtins(ast::CallExpr *e, Builtin b,
         // AOT (native_poo_): CALL nativo __vx_fulfill(fut, val).
         ir::IrInstr fu{};
         fu.op = native_poo_ ? ir::IrOp::CALL : ir::IrOp::FULFILL;
-        if (native_poo_) fu.func_name = "__vx_fulfill";
+        if (native_poo_) fu.func_name = ir::rt::kFulfill;
         fu.type = ir::IrType::VOID;
         fu.dst = ir::IR_NO_VALUE;
         fu.operands = {v_fut, v_val};

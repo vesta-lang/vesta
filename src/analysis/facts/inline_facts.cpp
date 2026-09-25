@@ -15,6 +15,7 @@
 
 #include "ir/ssa_ir.h"
 #include "ir/synthetic_symbols.h" // la familia de `__module_init`
+#include "ir/runtime_symbols.h"   // los accesores de cadena
 #include "util/env_flags.h" // el interruptor para medir A/B las reservas
 
 namespace analysis {
@@ -72,10 +73,11 @@ bool es_op_de_marco(ir::IrOp op) {
  *    una decena de instrucciones y varios juntos reventaban el asignador.
  */
 bool en_lista_de_un_bloque(const std::string &name) {
-    return ir::is_module_init_family(name) ||
-           empieza_por(name, "__lambda_") || empieza_por(name, "__spawn_") ||
-           empieza_por(name, "__async_") || empieza_por(name, "__rspawn_") ||
-           empieza_por(name, "__vx_str") || name == "__uncaught";
+    return ir::is_module_init_family(name) || ir::is_lambda_symbol(name) ||
+           ir::has_synthetic_prefix(name, ir::kSpawnPrefix) ||
+           ir::has_synthetic_prefix(name, ir::kAsyncPrefix) ||
+           ir::has_synthetic_prefix(name, ir::kRemoteSpawnPrefix) ||
+           ir::rt::is_string_helper(name) || name == ir::kUncaught;
 }
 
 /**
@@ -85,7 +87,7 @@ bool en_lista_de_un_bloque(const std::string &name) {
  * con su medida.
  */
 bool en_lista_de_varios_bloques(const std::string &name) {
-    return ir::is_module_init_family(name) || empieza_por(name, "__lambda");
+    return ir::is_module_init_family(name) || ir::is_lambda_symbol(name);
 }
 
 /**

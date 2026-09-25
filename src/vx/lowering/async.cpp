@@ -19,6 +19,7 @@
  */
 #include "vx/lowering.h"
 #include "ir/ir_type_info.h" // vocabulario UNICO de anchura/clase de un IrType
+#include "ir/synthetic_symbols.h" // el nombre de los cuerpos de spawn y async
 #include <algorithm>
 #include <functional>
 #include <map>
@@ -263,7 +264,7 @@ static void collect_spawn_captures_in_stmt(
 std::string Lowering::generate_spawn_helper(ast::BlockStmt *body,
                                             const SourceLoc &loc) {
     const size_t spawn_idx = spawn_func_counter_++;
-    const std::string fn_name = "__spawn_" + std::to_string(spawn_idx);
+    const std::string fn_name = ir::spawn_symbol(spawn_idx);
 
     // BugFix R3: pre-scan del body para detectar capturas (idents
     // libres que estan en el scope encerrante).  Cada captura se
@@ -452,7 +453,7 @@ std::string Lowering::generate_spawn_helper(ast::BlockStmt *body,
 std::string Lowering::generate_rspawn_helper(ast::BlockStmt *body,
                                              const SourceLoc &loc) {
     const size_t spawn_idx = spawn_func_counter_++;
-    const std::string fn_name = "__rspawn_" + std::to_string(spawn_idx);
+    const std::string fn_name = ir::remote_spawn_symbol(spawn_idx);
 
     // Guardar contexto del lowering del padre.
     /* El guarda se lleva el contexto del padre y lo devuelve al salir. */
@@ -570,7 +571,7 @@ ir::IrValueId Lowering::lower_spawn_expr(ast::SpawnExpr *e) {
         c.op = ir::IrOp::CALL;
         c.type = ir::IrType::I64;
         c.dst = v_pid;
-        c.func_name = "__vx_spawn"; // encola tarea cooperativa; devuelve pid
+        c.func_name = ir::rt::kSpawn; // encola tarea cooperativa; devuelve pid
         c.operands = {v_pc};
         c.is_call_site = true;
         c.source_line = e->loc.line;
@@ -622,7 +623,7 @@ ir::IrValueId Lowering::lower_spawn_expr(ast::SpawnExpr *e) {
         c.op = ir::IrOp::CALL;
         c.type = ir::IrType::I64;
         c.dst = v_pid;
-        c.func_name = "__vx_thread_run";
+        c.func_name = ir::rt::kThreadRun;
         c.operands = {v_pc, v_arg};
         c.is_call_site = true;
         c.source_line = e->loc.line;
@@ -707,7 +708,7 @@ void Lowering::lower_async_function(ast::FunctionDecl *fd, ir::IrModule &out) {
         error_at(fd ? fd->loc : SourceLoc{}, "@Async: funcion sin body");
         return;
     }
-    const std::string helper_name = std::string("__async_") + fd->name;
+    const std::string helper_name = ir::async_helper_symbol(fd->name);
 
     // Mejora II optimizada: numero de parametros del usuario.  Pasamos
     // los args al helper via @c spawnargs (R1..R[argc]) en lugar de
@@ -842,7 +843,7 @@ void Lowering::lower_async_function(ast::FunctionDecl *fd, ir::IrModule &out) {
         // AOT (native_poo_): CALL nativo __vx_future_new (scheduler coop).
         ir::IrInstr fu{};
         fu.op = native_poo_ ? ir::IrOp::CALL : ir::IrOp::FUTURE;
-        if (native_poo_) fu.func_name = "__vx_future_new";
+        if (native_poo_) fu.func_name = ir::rt::kFutureNew;
         fu.type = ir::IrType::I64;
         fu.dst = v_fut;
         fu.is_call_site = true;
@@ -935,7 +936,7 @@ void Lowering::lower_async_function(ast::FunctionDecl *fd, ir::IrModule &out) {
             emit_const(ir::IrType::I64, argc, fd->loc.line);
         ir::IrInstr ins{};
         ins.op = ir::IrOp::CALL;
-        ins.func_name = "__vx_spawn_argv";
+        ins.func_name = ir::rt::kSpawnArgv;
         ins.type = ir::IrType::I64;
         ins.dst = v_child;
         ins.operands = {v_pc, v_argc, v_buf};

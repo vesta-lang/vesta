@@ -52,7 +52,7 @@ uint64_t Lowering::ensure_cpu_features_global() {
         m.flags |=
             ir::IrModule::SD_FLAG_NON_DEDUP | ir::IrModule::SD_FLAG_FORCE_EMIT;
         // Global de programa: unificar el slot cross-module en el merge.
-        m.shared_key = "__vx_cpu_features";
+        m.shared_key = ir::rt::kCpuFeatures;
     }
     cpu_features_slot_ = slot;
 
@@ -61,7 +61,7 @@ uint64_t Lowering::ensure_cpu_features_global() {
 
     // 2. Helper __vx_cpu_init(): un bloque asm que detecta features y un
     //    STORE del bitmask al slot.  Construido como IrFunction aparte.
-    const std::string name = "__vx_cpu_init";
+    const std::string name = ir::rt::kCpuInit;
 
     /* El guarda se lleva el contexto del padre y lo devuelve al salir.  Este
      * sitio guardaba solo tres cosas de las siete porque el cuerpo que baja es
@@ -268,7 +268,7 @@ uint64_t Lowering::ensure_memcpy_dispatch() {
         m.flags |=
             ir::IrModule::SD_FLAG_NON_DEDUP | ir::IrModule::SD_FLAG_FORCE_EMIT;
         // Global de programa: unificar el slot cross-module en el merge.
-        m.shared_key = "__vx_memcpy_fp";
+        m.shared_key = ir::rt::kMemcpyFp;
         memcpy_fp_slot_ = slot;
     }
     const uint64_t fp_slot = memcpy_fp_slot_;
@@ -324,7 +324,7 @@ uint64_t Lowering::ensure_memcpy_dispatch() {
         emit_ret_void(ln);
     };
 
-    build_variant("__vx_memcpy_base", emit_base_body);
+    build_variant(ir::rt::kMemcpyBase, emit_base_body);
 
     // --- Variante AVX2: vmovdqu ymm de a 32 bytes + cola byte-a-byte ---------
     // Helper INLINE_ASM auto-contenido: los 3 params (dst/src/n) llegan en los
@@ -338,7 +338,7 @@ uint64_t Lowering::ensure_memcpy_dispatch() {
     // memoria; rdi/rsi/ rdx son operandos (bindings), no clobbers.
     {
         ir::IrFunction hf;
-        hf.name = "__vx_memcpy_avx2";
+        hf.name = ir::rt::kMemcpyAvx2;
         hf.ret_type = ir::IrType::VOID;
         const ir::IrValueId p_dst = hf.new_value(ir::IrType::PTR, "%dst");
         hf.values[p_dst].is_param = true;
@@ -443,7 +443,7 @@ uint64_t Lowering::ensure_memcpy_dispatch() {
     // --- 3. __vx_memcpy_init(): setea el fp segun el bit AVX2 --------------
     {
         ir::IrFunction hf;
-        hf.name = "__vx_memcpy_init";
+        hf.name = ir::rt::kMemcpyInit;
         hf.ret_type = ir::IrType::VOID;
         const ir::IrBlockId e = hf.new_block("entry");
         fn_ = &hf;
@@ -525,9 +525,9 @@ uint64_t Lowering::ensure_memcpy_dispatch() {
         };
 
         current_block_ = bb_avx2;
-        store_fp_and_join("__vx_memcpy_avx2");
+        store_fp_and_join(ir::rt::kMemcpyAvx2);
         current_block_ = bb_base;
-        store_fp_and_join("__vx_memcpy_base");
+        store_fp_and_join(ir::rt::kMemcpyBase);
 
         current_block_ = bb_join;
         {
@@ -603,7 +603,7 @@ void Lowering::ensure_auto_multiversion(ir::IrModule &out_module) {
         // main mantiene el nombre historico __vx_main_body; los helpers usan
         // <nombre>$mv.  El driver suffija $sse2/$avx2/$avx512 a estos nombres.
         e.body_name =
-            (f.name == "main") ? std::string("__vx_main_body") : f.name + "$mv";
+            (f.name == "main") ? std::string(ir::rt::kMainBody) : f.name + "$mv";
         e.ret = f.ret_type;
         for (ir::IrValueId pid : f.params)
             e.params.push_back(
@@ -713,7 +713,7 @@ void Lowering::ensure_auto_multiversion(ir::IrModule &out_module) {
     // ancho elegido.  (La decision de ISA es global a la CPU -> una sola vez.)
     {
         ir::IrFunction hf;
-        hf.name = "__vx_auto_init";
+        hf.name = ir::rt::kAutoInit;
         hf.ret_type = ir::IrType::VOID;
         const ir::IrBlockId e = hf.new_block("entry");
         fn_ = &hf;
@@ -866,8 +866,8 @@ void Lowering::ensure_strdisp() {
         m.shared_key = shared_key;
         return slot;
     };
-    strcmp_fp_slot_ = make_fp_slot("__vx_strcmp_fp");
-    strlen_fp_slot_ = make_fp_slot("__vx_strlen_fp");
+    strcmp_fp_slot_ = make_fp_slot(ir::rt::kStrcmpFp);
+    strlen_fp_slot_ = make_fp_slot(ir::rt::kStrlenFp);
 
     // 2. Asegurar los baselines (emiten __vx_strcmp_base / __vx_strlen_base).
     (void)ensure_strcmp_helper();
@@ -879,7 +879,7 @@ void Lowering::ensure_strdisp() {
     const uint32_t ln = 0;
 
     ir::IrFunction hf;
-    hf.name = "__vx_strdisp_init";
+    hf.name = ir::rt::kStrDispInit;
     hf.ret_type = ir::IrType::VOID;
     const ir::IrBlockId e = hf.new_block("entry");
     fn_ = &hf;
@@ -894,10 +894,10 @@ void Lowering::ensure_strdisp() {
 
     // fp = override del usuario si lo hay; si no, el baseline.
     emit_store_fp(strcmp_fp_slot_, strcmp_override_.empty()
-                                       ? std::string("__vx_strcmp_base")
+                                       ? std::string(ir::rt::kStrcmpBase)
                                        : strcmp_override_);
     emit_store_fp(strlen_fp_slot_, strlen_override_.empty()
-                                       ? std::string("__vx_strlen_base")
+                                       ? std::string(ir::rt::kStrlenBase)
                                        : strlen_override_);
     {
         emit_ret_void(ln);

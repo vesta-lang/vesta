@@ -36,6 +36,7 @@
 #include "ir/ssa_ir.h"
 #include "ir/ir_type_info.h" // vocabulario UNICO de anchura/clase de un IrType
 #include "ir/ir_vec_ops.h"   // cuales son las operaciones vectoriales
+#include "ir/runtime_symbols.h" // los ganchos del runtime a los que se salta
 #include "vesta_rt/abi.h"
 #include "jit/target_reginfo.h"  //  AOT.3 2b: arg_regs del ABI host (HOST_LEAF)
 #include "jit/vec_isa.h"         // ancho SIMD (SSE2/AVX2/AVX512) del VEC_BINOP
@@ -3056,7 +3057,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     /* AOT: hook __vx_panic_null (sin args; default bare-lib,
                      * redefinible -- freestanding lo provee el usuario). */
                     O.push_back(MInstr::make_call_sym(
-                        out.intern_reloc_symbol("__vx_panic_null")));
+                        out.intern_reloc_symbol(ir::rt::kPanicNull)));
                 } else {
                     /* VM_ABI (JIT): camino frio llama vrt_unwrap_throw(proc)
                      * -> mismo FatalError capturable que el bytecode UNWRAP.
@@ -3497,7 +3498,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                         return false;
                     }
                     O.push_back(MInstr::make_call_sym(
-                        out.intern_reloc_symbol("__vx_throw")));
+                        out.intern_reloc_symbol(ir::rt::kThrow)));
                     O.push_back(MInstr::make_ret());
                     break;
                 }
@@ -7279,7 +7280,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                             MInstr::make_tls_le_addr(vr(in.dst), vsidx));
                     } else {
                         const uint32_t isidx =
-                            out.intern_reloc_symbol("__vx_tls_index");
+                            out.intern_reloc_symbol(ir::rt::kTlsIndex);
                         O.push_back(
                             MInstr::make_tls_pe_addr(vr(in.dst), vsidx, isidx));
                     }

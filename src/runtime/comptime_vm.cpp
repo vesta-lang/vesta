@@ -26,6 +26,7 @@ VESTA_ALLOC_MODULE_HERE("runtime");
 #include "util/fnv.h" // la semilla y el primo, en UN sitio
 #include "util/env_flags.h"
 #include "vx/comptime/comptime_vm.h"
+#include "ir/synthetic_symbols.h" // el nombre de los cuerpos de macro
 #include "vx/type_checker.h" // report_comptime_fatal
 
 /* Headers runtime full: estos pueden cascade-incluir openssl/capstone
@@ -931,7 +932,7 @@ ComptimeRuntime::shadow_validate(std::vector<ShadowMismatch> &report) noexcept {
          * como "__macro_<original>".  Lookup en macro_entry_pc_. */
         std::string canonical = exp.macro_name;
         if (macro_entry_pc_.find(canonical) == macro_entry_pc_.end()) {
-            const std::string alt = "__macro_" + exp.macro_name;
+            const std::string alt = ir::macro_symbol(exp.macro_name);
             if (macro_entry_pc_.find(alt) != macro_entry_pc_.end()) {
                 canonical = alt;
             }
@@ -1000,13 +1001,13 @@ bool ComptimeRuntime::load_macros_from_bytes(
         const auto &execs = impl_->mgr.loader.executables;
         if (execs.empty()) return true;
         const auto &exe = execs.back(); /* el recien cargado */
-        const std::string PREFIX = "code.__macro_";
+        /* Las etiquetas del artefacto llevan su seccion delante. */
+        const std::string kCodeSection = "code.";
+        const std::string PREFIX = kCodeSection + ir::kMacroPrefix;
         for (const auto &kv : exe->symbol_table) {
-            if (kv.first.size() <= 5) continue;
             if (kv.first.compare(0, PREFIX.size(), PREFIX) != 0) continue;
-            /* kv.first = "code.__macro_my_fn" -> "__macro_my_fn" tras
-             * descartar el prefijo "code." (5 chars). */
-            const std::string clean = kv.first.substr(5);
+            /* `code.__macro_my_fn` -> `__macro_my_fn`: sin la seccion. */
+            const std::string clean = kv.first.substr(kCodeSection.size());
             macro_entry_pc_[clean] = kv.second;
             /* Un fichero con `namespace` compila sus funciones con el prefijo
              * del modulo (`__macro_mi_modulo__gen`), pero desde su propio
@@ -1019,8 +1020,10 @@ bool ComptimeRuntime::load_macros_from_bytes(
              * de identificar a uno solo: se retira en vez de elegir al azar,
              * porque llamar a la funcion equivocada seria peor. */
             const size_t sep = clean.rfind("__");
-            if (sep != std::string::npos && sep > 8) {
-                const std::string corto = "__macro_" + clean.substr(sep + 2);
+            if (sep != std::string::npos &&
+                sep > sizeof(ir::kMacroPrefix) - 1) {
+                const std::string corto =
+                    ir::macro_symbol(clean.substr(sep + 2));
                 if (corto != clean) {
                     auto prev = macro_entry_pc_.find(corto);
                     if (prev == macro_entry_pc_.end()) {

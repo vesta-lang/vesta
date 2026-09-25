@@ -15,6 +15,7 @@
  * nativo lo alcance con rel32.  Ver `materialize_gdata_host`. */
 #include "util/alloc/host_allocator.h"
 #include "loader/loader.h"
+#include "ir/runtime_symbols.h" // los puntos de entrada del asignador
 
 #include "util/name_pool.h"
 
@@ -1246,8 +1247,8 @@ Loader::load_executable(runtime::VM &vm,
              * Se compila el punto de entrada de nombre conocido, que lleva al
              * asignador de ESTE programa: el suyo si lo declaro con
              * @AllocatorOverride, el de la biblioteca si no. */
-            static const char *const kPuntos[2] = {"__vx_alloc_entry",
-                                                   "__vx_free_entry"};
+            static const char *const kPuntos[2] = {ir::rt::kAllocEntry,
+                                                   ir::rt::kFreeEntry};
             const size_t n_puntos =
                 util::flag_on(util::FlagId::AsignadorMaquina) ? 0u : 2u;
             for (size_t ip = 0; ip < n_puntos; ++ip) {
@@ -1300,7 +1301,7 @@ Loader::load_executable(runtime::VM &vm,
                      * uno. */
                     if (ra.fn != nullptr) {
                         const uint64_t dir = reinterpret_cast<uint64_t>(ra.fn);
-                        if (std::strcmp(punto, "__vx_alloc_entry") == 0) {
+                        if (std::strcmp(punto, ir::rt::kAllocEntry) == 0) {
                             proccess->alloc_del_programa = dir;
                             /* Y que el selector lo sepa: con el monton del
                              * programa, el atajo que replica el de la maquina

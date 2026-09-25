@@ -17,6 +17,7 @@ VESTA_ALLOC_MODULE_HERE("analysis");
 
 #include "util/env_flags.h"
 #include "analysis/effects/bounds.h"
+#include "ir/synthetic_symbols.h" // los cuerpos que corren al compilar
 
 #include "analysis/effects/effect_analysis.h"
 #include "analysis/facts/ir_facts.h"
@@ -211,7 +212,7 @@ check_region_bounds(const ir::IrModule &mod, EffectAnalysis *ea_dado,
          * nunca llegara al binario -- un fichero de quince lineas recibia
          * setenta y tres errores por importar `std.memory`, todos de sus
          * generadores. */
-        if (ir::es_cuerpo_comptime(fn.name)) continue;
+        if (ir::is_macro_symbol(fn.name)) continue;
         const analysis::PointsTo &pt = ea.points_to_publico(fn);
         /* Rangos de la funcion: es lo que permite juzgar una region de tamano
          * simbolico.  Se calculan una vez por funcion, no por acceso. */

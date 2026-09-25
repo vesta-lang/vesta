@@ -44,6 +44,8 @@
 
 #include <string>
 
+#include "ir/runtime_symbols.h" // los nombres de la FFI del runtime
+
 namespace ir {
 struct IrModule;
 }
@@ -72,9 +74,8 @@ struct AotLowerConfig {
     /// FFI dinamico: DLOPEN/DLSYM -> CALL a estas funciones Vesta (definidas en
     /// stdlib/vx/vx_ffi.vx, bundled, y REDEFINIBLES por el usuario).  No se
     /// hardcodea LoadLibraryA/dlopen: la funcion Vesta elige por @Target.
-    std::string dlopen_sym =
-        "__vx_dlopen";                    ///< DLOPEN -> call <dlopen_sym>(path)
-    std::string dlsym_sym = "__vx_dlsym"; ///< DLSYM -> call <dlsym_sym>(h,name)
+    std::string dlopen_sym = ir::rt::kDlopen; ///< DLOPEN -> call <dlopen_sym>(path)
+    std::string dlsym_sym = ir::rt::kDlsym;   ///< DLSYM -> call <dlsym_sym>(h,name)
 };
 
 /**

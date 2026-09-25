@@ -35,6 +35,7 @@
 #include "vesta_rt/abi.h"              // VESTA_FATAL_* codes
 #include "loader/loader.h"
 #include "ir/ssa_ir.h"
+#include "ir/runtime_symbols.h" // el trampolin de las fibras
 
 #include <cstdlib> // getenv (VESTA_NAKED_DEBUG)
 
@@ -737,7 +738,7 @@ extern "C" uint64_t vrt_fiber_jit_ctx(uint64_t entry) {
     runtime::ProcessVM *vm = runtime::get_current_executing_process();
     if (vm == nullptr) return 0;
     /* Trampolin nativo: pone proc en el arg-reg y salta al entry VM_ABI. */
-    const uint64_t tramp = compile_naked_native(vm, "__fiber_trampoline");
+    const uint64_t tramp = compile_naked_native(vm, ir::rt::kFiberTrampoline);
     if (tramp == 0) return 0;
     auto *ctx = static_cast<uint64_t *>(std::calloc(kFiberJitCtxQwords, 8));
     auto *stk = static_cast<uint8_t *>(std::malloc(kFiberJitStackBytes));

@@ -2118,7 +2118,7 @@ void CBackend::emit_prelude(EmitContext &ctx, const ir::IrModule &mod) {
                     // Por prefijo: tambien las tandas en que se parte
                     // (`__module_init_partN`) y las de las dependencias.
                     if (ir::is_module_init_family(sym)) continue;
-                    if (sym.rfind("__new_", 0) == 0) continue;
+                    if (ir::is_any_new_helper(sym)) continue;
                     // Skip vx_trace:* (provistos por snippet inline).
                     // Match por basename para tolerar tanto "vx_trace"
                     // como "stdlib/native/runtime/vx_trace".
@@ -2237,7 +2237,7 @@ void CBackend::emit_prelude(EmitContext &ctx, const ir::IrModule &mod) {
         if (ir::is_module_init_family(n)) continue;
         // Skip el ayudante de construccion: lo emite @c emit_class_bodies.
         if (new_helper_target(n) != nullptr) continue;
-        bool is_lambda = (fn.name.rfind("__lambda_", 0) == 0);
+        bool is_lambda = ir::is_lambda_symbol(fn.name);
         ctx.out << type_for(fn.ret_type, false) << " " << sanitize_name(fn.name)
                 << "(";
         if (is_lambda) ctx.out << "void*";
@@ -2495,7 +2495,7 @@ void CBackend::emit_fn_signature(EmitContext &ctx, const ir::IrFunction &fn) {
     // Lambdas (__lambda_<N>): emit con @c void* @c env como primer param
     // para que la convencion coincida con CALLCLOSURE.  Si la lambda no
     // captura, el env_addr sera @c NULL y el callee lo ignora.
-    bool is_lambda = (fn.name.rfind("__lambda_", 0) == 0);
+    bool is_lambda = ir::is_lambda_symbol(fn.name);
 
     // Atributos agresivos: const para puras, cold para throw-only,
     // always_inline para accesors triviales.  Estos atributos vienen

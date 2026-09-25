@@ -27,6 +27,7 @@
  */
 
 #include "lsp/inspector.h"
+#include "ir/synthetic_symbols.h" // el nombre de los cuerpos de macro
 
 #include <algorithm>
 #include <cctype>
@@ -211,7 +212,7 @@ const ir::IrFunction *pick_function(const ir::IrModule &mod,
         }
         // Funciones comptime: el frontend las baja como @c __macro_<nombre>.
         // Si el hover pidio @c M_foo, probar @c __macro_M_foo.
-        const std::string macro = "__macro_" + wanted;
+        const std::string macro = ir::macro_symbol(wanted);
         for (const auto &fn : mod.functions) {
             if (fn.name == macro) return &fn;
         }
@@ -1527,7 +1528,7 @@ std::string vel_extract_fn(const std::string &vel, const std::string &fn) {
     for (int i = 0; i < (int)lines.size(); ++i) {
         std::string lab = label_of(lines[i]);
         if (lab.empty()) continue;
-        if (lab == fn || lab == "__macro_" + fn) {
+        if (lab == fn || lab == ir::macro_symbol(fn)) {
             base = lab;
             found = i;
             break;

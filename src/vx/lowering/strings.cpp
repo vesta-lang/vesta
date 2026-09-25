@@ -55,7 +55,7 @@ std::string Lowering::ensure_strcmp_helper() {
     // CPU dispatch Inc 5a: este es el BASELINE escalar (`__vx_strcmp_base`)
     // al que apunta __vx_strcmp_fp por defecto.  Es llamable por nombre desde
     // Vesta (un override puede delegar a el).
-    const std::string name = "__vx_strcmp_base";
+    const std::string name = ir::rt::kStrcmpBase;
     if (strcmp_helper_emitted_) return name;
     strcmp_helper_emitted_ = true;
 
@@ -666,7 +666,7 @@ std::string Lowering::ensure_str_cplen_helper() {
     //     if ((p[i] & 0xC0) != 0x80) count++;   // no es byte de continuacion
     //   ret count;
     // Para ASCII puro coincide con byte_len (cada byte < 0x80).
-    const std::string name = "__vx_str_cplen";
+    const std::string name = ir::rt::kStrCpLen;
     if (str_cplen_helper_emitted_) return name;
     str_cplen_helper_emitted_ = true;
 
@@ -793,7 +793,7 @@ std::string Lowering::ensure_str_to_utf16_helper() {
     //   ret out
     // Asume UTF-8 bien formado (el value-string se construye de literales/
     // concat validos).  El CALLER es dueno del buffer (transitorio para FFI).
-    const std::string name = "__vx_str_to_utf16";
+    const std::string name = ir::rt::kStrToUtf16;
     if (str_to_utf16_helper_emitted_) return name;
     str_to_utf16_helper_emitted_ = true;
 
@@ -1034,7 +1034,7 @@ std::string Lowering::ensure_strdata_helper() {
     // u8* __vx_strdata(u8* s): data_ptr branchless (is_heap ? ptr@0 : &s).
     // Funcion APARTE (no inline) -> una sola CALL por uso; el blacklist del
     // inliner (prefijo __vx_str) impide re-inlinearla.
-    const std::string name = "__vx_strdata";
+    const std::string name = ir::rt::kStrData;
     if (strdata_helper_emitted_) return name;
     strdata_helper_emitted_ = true;
 
@@ -1074,7 +1074,7 @@ std::string Lowering::ensure_strlen_helper() {
     // CPU dispatch Inc 5a: BASELINE escalar al que apunta __vx_strlen_fp por
     // defecto.  Llamable por nombre desde Vesta (un override puede delegar a
     // el).
-    const std::string name = "__vx_strlen_base";
+    const std::string name = ir::rt::kStrlenBase;
     if (strlen_helper_emitted_) return name;
     strlen_helper_emitted_ = true;
 
@@ -1549,7 +1549,7 @@ std::string Lowering::ensure_ctoa_helper() {
     //     cp < 0x10000 -> 3 bytes; else         -> 4 bytes.
     // Paridad byte-exacta con vio_char_to_vmbuf (interp/JIT).  Vive en una
     // funcion APARTE con branches -> evita const-fold mid-expression.
-    const std::string name = "__vx_ctoa";
+    const std::string name = ir::rt::kCtoa;
     if (ctoa_helper_emitted_) return name;
     ctoa_helper_emitted_ = true;
 
@@ -1796,7 +1796,7 @@ std::string Lowering::ensure_btoa_helper() {
     //     else        { buf <- "false"; ret 5; }
     // Vive en una funcion APARTE con branch -> el optimizer no foldea el
     // append condicional mid-expression con argumento constante.
-    const std::string name = "__vx_btoa";
+    const std::string name = ir::rt::kBtoa;
     if (btoa_helper_emitted_) return name;
     btoa_helper_emitted_ = true;
 

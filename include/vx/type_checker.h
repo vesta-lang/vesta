@@ -39,6 +39,7 @@
 #define VX_TYPE_CHECKER_H
 
 #include "util/alloc/small_vector.h" // un grupo de sobrecargas, sin reservar
+#include "ir/synthetic_symbols.h" // como se llama el ayudante de construccion
 #include "util/env_flags.h"
 #include "vx/generics/generic_infer.h"     // de donde sale cada type-param
 #include "vx/generics/instance_registry.h" // el reparto de instanciaciones
@@ -786,16 +787,16 @@ enum class NewHelperKind : uint8_t {
 inline const std::string &new_helper_symbol(const ClassMethodInfo *ctor,
                                             const std::string &cls,
                                             NewHelperKind kind) {
-    std::string s = "__new_" + cls;
+    std::string s = ir::new_helper_base_name(cls);
     /* El discriminante solo cuando de verdad hay con quien confundirse: con un
      * constructor unico -- que es lo normal -- el ayudante conserva el nombre
      * que siempre tuvo. */
     if (ctor != nullptr && ctor->is_overloaded)
         s += "_" + overload::discriminator(ctor->param_types);
     if (kind == NewHelperKind::Shared)
-        s += "_shared";
+        s += ir::kNewHelperSharedSuffix;
     else if (kind == NewHelperKind::Gc)
-        s += "_gc";
+        s += ir::kNewHelperGcSuffix;
     return *util::intern_name(s);
 }
 

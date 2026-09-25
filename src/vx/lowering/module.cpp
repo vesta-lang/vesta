@@ -1025,7 +1025,7 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
         /* @Macro, o comptime fn con asm (F1): nombre prefijado + registro en
          * el ComptimeRuntime para invocacion via VM.  El prefijo `__macro_`
          * identifica "codigo comptime lowered" (macro o fn). */
-        fn.name = "__macro_" + fd->name;
+        fn.name = ir::macro_symbol(fd->name);
         fn.is_macro_compiled = true;
         ++macro_lowered_count_;
         /* Registrar el nombre en el ComptimeRuntime para que el chequeo de
@@ -1702,7 +1702,7 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
             jc.op = ir::IrOp::CALL;
             jc.type = ir::IrType::VOID;
             jc.dst = ir::IR_NO_VALUE;
-            jc.func_name = "__vx_thread_join_all";
+            jc.func_name = ir::rt::kThreadJoinAll;
             jc.is_call_site = true;
             jc.source_line = fd->loc.line;
             fn.append(current_block_, std::move(jc));
@@ -2570,7 +2570,7 @@ void Lowering::emit_startup_wiring(ir::IrModule &out_module) {
                 call_sd.op = ir::IrOp::CALL;
                 call_sd.type = ir::IrType::VOID;
                 call_sd.dst = ir::IR_NO_VALUE;
-                call_sd.func_name = "__vx_strdisp_init";
+                call_sd.func_name = ir::rt::kStrDispInit;
                 call_sd.source_line = 0;
                 ins.insert(ins.begin(), std::move(call_sd));
             }
@@ -2579,7 +2579,7 @@ void Lowering::emit_startup_wiring(ir::IrModule &out_module) {
                 call_mc.op = ir::IrOp::CALL;
                 call_mc.type = ir::IrType::VOID;
                 call_mc.dst = ir::IR_NO_VALUE;
-                call_mc.func_name = "__vx_memcpy_init";
+                call_mc.func_name = ir::rt::kMemcpyInit;
                 call_mc.source_line = 0;
                 ins.insert(ins.begin(), std::move(call_mc));
             }
@@ -2592,7 +2592,7 @@ void Lowering::emit_startup_wiring(ir::IrModule &out_module) {
                 call_auto.op = ir::IrOp::CALL;
                 call_auto.type = ir::IrType::VOID;
                 call_auto.dst = ir::IR_NO_VALUE;
-                call_auto.func_name = "__vx_auto_init";
+                call_auto.func_name = ir::rt::kAutoInit;
                 call_auto.source_line = 0;
                 ins.insert(ins.begin(), std::move(call_auto));
             }
@@ -2600,7 +2600,7 @@ void Lowering::emit_startup_wiring(ir::IrModule &out_module) {
             call_init.op = ir::IrOp::CALL;
             call_init.type = ir::IrType::VOID;
             call_init.dst = ir::IR_NO_VALUE;
-            call_init.func_name = "__vx_cpu_init";
+            call_init.func_name = ir::rt::kCpuInit;
             call_init.source_line = 0;
             ins.insert(ins.begin(), std::move(call_init));
             break;
@@ -2617,7 +2617,7 @@ void Lowering::emit_startup_wiring(ir::IrModule &out_module) {
     // por attach; N = thread_local con init != 0).
     if (native_poo_ && !tls_nonzero_inits_.empty()) {
         ir::IrFunction ti;
-        ti.name = "__vx_tls_init";
+        ti.name = ir::rt::kTlsInit;
         // Devuelve i64 1 (TRUE): __vx_tls_init es el ENTRY POINT (DllMain) de
         // la .dll -- el cargador lo llama en cada attach de hilo y aqui
         // aplicamos la plantilla por-hilo (ntdll no la copia para el TLS de una

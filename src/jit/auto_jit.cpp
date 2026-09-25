@@ -43,7 +43,9 @@
 #include "runtime/scheduler.h"
 #include "runtime/exception_runtime.h" // callback-ABI: get_current_executing_process + jit_proc_tls_index
 #include "ir/ssa_ir.h"
+#include "ir/runtime_symbols.h" // el asignador y las fibras del runtime
 #include <cstring>
+#include <string_view>
 
 #include <capstone/capstone.h>
 
@@ -655,7 +657,7 @@ uint64_t ensure_vx_swapctx_native(runtime::ProcessVM *vm) noexcept {
     if (vm == nullptr) return 0;
     /* compile_naked_native aplica el arch-guard x86-64 y devuelve 0 fuera de
      * esa arquitectura -> el llamante deja el grafo de fibra en el interp. */
-    const uint64_t a = jit::compile_naked_native(vm, "__vx_swapctx");
+    const uint64_t a = jit::compile_naked_native(vm, ir::rt::kSwapCtx);
     if (a != 0) g_vx_swapctx_native = a;
     return g_vx_swapctx_native;
 }
@@ -747,12 +749,14 @@ void maybe_compile_method(runtime::ProcessVM *vm,
      * en estas la respuesta ya se sabe: las usa todo el codigo que reserva
      * memoria.  Ademas, mientras no esten compiladas conviven dos caminos de
      * reserva en el mismo proceso, y eso es justo lo que no puede durar. */
+    const std::string_view nombre =
+        method->name.data != nullptr
+            ? std::string_view(
+                  reinterpret_cast<const char *>(method->name.data),
+                  method->name.size)
+            : std::string_view();
     const bool del_asignador =
-        method->name.data != nullptr &&
-        ((method->name.size == 11 &&
-          std::memcmp(method->name.data, "__vx_malloc", 11) == 0) ||
-         (method->name.size == 9 &&
-          std::memcmp(method->name.data, "__vx_free", 9) == 0));
+        nombre == ir::rt::kMalloc || nombre == ir::rt::kFree;
     if (!del_asignador && method->invocation_count < g_jit_threshold) return;
 
     /* SEGURIDAD (sandbox bajo JIT): si hay un sandbox activo (algun modulo
@@ -1346,7 +1350,7 @@ CompileResult eager_compile_function(
                 else if (in.op == ir::IrOp::CALL && !in.func_name.empty())
                     quiero.insert(in.func_name);
             }
-        if (reserva) quiero.insert("__vx_malloc");
+        if (reserva) quiero.insert(ir::rt::kMalloc);
         std::vector<size_t> cuerpos;
         for (const auto &nom : quiero) {
             auto it2 = ir_lookup->find(nom);
@@ -1354,7 +1358,7 @@ CompileResult eager_compile_function(
                 cuerpos.push_back(it2->second);
         }
         const bool hay_asignador =
-            reserva && ir_lookup->count("__vx_malloc") != 0;
+            reserva && ir_lookup->count(ir::rt::kMalloc) != 0;
 
         /* Y AHORA el criterio: solo merece la pena si de los argumentos se
          * sabe algo que permita podar.  Sin eso, meter el cuerpo solo engorda
@@ -1401,7 +1405,7 @@ CompileResult eager_compile_function(
                     for (auto &in : bb.instrs)
                         if (in.op == ir::IrOp::RAW_ALLOC) {
                             in.op = ir::IrOp::CALL;
-                            in.func_name = "__vx_malloc";
+                            in.func_name = ir::rt::kMalloc;
                         }
             ir::IrModule tmp;
             tmp.functions.push_back(esp_clone);

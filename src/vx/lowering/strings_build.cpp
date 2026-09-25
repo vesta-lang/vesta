@@ -653,7 +653,8 @@ std::string Lowering::ensure_itoa_helper(bool is_signed) {
     //       (el bug de length erronea con argumento constante);
     //   (b) el inliner NO lo re-inlinea (is_inlineable exige 1 bloque).
     const int idx = is_signed ? 1 : 0;
-    const std::string name = is_signed ? "__vx_itoa_s" : "__vx_itoa_u";
+    const std::string name =
+        is_signed ? ir::rt::kItoaSigned : ir::rt::kItoaUnsigned;
     if (itoa_helper_emitted_[idx]) return name;
     itoa_helper_emitted_[idx] = true;
 

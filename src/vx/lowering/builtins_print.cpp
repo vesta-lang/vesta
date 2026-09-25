@@ -71,19 +71,19 @@ struct ScalarPrinter {
 
 /// Los doce.  Un nulo en @c bare significa que ese camino aun no sabe hacerlo.
 constexpr ScalarPrinter kScalarPrinters[] = {
-    {Builtin::PrintInt, "vio_print_int", "__vx_print_i64", false},
-    {Builtin::PrintUint, "vio_print_uint", "__vx_print_u64", true},
-    {Builtin::PrintHex, "vio_print_hex", "__vx_print_hex", true},
-    {Builtin::PrintBin, "vio_print_bin", "__vx_print_bin", true},
-    {Builtin::PrintOct, "vio_print_oct", "__vx_print_oct", true},
-    {Builtin::PrintBool, "vio_print_bool", "__vx_print_bool", true},
-    {Builtin::PrintChar, "vio_print_char", "__vx_print_char", true},
-    {Builtin::PrintPtr, "vio_print_ptr", "__vx_print_ptr", true},
-    {Builtin::PrintCstr, "vio_print_cstr", "__vx_print_cstr", true},
+    {Builtin::PrintInt, "vio_print_int", ir::rt::kPrintI64, false},
+    {Builtin::PrintUint, "vio_print_uint", ir::rt::kPrintU64, true},
+    {Builtin::PrintHex, "vio_print_hex", ir::rt::kPrintHex, true},
+    {Builtin::PrintBin, "vio_print_bin", ir::rt::kPrintBin, true},
+    {Builtin::PrintOct, "vio_print_oct", ir::rt::kPrintOct, true},
+    {Builtin::PrintBool, "vio_print_bool", ir::rt::kPrintBool, true},
+    {Builtin::PrintChar, "vio_print_char", ir::rt::kPrintChar, true},
+    {Builtin::PrintPtr, "vio_print_ptr", ir::rt::kPrintPtr, true},
+    {Builtin::PrintCstr, "vio_print_cstr", ir::rt::kPrintCstr, true},
     // El bare existe desde que se escribio `__vx_print_float` (vx_io.vx): la
     // tabla decia nulo porque no se actualizo, y por eso un `print_float` en
     // nativo avisaba de "aun no soportado" y NO IMPRIMIA nada.
-    {Builtin::PrintFloat, "vio_print_float", "__vx_print_float", true},
+    {Builtin::PrintFloat, "vio_print_float", ir::rt::kPrintFloat, true},
     {Builtin::PrintColor, "vio_print_color", nullptr, true},
     {Builtin::PrintGchandle, "vio_print_gchandle", nullptr, true},
 };
@@ -390,7 +390,7 @@ bool Lowering::try_lower_print_builtins(ast::CallExpr *e, Builtin b,
                                  out_value);
         }
         if (native_poo_) {
-            emit_io_prim("__vx_flush", {}, e->loc.line);
+            emit_io_prim(ir::rt::kFlush, {}, e->loc.line);
             out_value = ir::IR_NO_VALUE;
             return true;
         }
@@ -516,7 +516,7 @@ bool Lowering::try_lower_print_builtins(ast::CallExpr *e, Builtin b,
          * practica reventaba con un acceso invalido.  `__vx_pad` existe en
          * vx_io.vx y es el que ya usa la alineacion de `${x:>10}`. */
         if (native_poo_) {
-            emit_io_prim("__vx_pad", {v_fill, v_w}, e->loc.line);
+            emit_io_prim(ir::rt::kPad, {v_fill, v_w}, e->loc.line);
             out_value = ir::IR_NO_VALUE;
             return true;
         }
@@ -557,7 +557,7 @@ bool Lowering::try_lower_print_builtins(ast::CallExpr *e, Builtin b,
                                e->loc.line, /*is_explicit=*/true);
         const bool is_host_mem = fn_->values[v_ptr].is_host_ptr();
         if (native_poo_) {
-            emit_io_prim("__vx_write", {v_ptr, v_len}, e->loc.line);
+            emit_io_prim(ir::rt::kWrite, {v_ptr, v_len}, e->loc.line);
         } else if (is_host_mem) {
             emit_native_call(kVestaIoLib, "vio_print_buf", {v_ptr, v_len},
                              ir::IrType::VOID, e->loc.line);
@@ -766,7 +766,7 @@ void Lowering::emit_print_typed_value(ast::Expr *ex,
                                                 ir::IrType::F64, ex->loc.line);
                 vf = vp;
             }
-            emit_io_prim("__vx_print_float", {vf}, ex->loc.line);
+            emit_io_prim(ir::rt::kPrintFloat, {vf}, ex->loc.line);
             return;
         }
         if (t.kind == PrimitiveKind::STRING) {
@@ -800,12 +800,12 @@ void Lowering::emit_print_typed_value(ast::Expr *ex,
             auto emit_pad = [&](ir::IrValueId v_count) {
                 ir::IrValueId v_fill = emit_const(
                     ir::IrType::I64, (uint64_t)fs.fill_cp, ex->loc.line);
-                emit_io_prim("__vx_pad", {v_fill, v_count}, ex->loc.line);
+                emit_io_prim(ir::rt::kPad, {v_fill, v_count}, ex->loc.line);
             };
             ir::IrValueId v_pad = ir::IR_NO_VALUE;
             if (need_pad) v_pad = compute_pad();
             if (need_pad && fs.align == FmtSpec::Align::RIGHT) emit_pad(v_pad);
-            emit_io_prim("__vx_write", {sptr, slen}, ex->loc.line);
+            emit_io_prim(ir::rt::kWrite, {sptr, slen}, ex->loc.line);
             if (need_pad && fs.align == FmtSpec::Align::LEFT) emit_pad(v_pad);
             return;
         }
@@ -821,36 +821,36 @@ void Lowering::emit_print_typed_value(ast::Expr *ex,
         std::string sym;
         bool as_signed_dec = false;
         if (fs.kind == FmtSpec::Kind::HEX)
-            sym = "__vx_print_hex";
+            sym = ir::rt::kPrintHex;
         else if (fs.kind == FmtSpec::Kind::BIN)
-            sym = "__vx_print_bin";
+            sym = ir::rt::kPrintBin;
         else if (fs.kind == FmtSpec::Kind::OCT)
-            sym = "__vx_print_oct";
+            sym = ir::rt::kPrintOct;
         else if (fs.kind == FmtSpec::Kind::PTR)
-            sym = "__vx_print_ptr";
+            sym = ir::rt::kPrintPtr;
         else if (fs.kind == FmtSpec::Kind::BOOL)
-            sym = "__vx_print_bool";
+            sym = ir::rt::kPrintBool;
         else if (fs.kind == FmtSpec::Kind::CHAR)
-            sym = "__vx_print_char";
+            sym = ir::rt::kPrintChar;
         else if (fs.kind == FmtSpec::Kind::DEC) {
-            sym = is_unsigned_t ? "__vx_print_u64" : "__vx_print_i64";
+            sym = is_unsigned_t ? ir::rt::kPrintU64 : ir::rt::kPrintI64;
             as_signed_dec = !is_unsigned_t;
         } else {
             // AUTO: por tipo (mismo criterio que el path VM).
             switch (t.kind) {
-            case PrimitiveKind::BOOL: sym = "__vx_print_bool"; break;
+            case PrimitiveKind::BOOL: sym = ir::rt::kPrintBool; break;
             case PrimitiveKind::PTR:
             case PrimitiveKind::ARRAY:
-            case PrimitiveKind::CLASS: sym = "__vx_print_ptr"; break;
+            case PrimitiveKind::CLASS: sym = ir::rt::kPrintPtr; break;
             // Un caracter se imprime como CARACTER.  Faltaba el caso, asi
             // que caia en el de por defecto y salia su punto de codigo:
             // `print("${c}")` con c='D' escribia 68.
-            case PrimitiveKind::CHAR: sym = "__vx_print_char"; break;
+            case PrimitiveKind::CHAR: sym = ir::rt::kPrintChar; break;
             default:
                 if (is_unsigned_t)
-                    sym = "__vx_print_u64";
+                    sym = ir::rt::kPrintU64;
                 else {
-                    sym = "__vx_print_i64";
+                    sym = ir::rt::kPrintI64;
                     as_signed_dec = true;
                 }
                 break;
@@ -1014,7 +1014,7 @@ void Lowering::emit_print_typed_value(ast::Expr *ex,
             if (native_poo_) {
                 // AOT: padding via __vx_pad (fill_cp, count) del runtime
                 // de I/O (PURE_NATIVE); no hay vio_print_pad (VM).
-                emit_io_prim("__vx_pad", {v_fill, v_count}, ex->loc.line);
+                emit_io_prim(ir::rt::kPad, {v_fill, v_count}, ex->loc.line);
                 return;
             }
             emit_native_call(kVestaIoLib, "vio_print_pad", {v_fill, v_count},
@@ -1025,7 +1025,7 @@ void Lowering::emit_print_typed_value(ast::Expr *ex,
         }
         if (native_poo_) {
             // AOT: escribir los bytes via __vx_write (PURE_NATIVE).
-            emit_io_prim("__vx_write", {v_ptr, v_len}, ex->loc.line);
+            emit_io_prim(ir::rt::kWrite, {v_ptr, v_len}, ex->loc.line);
         } else {
             emit_native_call(kVestaIoLib, "vio_print_buf", {v_ptr, v_len},
                              ir::IrType::VOID, ex->loc.line);

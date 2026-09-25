@@ -46,6 +46,7 @@
  */
 
 #include "vx/lowering.h"
+#include "ir/synthetic_symbols.h" // el nombre de los cuerpos comptime
 
 #include "vx/ast.h"
 #include "vx/comptime/comptime_introspect.h"
@@ -66,7 +67,7 @@ std::string Lowering::comptime_ctor_ir_name(const ClassMethodInfo &ctor) const {
      * dos constructores solo se podian distinguir por cuantos argumentos
      * tomaban: con dos de la misma aridad y distintos tipos, el que se emite
      * lleva su discriminante y este pedia una etiqueta que no existe. */
-    return "__macro_" + method_symbol_of(ctor);
+    return ir::macro_symbol(method_symbol_of(ctor));
 }
 
 ir::IrValueId Lowering::try_lower_comptime_ctor_call(ast::CallExpr *e,
@@ -105,7 +106,7 @@ ir::IrValueId Lowering::try_lower_comptime_ctor_call(ast::CallExpr *e,
      * llamada igual que la de un constructor normal -- bufer del tamano del
      * struct como `this`, y los argumentos detras -- y la ejecuta la maquina
      * cuando le toque, con el resto del cuerpo. */
-    if (fn_ != nullptr && ir::es_cuerpo_comptime(fn_->name)) {
+    if (fn_ != nullptr && ir::is_macro_symbol(fn_->name)) {
         const uint64_t buf_bytes =
             (static_cast<uint64_t>(slay.size_bytes) + 7ULL) & ~7ULL;
         const ir::IrValueId v_buf = fn_->new_value(ir::IrType::PTR);
