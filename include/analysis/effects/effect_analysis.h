@@ -134,6 +134,10 @@ class EffectAnalysis {
      */
     void usar_resumenes(const analysis::RangeSummaries *r) { resumenes_ = r; }
 
+    /// Los resumenes con los que trabaja el motor; nulo si ninguno.  Sirve
+    /// para no rehacer el resumen del modulo cuando ya se hizo con estos.
+    const analysis::RangeSummaries *summaries() const { return resumenes_; }
+
     /**
      * @brief Que memoria DEL LLAMANTE toca un sitio de llamada concreto.
      *
@@ -232,8 +236,9 @@ class EffectAnalysis {
     /// Resumenes de frontera con los que calcular rangos, si alguien los dio.
     /// Nulo = se calculan sin ellos, que es lo que valia antes de tenerlos.
     const analysis::RangeSummaries *resumenes_ = nullptr;
-    std::unordered_map<std::string, FunctionSummary> summary_cache_;
-    std::unordered_map<std::string, bool> dirty_; // fn -> sucio
+    /// Por el nombre INTERNADO de la funcion (@c IrFunction::name_key).
+    std::unordered_map<const std::string *, FunctionSummary> summary_cache_;
+    std::unordered_map<const std::string *, bool> dirty_; // fn -> sucio
     ModuleSummary module_cache_;
     ModuleSummary program_cache_;
     EffectGaps gaps_;

@@ -207,9 +207,9 @@ AsmBlockEffects asm_analyze_block_no_classes(const std::string &nasm_body,
     return asm_analyze_block(nasm_body, arch, {});
 }
 
-AsmBlockEffects asm_analyze_block(
-    const std::string &nasm_body, const std::string &arch,
-    const std::vector<std::pair<std::string, std::string>> &clases_operando) {
+AsmBlockEffects asm_analyze_block(const std::string &nasm_body,
+                                  const std::string &arch,
+                                  const AsmOperandClasses &clases_operando) {
     AsmBlockEffects res;
     // Marco de pila: seguimos el maximo alcanzado (peor caso), no el neto: un
     // `sub rsp,32; ...; add rsp,32` reserva 32 aunque acabe en 0.

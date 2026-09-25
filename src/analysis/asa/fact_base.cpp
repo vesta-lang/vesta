@@ -698,6 +698,55 @@ const effects::ParamAliasing &FactBase::param_aliasing(const ir::IrModule &mod,
     return pa;
 }
 
+namespace {
+
+/**
+ * @brief Construye el motor de efectos de un modulo, con sus resumenes de
+ *        frontera ya puestos.
+ *
+ * Con nombre y no como lambda: quien construye sale asi en el perfil, y aqui
+ * construir es el analisis de efectos del modulo entero.
+ */
+struct EffectsEngineBuild {
+    const ir::IrModule &mod;
+    const RangeSummaries &summaries; ///< los de la base, del mismo momento.
+
+    std::shared_ptr<effects::EffectAnalysis> operator()() const {
+        auto engine = std::make_shared<effects::EffectAnalysis>();
+        engine->usar_resumenes(&summaries);
+        engine->module_summary(mod); // deja el motor con sus tablas listas
+        return engine;
+    }
+};
+
+/// La estructura de una funcion, pedida a la base (para el escape).
+struct BaseStructureOf {
+    FactBase &base;
+    const IrFacts &operator()(const ir::IrFunction &f) const {
+        return base.structure(f);
+    }
+};
+
+/// La memoria de una funcion, pedida a la base (para el escape).
+struct BaseMemoryOf {
+    FactBase &base;
+    const PointsTo &operator()(const ir::IrFunction &f) const {
+        return base.memory(f);
+    }
+};
+
+/// Construye el escape del modulo con lo que la base ya sabe de cada funcion.
+struct EscapeModuleBuild {
+    FactBase &base;
+    const ir::IrModule &mod;
+    ModuleEscape operator()() const {
+        return compute_escape_module(mod, BaseStructureOf{base},
+                                     BaseMemoryOf{base});
+    }
+};
+
+} // namespace
+
 effects::EffectAnalysis &FactBase::effects(const ir::IrModule &mod,
                                            const char *stage) {
     ++queries_;
@@ -708,17 +757,24 @@ effects::EffectAnalysis &FactBase::effects(const ir::IrModule &mod,
     const std::string *key = module_key(stage_or_default(stage));
     const bool fresh =
         !manager_.cached_v<EffectsSummaryAnalysis>(key, module_version(mod));
+    /* Con los resumenes de frontera de la BASE, del mismo momento.  Sin ellos
+     * el motor calculaba los rangos de cada funcion SIN saber que devuelven
+     * sus llamadas, y el comprobador de limites los volvia a calcular CON
+     * ellos: la misma funcion analizada dos veces respondiendo a dos preguntas
+     * distintas -- en el `main` de un fuente de 144.000 lineas, 18 s de la
+     * primera y 36 s de la segunda --.  Una pregunta, un productor.
+     *
+     * Fuera de la lambda: pedirlos tambien es una consulta a la base, y meterla
+     * dentro la ataria a que la lambda se ejecute. */
+    const RangeSummaries &boundary_summaries = boundary(mod, stage);
     /* Se guarda por PUNTERO: el motor lleva dentro sus tablas y el resumen
      * guarda referencias a ellas, asi que copiarlo al meterlo en la cache
      * dejaria el resumen apuntando a las tablas de la copia vieja. */
     const std::shared_ptr<effects::EffectAnalysis> &engine =
         memoized<EffectsSummaryAnalysis,
                  std::shared_ptr<effects::EffectAnalysis>>(
-            fresh, key, module_version(mod), [&mod]() {
-                auto e = std::make_shared<effects::EffectAnalysis>();
-                e->module_summary(mod); // deja el motor con sus tablas listas
-                return e;
-            });
+            fresh, key, module_version(mod),
+            EffectsEngineBuild{mod, boundary_summaries});
     if (fresh) {
         /* Lo que sale de recorrer el grafo de llamadas entero es demostrado; lo
          * que se queda a medias -- una nativa sin declarar, un puntero a
@@ -729,8 +785,7 @@ effects::EffectAnalysis &FactBase::effects(const ir::IrModule &mod,
     return *engine;
 }
 
-const std::unordered_map<std::string, EscapeInfo> &
-FactBase::escape(const ir::IrModule &mod) {
+const ModuleEscape &FactBase::escape(const ir::IrModule &mod) {
     ++queries_;
     // Internada tambien: la clave es un puntero, hable de una funcion o del
     // modulo entero.
@@ -740,19 +795,8 @@ FactBase::escape(const ir::IrModule &mod) {
     /* La estructura y la memoria de cada funcion se piden POR LA BASE, no
      * aparte: asi el punto fijo del escape reusa lo que ya haya y una
      * invalidacion arrastra a los dos. */
-    const auto &res =
-        memoized<EscapeAnalysisId, std::unordered_map<std::string, EscapeInfo>>(
-            fresh, key, module_version(mod), [this, &mod]() {
-                auto facts_of =
-                    [this](const ir::IrFunction &f) -> const IrFacts & {
-                    return structure(f);
-                };
-                auto pt_of =
-                    [this](const ir::IrFunction &f) -> const PointsTo & {
-                    return memory(f);
-                };
-                return compute_escape_module(mod, facts_of, pt_of);
-            });
+    const auto &res = memoized<EscapeAnalysisId, ModuleEscape>(
+        fresh, key, module_version(mod), EscapeModuleBuild{*this, mod});
     if (fresh) {
         /* El punto fijo se cierra sobre el grafo de llamadas: un callee que no
          * se ve captura TODO, que es la respuesta correcta sin su cuerpo.  Lo

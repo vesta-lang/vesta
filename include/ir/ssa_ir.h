@@ -992,6 +992,12 @@ class IrValueList {
     IrValueList(const IrOperands &v) : p_(v.data()), n_(v.size()) {}
     IrValueList(const std::vector<IrValueId> &v) : p_(v.data()), n_(v.size()) {}
     /**
+     * @brief Desde un tramo de una tabla contigua (la fila de una CSR).
+     * @param p Primer elemento del tramo.
+     * @param n Cuantos elementos tiene.
+     */
+    IrValueList(const IrValueId *p, size_t n) : p_(p), n_(n) {}
+    /**
      * @brief Desde una lista escrita en la llamada: `f(..., {a, b})`.
      *
      * Es seguro COMO ARGUMENTO y solo asi: el array que respalda la lista vive
@@ -2455,6 +2461,26 @@ struct IrFunction {
     void recompute_edges();
 
     /**
+     * @brief Rehace los SUCESORES de un solo bloque, a partir de su terminador.
+     *
+     * Es la mitad por bloque de @ref recompute_edges, que la usa: la regla de
+     * que destinos tiene cada terminador vive AQUI y en ningun otro sitio.
+     *
+     * Existe para quien reestructura muchas veces seguidas la misma funcion y
+     * sabe que bloques ha tocado.  Rehacer las aristas de la funcion ENTERA
+     * tras cada cambio es recorrerla una vez por cambio, y con N cambios sobre
+     * una funcion que crece eso es cuadratico -- el inliner lo hacia tras cada
+     * llamada que aplanaba --.  Asi se mantienen los sucesores de lo tocado y
+     * se rehace todo UNA vez al terminar.
+     *
+     * Los PREDECESORES no se tocan: dependen de todos los bloques, y quien usa
+     * esto tiene que llamar a @ref recompute_edges antes de que nadie los lea.
+     *
+     * @param b Bloque cuyos sucesores rehacer.
+     */
+    void recompute_succs_of(IrBlockId b);
+
+    /**
      * @brief Anade una instruccion al bloque indicado.
      * @param block_id Bloque destino.
      * @param instr    Instruccion a anadir.
@@ -2807,9 +2833,29 @@ struct IrClass {
     bool is_runtime_predefined = false;
 };
 
+/// Posicion de una funcion dentro de @c IrModule::functions.
+enum IrFnPos : uint32_t {};
+/// Ninguna funcion: no es de este modulo.
+inline constexpr IrFnPos IR_NO_FN = IrFnPos(UINT32_MAX);
+
 struct IrModule {
     std::string name;                  ///< nombre del modulo (@module)
     std::vector<IrFunction> functions; ///< funciones definidas
+
+    /**
+     * @brief La posicion de @p fn en @ref functions, sin buscarla.
+     *
+     * Quien pregunta por una funcion casi siempre la tiene en la mano porque
+     * recorre este vector; su posicion sale de su direccion.  Buscarla por
+     * nombre era hashear una cadena para encontrar algo que ya se tenia.
+     *
+     * @return @ref IR_NO_FN si @p fn no es un elemento de este modulo.
+     */
+    IrFnPos pos_of(const IrFunction &fn) const {
+        const IrFunction *first = functions.data();
+        if (&fn < first || &fn >= first + functions.size()) return IR_NO_FN;
+        return static_cast<IrFnPos>(&fn - first);
+    }
     /**
      * @brief Los ficheros de los que salio el codigo de este modulo.
      *
@@ -3278,6 +3324,35 @@ bool ir_parse(const std::string &text, IrModule &out, std::string &error);
  * @return true si el modulo es valido.
  */
 bool ir_verify(const IrModule &mod, std::vector<std::string> &errors);
+
+/**
+ * @brief Verifica el modulo SI se ha pedido, y cuenta lo que encuentre.
+ *
+ * El envoltorio de @ref ir_verify: mirar la bandera, verificar y decir lo
+ * encontrado con el momento por delante.  Estaba copiado en CUATRO sitios de
+ * los dos caminos de compilacion, y de esas copias salio una diferencia que
+ * importa: el camino de un fichero suelto verificaba en TRES momentos -- recien
+ * bajado, antes de emitir y despues de optimizar -- y el de proyecto, que es el
+ * que toma todo programa real, solo verificaba cada modulo recien bajado.  O
+ * sea que lo que NO se comprobaba era justo lo mas delicado: el modulo
+ * FUSIONADO y ya OPTIMIZADO, donde el optimizador ha cortado bloques, los ha
+ * unido y ha movido instrucciones, y una cirugia mal cerrada no se nota hasta
+ * que el programa hace otra cosa.
+ *
+ * Apagado por defecto: es una autocomprobacion del compilador, no una puerta
+ * del lenguaje.  Sale por la salida de ERROR y no por las diagnosticas del
+ * programa -- no es un fallo de quien lo escribio --, pero el texto viene del
+ * catalogo multi-idioma como todo lo demas: que el destinatario sea quien
+ * desarrolla el compilador no lo exime.  La etiqueta del momento es una MARCA
+ * para poder filtrar, no prosa.
+ *
+ * @param mod   Modulo a verificar.
+ * @param stage El momento, para que un problema diga DoNDE aparecio.
+ * @param file  Fichero al que atribuirlo.
+ * @return true si el modulo es valido, o si no se ha pedido verificar.
+ */
+bool ir_verify_if_asked(const IrModule &mod, const char *stage,
+                        const std::string &file);
 
 /// De que clase es una arista del grafo de flujo.
 enum class IrEdgeKind : uint8_t {

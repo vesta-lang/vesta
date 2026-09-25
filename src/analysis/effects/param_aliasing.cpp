@@ -113,31 +113,23 @@ bool proven_disjoint(const ParamReach &a, const ParamReach &b) {
 
 } // namespace
 
-const ir::IrFunction *
-ParamAliasing::function_named(const std::string &name) const {
-    if (mod_ == nullptr) return nullptr;
-    if (by_name_.empty()) {
-        by_name_.reserve(mod_->functions.size());
-        for (const ir::IrFunction &f : mod_->functions)
-            by_name_.emplace(f.name, &f);
-    }
-    const auto it = by_name_.find(name);
-    return it == by_name_.end() ? nullptr : it->second;
-}
-
 const std::vector<CallSiteLocs> *
-ParamAliasing::sites_of(const std::string &function) const {
-    const auto done = resolved_.find(function);
+ParamAliasing::sites_of(const ir::IrFunction &function) const {
+    if (mod_ == nullptr || walk_ == nullptr || base_ == nullptr) return nullptr;
+    /* La funcion por su POSICION en el modulo: la tiene quien pregunta, y de
+     * ahi salen sus sitios sin mirar ningun nombre. */
+    const ir::IrFnPos pos = mod_->pos_of(function);
+    if (pos == ir::IR_NO_FN) return nullptr; // no es de este modulo
+    const auto done = resolved_.find(pos);
     if (done != resolved_.end()) return &done->second;
-    if (walk_ == nullptr || base_ == nullptr) return nullptr;
 
-    const auto it = walk_->calls.find(function);
-    if (it == walk_->calls.end()) return nullptr;
+    const asa::ModuleWalk::SiteRange calls = walk_->calls_to(pos);
+    if (calls.empty()) return nullptr;
 
     /* El contrato del LLAMADO, una vez para todos sus sitios: es el que dice
      * hasta donde llega la region de cada parametro cuando la firma lo declara
      * (`i64 p[3]`).  Es la mitad DECLARADA; la otra sale del cuerpo, abajo. */
-    const ir::IrFunction *callee = function_named(function);
+    const ir::IrFunction *callee = &function;
 
     /* Y el efecto del llamado, que es lo que de verdad cierra la pregunta: que
      * bytes alcanza por cada parametro.  Se pide UNA vez para todos sus sitios.
@@ -148,13 +140,12 @@ ParamAliasing::sites_of(const std::string &function) const {
      * programa que no use `out` / `inout` / `unique<T>` / `borrow_mut<T>` no
      * llega hasta aqui y no paga el punto fijo. */
     const FunctionSummary *callee_sum = nullptr;
-    if (callee != nullptr && mod_ != nullptr &&
-        !util::flag_on(util::FlagId::NoParamReach))
+    if (!util::flag_on(util::FlagId::NoParamReach))
         callee_sum = &base_->effects(*mod_, stage_).summary(*mod_, *callee);
 
     std::vector<CallSiteLocs> sites;
-    sites.reserve(it->second.size());
-    for (const asa::ModuleWalk::Site &cs : it->second) {
+    sites.reserve(calls.size());
+    for (const asa::ModuleWalk::Site &cs : calls) {
         const ir::IrInstr &in = *cs.instr;
         /* El points-to del LLAMANTE.  La base lo cachea por funcion, asi que
          * pedirlo por sitio no lo recalcula. */
@@ -187,10 +178,10 @@ ParamAliasing::sites_of(const std::string &function) const {
         }
         sites.push_back(std::move(site));
     }
-    return &(resolved_[function] = std::move(sites));
+    return &(resolved_[pos] = std::move(sites));
 }
 
-ParamPairInfo ParamAliasing::of(const std::string &function, size_t a,
+ParamPairInfo ParamAliasing::of(const ir::IrFunction &function, size_t a,
                                 size_t b) const {
     ParamPairInfo out;
     const std::vector<CallSiteLocs> *sites = sites_of(function);

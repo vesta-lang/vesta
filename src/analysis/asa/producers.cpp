@@ -1111,6 +1111,10 @@ void produce_loops(Production &p) {
          * El `def_block` sale de la estructura, que la base ya tiene cacheada:
          * no se recorre la funcion otra vez. */
         const IrFacts &st = p.base.structure(fn);
+        /* Lo que el reconocedor necesita de la funcion, una vez para todos sus
+         * bucles: por bucle era recorrerla entera cada vez. */
+        const LoopStructureIndex loop_index =
+            build_loop_structure_index(fn, lf);
         for (uint32_t L = 0; L < lf.loop_count; ++L) {
             Subject about;
             about.kind = Subject::Kind::Block;
@@ -1131,7 +1135,8 @@ void produce_loops(Production &p) {
              * siendo bueno. */
             const Anchor at{Anchor::Kind::Block, about.id};
 
-            const LoopStructure ls = detect_loop_structure(fn, lf, L);
+            const LoopStructure ls =
+                detect_loop_structure(fn, lf, L, loop_index);
             /* CONTABLE basta, que es mas debil que elegible para transformar.
              *
              * Un `for (i = 0; i < 32; i++)` con un `break` o un `return`
@@ -1367,13 +1372,51 @@ ModuleWalk ModuleWalk::of(const ir::IrModule &mod) {
     ModuleWalk w;
     /* Solo se guarda lo que ALGUIEN lee.  Una travesia que materialice todo lo
      * que se podria querer no ahorra una pasada: la cambia por memoria, y de la
-     * que se toca entera. */
+     * que se toca entera.
+     *
+     * El nombre de cada llamada se resuelve AQUI, una vez, a la posicion de la
+     * funcion llamada; a partir de aqui nadie vuelve a hashear un nombre para
+     * encontrar sus sitios. */
+    const size_t n = mod.functions.size();
+    std::unordered_map<std::string_view, ir::IrFnPos> pos_of_name;
+    pos_of_name.reserve(n);
+    for (size_t p = 0; p < n; ++p)
+        pos_of_name.emplace(mod.functions[p].name, static_cast<ir::IrFnPos>(p));
+
+    /* Dos pasadas, en plano: cuantos sitios tiene cada destino y luego el
+     * reparto.  La primera guarda el destino de cada llamada para que la
+     * segunda no vuelva a resolver el nombre. */
+    util::NamedVector<ir::IrFnPos, scratch::WalkCallTargets> target_of_call;
+    w.call_off.assign(n + 1, WalkCallEdge(0));
     for (const ir::IrFunction &fn : mod.functions) {
         if (fn.is_native) continue;
         for (const ir::IrBlock &bb : fn.blocks)
-            for (const ir::IrInstr &in : bb.instrs)
-                if (in.op == ir::IrOp::CALL && !in.func_name.empty())
-                    w.calls[in.func_name].push_back(Site{&fn, &in});
+            for (const ir::IrInstr &in : bb.instrs) {
+                if (in.op != ir::IrOp::CALL || in.func_name.empty()) continue;
+                const auto it = pos_of_name.find(in.func_name);
+                const ir::IrFnPos t =
+                    it == pos_of_name.end() ? ir::IR_NO_FN : it->second;
+                target_of_call.push_back(t);
+                if (t != ir::IR_NO_FN)
+                    w.call_off[t + 1] = WalkCallEdge(w.call_off[t + 1] + 1);
+            }
+    }
+    for (size_t p = 0; p < n; ++p)
+        w.call_off[p + 1] = WalkCallEdge(w.call_off[p + 1] + w.call_off[p]);
+    w.call_sites.resize(w.call_off[n]);
+    util::NamedVector<WalkCallEdge, scratch::WalkCallOffsets> next(
+        w.call_off.begin(), w.call_off.end() - 1);
+    size_t k = 0;
+    for (const ir::IrFunction &fn : mod.functions) {
+        if (fn.is_native) continue;
+        for (const ir::IrBlock &bb : fn.blocks)
+            for (const ir::IrInstr &in : bb.instrs) {
+                if (in.op != ir::IrOp::CALL || in.func_name.empty()) continue;
+                const ir::IrFnPos t = target_of_call[k++];
+                if (t == ir::IR_NO_FN) continue;
+                w.call_sites[next[t]] = Site{&fn, &in};
+                next[t] = WalkCallEdge(next[t] + 1);
+            }
     }
     return w;
 }

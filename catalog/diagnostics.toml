@@ -660,6 +660,13 @@ es = "la llamada a '{0}' dice traer argumentos pero no entrega el bloque que los
 en = "the call to '{0}' passes {1} arguments by the platform convention, and only {2} can be placed that way; declare where they go with register(\"...\") on its parameters"
 es = "la llamada a '{0}' pasa {1} argumentos por la convencion de la plataforma, y por ahi solo se pueden colocar {2}; di por donde van con register(\"...\") en sus parametros"
 
+# El resumen de la autocomprobacion del intermedio.  Va por el catalogo como
+# todo lo demas: que su destinatario sea quien desarrolla el compilador no lo
+# exime, y el texto estaba escrito a mano en los CUATRO sitios que verificaban.
+[VX7046]
+en = "the intermediate form does not hold up at '{0}': {1} problems in '{2}'"
+es = "el intermedio no se sostiene en '{0}': {1} problemas en '{2}'"
+
 # --- diagramas (VX7050-VX7059) ---
 
 [VX7050]
@@ -1440,6 +1447,28 @@ es = "la construccion esta en un bloque al que no se llega"
 [VXA139]
 en = "an argument of the construction that is not there, or is not valid"
 es = "un argumento de la construccion que no esta, o que no vale"
+
+# Los que siguen son de la misma familia; van a partir del 141 porque el 140
+# ya estaba dado cuando se sacaron del texto escrito a mano en el pase.
+[VXA141]
+en = "a field is read on a path where nothing has written it"
+es = "un campo se lee por un camino en el que nada lo ha escrito"
+
+[VXA142]
+en = "a merge would receive a field that one of its incoming paths never writes"
+es = "a una union de caminos le llegaria un campo que uno de ellos no escribe"
+
+[VXA143]
+en = "a field written conditionally inside a loop: promoting it costs more than it saves"
+es = "un campo escrito de forma condicional dentro de un bucle: promoverlo cuesta mas de lo que ahorra"
+
+[VXA144]
+en = "a constructor argument that is not an integer"
+es = "un argumento del constructor que no es entero"
+
+[VXA145]
+en = "a constructor argument narrower than the field it initializes"
+es = "un argumento del constructor mas estrecho que el campo que inicializa"
 
 # El modo ESTRICTO del JIT (VESTA_JIT_STRICT).  Que una funcion se quede sin
 # compilar es correcto -- el interprete da el mismo resultado -- y por eso no se

@@ -71,6 +71,8 @@ agnosticos respecto al productor, es otra cosa:
 #include "analysis/asa/fact_base.h"
 #include "analysis/asa/fact_file.h" // DomainCost: de que depende cada dominio
 #include "analysis/asa/fact_store.h"
+#include "ir/ssa_ir.h"          // IrFnPos: por donde se indexan las llamadas
+#include "util/named_alloc.h"
 
 #include <cstdint>
 #include <string>
@@ -169,15 +171,49 @@ struct ProductionSummary {
  * a quien --, no lo de cada dominio.  Un dato que solo mira uno no gana nada
  * subiendo aqui y ademas obliga a los demas a pagarlo.
  */
+namespace scratch {
+struct WalkCallOffsets; ///< Funcion llamada -> donde empiezan sus sitios.
+struct WalkCallSites;   ///< Los sitios de llamada, contiguos por destino.
+struct WalkCallTargets; ///< A quien llama cada llamada, mientras se recorre.
+} // namespace scratch
+
+/// Posicion dentro de @c ModuleWalk::call_sites.
+enum WalkCallEdge : uint32_t {};
+
 struct ModuleWalk {
     /// Una instruccion, con la funcion a la que pertenece.
     struct Site {
         const ir::IrFunction *fn;
         const ir::IrInstr *instr;
     };
-    /// De cada funcion llamada, DONDE se la llama.  Lo necesita cualquiera que
-    /// quiera mirar los argumentos con los que se la usa de verdad.
-    std::unordered_map<std::string, std::vector<Site>> calls;
+    /// Un tramo de @ref call_sites: los sitios de UNA funcion llamada.
+    struct SiteRange {
+        const Site *first = nullptr;
+        const Site *last = nullptr;
+        const Site *begin() const { return first; }
+        const Site *end() const { return last; }
+        bool empty() const { return first == last; }
+        size_t size() const { return static_cast<size_t>(last - first); }
+    };
+    /// Por POSICION de la funcion llamada en el modulo, donde empiezan sus
+    /// sitios en @ref call_sites (uno mas que funciones, para cerrar el
+    /// ultimo tramo).
+    util::NamedVector<WalkCallEdge, scratch::WalkCallOffsets> call_off;
+    /// De cada funcion llamada, DONDE se la llama, contiguos por destino.  Lo
+    /// necesita cualquiera que quiera mirar los argumentos con los que se la
+    /// usa de verdad.  Por posicion y no por nombre: quien pregunta ya tiene la
+    /// funcion, y el nombre se resolvio UNA vez al recorrer.  Las llamadas a
+    /// algo que no es de este modulo no estan: no hay funcion por la que
+    /// preguntar.
+    util::NamedVector<Site, scratch::WalkCallSites> call_sites;
+
+    /// Los sitios donde se llama a la funcion de posicion @p callee.
+    SiteRange calls_to(ir::IrFnPos callee) const {
+        if (callee == ir::IR_NO_FN || callee + 1u >= call_off.size())
+            return SiteRange{};
+        return SiteRange{call_sites.data() + call_off[callee],
+                         call_sites.data() + call_off[callee + 1]};
+    }
     /* NO hay aqui una lista plana de todas las instrucciones, y no es un
      * olvido: se escribio y se quito.  Recorrerla seria mas rapido que ir por
      * bloques, pero hoy no la lee NADIE -- los productores siguen recorriendo

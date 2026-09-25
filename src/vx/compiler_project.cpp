@@ -53,8 +53,10 @@ int run_worker_from_source(std::string code, const std::string &file_name,
 #include "vx/comptime/comptime_collect.h"
 #include "vx/borrow/borrow_ir_check.h" // la exclusividad, cruzando la llamada
 #include "vx/compiler.h"
-#include "vx/source_text.h" // un solo fin de linea para todo el pipeline
-#include "vx/vxdbg_emit.h"  // grafo de conocimiento del programa
+#include "vx/contracts_collect.h" // lo que el programa DECLARA
+#include "vx/module_checks.h" // lo que se comprueba antes de optimizar
+#include "vx/source_text.h"   // un solo fin de linea para todo el pipeline
+#include "vx/vxdbg_emit.h"    // grafo de conocimiento del programa
 #include "vxdbg/pack_store.h"
 #include "vxdbg/codec.h"
 #include "vxdbg/roots.h"
@@ -1140,76 +1142,9 @@ bool restore_module_ir(ProjectModuleWork &pm, std::string &err) {
     return true;
 }
 
-/**
- * @brief Recoge en @p out los contratos de huella declarados en @p decls.
- *
- * FUNCION CON NOMBRE y no la `std::function` recursiva que habia: una lambda
- * que se llama a si misma necesita el envoltorio -- que reserva -- y se lee
- * peor, y esta ademas tenia que vivir donde estaban todos los AST a la vez.
- * Con nombre se llama desde donde se compila cada modulo, que es donde su AST
- * existe y donde puede dejar de existir justo despues.
- *
- * @param decls Las declaraciones de un modulo o de un namespace suyo.
- * @param out   Mapa destino; la clave es la que tendra la @c IrFunction.
- */
-void collect_contracts(
-    const std::vector<std::unique_ptr<ast::Node>> &decls,
-    std::unordered_map<std::string, analyze::FunctionContracts> &out) {
-    for (const auto &d : decls) {
-        if (!d) continue;
-        if (d->kind == ast::NodeKind::NamespaceDecl) {
-            collect_contracts(
-                static_cast<const ast::NamespaceDecl *>(d.get())->decls, out);
-            continue;
-        }
-        if (d->kind == ast::NodeKind::FunctionDecl) {
-            const auto *fd = static_cast<const ast::FunctionDecl *>(d.get());
-            analyze::FunctionContracts c;
-            c.pure = fd->contract_pure;
-            c.nothrow = fd->contract_nothrow;
-            c.nopanic = fd->contract_nopanic;
-            c.alloc_total = fd->contract_alloc;
-            c.alloc_partial = fd->contract_alloc_partial;
-            c.stack_total = fd->contract_stack;
-            c.stack_partial = fd->contract_stack_partial;
-            if (c.any()) out[fd->name] = c;
-        }
-        /* Los TEMPLATES genericos se saltan: no producen IR (solo sus
-         * instanciaciones), y su clave casaria por sufijo con la de la
-         * instanciacion, duplicando cada incumplimiento.  La monomorfizacion
-         * copia los contratos. */
-        const std::vector<std::unique_ptr<ast::ClassMethodDecl>> *ms = nullptr;
-        const std::string *tipo = nullptr;
-        if (d->kind == ast::NodeKind::StructDecl) {
-            const auto *sd = static_cast<const ast::StructDecl *>(d.get());
-            if (sd->type_params.empty() && !sd->is_specialization) {
-                ms = &sd->methods;
-                tipo = &sd->name;
-            }
-        } else if (d->kind == ast::NodeKind::ClassDecl) {
-            const auto *cd = static_cast<const ast::ClassDecl *>(d.get());
-            if (cd->type_params.empty()) {
-                ms = &cd->methods;
-                tipo = &cd->name;
-            }
-        }
-        if (ms == nullptr) continue;
-        /* Un metodo baja a una `IrFunction` llamada `Tipo__metodo`, asi que se
-         * registra con ESA clave -- la que vera el analizador. */
-        for (const auto &m : *ms) {
-            if (!m) continue;
-            analyze::FunctionContracts c;
-            c.pure = m->contract_pure;
-            c.nothrow = m->contract_nothrow;
-            c.nopanic = m->contract_nopanic;
-            c.alloc_total = m->contract_alloc;
-            c.alloc_partial = m->contract_alloc_partial;
-            c.stack_total = m->contract_stack;
-            c.stack_partial = m->contract_stack_partial;
-            if (c.any()) out[*tipo + "__" + m->name] = c;
-        }
-    }
-}
+/* Los contratos declarados se leen en `vx/contracts_collect.h`.  Aqui habia
+ * una copia -- `collect_contracts` -- y el camino de un fichero suelto tenia la
+ * suya: la misma lectura del AST escrita dos veces. */
 
 /**
  * @brief Si @p decls declara alguna clase.
@@ -3244,20 +3179,8 @@ CompileResult compile_vx_project(
                          * y pasa a ser el de quien lo usa: aqui ya no hay
                          * fuente al que volver, y lo que venga se optimiza y
                          * se emite tal cual. */
-                        if (util::flag_on(util::FlagId::VerifyIr)) {
-                            std::vector<std::string> ir_errs;
-                            if (!ir::ir_verify(dep_mod, ir_errs)) {
-                                for (const std::string &m : ir_errs)
-                                    std::fprintf(stderr,
-                                                 "[ir-verify cache] %s\n",
-                                                 m.c_str());
-                                std::fprintf(
-                                    stderr,
-                                    "[ir-verify cache] %zu problemas en lo "
-                                    "guardado de '%s'\n",
-                                    ir_errs.size(), pm.module_name.c_str());
-                            }
-                        }
+                        ir::ir_verify_if_asked(dep_mod, "cache",
+                                               pm.module_name);
                         pm.vxi = std::move(pr.module_);
                         /* v20: y si declaraba clases, que el
                          * tree-shake lo preguntara despues y aqui no
@@ -4322,7 +4245,7 @@ CompileResult compile_vx_project(
              * modulo del cache no lo parseara, asi que esta es la unica
              * ocasion de averiguarlo.  Ver `VxiHeader::module_flags`. */
             pm.vxi.declares_classes = pm.has_classes;
-            collect_contracts(pm.ast->decls, pm.contracts);
+            collect_function_contracts(pm.ast->decls, pm.contracts);
         }
 
         // ---- M3: persistir .vxi + .vxir a disco para futuro cache ----
@@ -5300,41 +5223,30 @@ CompileResult compile_vx_project(
             for (const auto &kv : pm.contracts)
                 res.contracts[kv.first] = kv.second;
 
-        /* Aqui es donde MAS aparece: `merged` es la fusion de los modulos del
-         * proyecto, asi que la misma nativa declarada en dos de ellos llega
-         * junta por primera vez.  Fuera del `if` de contratos, porque el choque
-         * existe aunque nadie haya escrito uno. */
-        analyze::report_native_effect_conflicts(merged, root_path,
-                                                res.diagnostics);
-        if (!res.contracts.empty()) {
-            // Arch del TARGET activo (@Target/AOT); vacio = host (x86_64).
-            std::string fp_os, fp_arch;
-            vx::get_aot_condcomp_target(fp_os, fp_arch);
-            if (fp_arch.empty()) fp_arch = "x86_64";
-            auto fps = analyze::compute_module_fingerprints(merged, fp_arch);
-            /* Con el modulo: lo que las importaciones DECLAREN de una nativa
-             * cuenta, en vez de volver opaco el cierre entero. */
-            analyze::compose_fingerprints(fps, &res.contracts, &merged);
-            // En modo --analyze (`emit_ir_preopt`) una violacion NO se emite
-            // como error ni aborta: analyze mide y ensena (el reporte muestra
-            // la discrepancia aparte), no construye.  Si emitiera el error, la
-            // matriz por-arch marcaria fallo justo en el arch que hay que
-            // mostrar para corregirlo.  El build real (`--vesta`, sin
-            // emit_ir_preopt) SI emite el error y aborta.
-            if (!opts.emit_ir_preopt) {
-                /* Los tres veredictos por UNA sola puerta.  Aqui habia una
-                 * copia del criterio que se quedaba solo con el incumplimiento
-                 * y descartaba el indecidible sin decir nada -- y habia otras
-                 * dos copias iguales en `compiler.cpp`. */
-                const analyze::ContractReport rep =
-                    analyze::report_contract_checks(
-                        analyze::verify_contracts(fps, res.contracts),
-                        root_path, res.diagnostics);
-                if (rep.violated != 0) {
-                    res.ok = false;
-                    return res;
-                }
-            }
+        /* Y TODAS las comprobaciones previas a optimizar, por la puerta unica.
+         *
+         * Se miran sobre `merged`, que es la fusion de los modulos: ahi la misma
+         * nativa declarada en dos de ellos llega junta por primera vez.
+         *
+         * Aqui habia una copia del criterio de los contratos, y este camino se
+         * habia quedado SIN las otras comprobaciones que el de fichero suelto si
+         * hacia -- entre ellas el error del desbordamiento entero --.  Como este
+         * es el camino que toma todo programa real, esas reglas no corrian para
+         * nadie y nada fallaba.  Lo que se comprueba y en que orden lo dice
+         * `vx/module_checks.h`.
+         *
+         * Los contratos de TIPO no se aportan todavia: su huella sale de los
+         * layouts del comprobador de tipos y aqui hay UNO POR MODULO.  De donde
+         * salen al fusionar es una decision pendiente, y se ve que faltan en
+         * esta llamada en vez de estar escondido en otro fichero. */
+        PreOptInput pre;
+        pre.module = &merged;
+        pre.file = &root_path;
+        pre.contracts = &res.contracts;
+        pre.measure_only = opts.emit_ir_preopt;
+        if (!run_pre_opt_checks(pre, res.diagnostics)) {
+            res.ok = false;
+            return res;
         }
     }
 
@@ -5518,14 +5430,15 @@ CompileResult compile_vx_project(
     /* Se comprueba SIEMPRE.  Lo que decide la opcion es el peso del veredicto,
      * no si se mira: saltarse la comprobacion entera dejaba a `--analyze` sin
      * nada que ensenar, que es lo contrario de para lo que existe. */
-    {
-        util::CronoTramo t_borrow_("phase:borrow_across_calls",
-                                   util::flag_on(util::FlagId::Times));
-        analysis::asa::FactBase pre_opt_base(analysis::asa::kStagePreOpt);
-        vx_report_borrow_across_calls(
-            merged, res.diagnostics, root_path, pre_opt_base,
-            opts.violations_are_errors ? DiagLevel::ERR : DiagLevel::WARN);
-    }
+    borrow::check_borrows_before_opt(merged, root_path,
+                                    opts.violations_are_errors,
+                                    res.diagnostics);
+
+    /* El modulo FUSIONADO, antes de que nadie lo toque.  Este momento no se
+     * verificaba: solo se miraba cada dependencia recien bajada, asi que lo que
+     * la fusion pudiera dejar mal no lo veia nadie -- y fusionar es justo donde
+     * se renumeran valores y se juntan bloques de procedencias distintas. */
+    ir::ir_verify_if_asked(merged, "merged", root_path);
 
     {
         util::CronoTramo t_("phase:ir_optimize",
@@ -5697,6 +5610,13 @@ CompileResult compile_vx_project(
      * pico es paginas TOCADAS, asi que lo que cuenta es soltar ANTES de que
      * alguien vaya a pedir, no antes de acabar. */
     (void)analysis::release_range_memo();
+
+    /* Y despues de optimizar, que es el momento mas delicado y el que a este
+     * camino le faltaba: el optimizador opera SOBRE el grafo -- corta bloques,
+     * los une, mueve instrucciones -- y una cirugia mal cerrada no se nota hasta
+     * que el programa hace otra cosa.  El camino de fichero suelto si lo
+     * verificaba; el que toma todo programa real, no. */
+    ir::ir_verify_if_asked(merged, "post-opt", root_path);
 
     cerrar_fase(res.tiempos.optimizar_us, "vx.phase.emit");
 
@@ -6474,11 +6394,8 @@ void vx_report_asm_preconditions(const ir::IrModule &mod, Diagnostics &diags,
         /* Y el diccionario que le falta al analisis del texto: tras la
          * sustitucion, `movdqa [$0], $1` no dice que `$1` mida 128 bits.  Lo
          * dice la CLASE con la que se declaro, que es lo que escribio el
-         * programador. */
-        std::vector<std::pair<std::string, std::string>> clases;
-        clases.reserve(lig.ligaduras.size());
-        for (const analysis::LigaduraAsm &l : lig.ligaduras)
-            clases.emplace_back(l.marcador, l.clase);
+         * programador, y viene hecho con las ligaduras. */
+        const vx::AsmOperandClasses &clases = lig.operand_classes;
 
         /* Se guarda para el segundo recorrido (el de los sitios de llamada) en
          * vez de volver a calcularla: es el mismo hecho sobre la misma funcion,
@@ -6515,7 +6432,7 @@ void vx_report_asm_preconditions(const ir::IrModule &mod, Diagnostics &diags,
                  * ficha, que para eso guarda el ancho de cada operando.  Sin
                  * esto la comprobacion se queda a medias: sabe que la
                  * instruccion exige alineacion pero no de cuantos bytes. */
-                std::vector<std::pair<std::string, std::string>> clases_micro;
+                vx::AsmOperandClasses clases_micro;
                 if (am != nullptr) {
                     clases_micro.reserve(am->operands.size());
                     for (size_t oi = 0; oi < am->operands.size(); ++oi) {
@@ -6526,7 +6443,8 @@ void vx_report_asm_preconditions(const ir::IrModule &mod, Diagnostics &diags,
                             c = o.width == 512   ? "zmm"
                                 : o.width == 256 ? "ymm"
                                                  : "xmm";
-                        clases_micro.emplace_back("$" + std::to_string(oi), c);
+                        clases_micro.push_back(vx::asm_operand_class(
+                            "$" + std::to_string(oi), c));
                     }
                 }
                 const std::string texto =
@@ -6778,10 +6696,7 @@ void vx_report_asm_preconditions(const ir::IrModule &mod, Diagnostics &diags,
     for (const ir::IrFunction &fn : mod.functions) {
         const analysis::AsmBindingFacts lig =
             analysis::compute_asm_bindings(fn);
-        std::vector<std::pair<std::string, std::string>> clases;
-        clases.reserve(lig.ligaduras.size());
-        for (const analysis::LigaduraAsm &l : lig.ligaduras)
-            clases.emplace_back(l.marcador, l.clase);
+        const vx::AsmOperandClasses &clases = lig.operand_classes;
         for (const ir::IrBlock &b : fn.blocks) {
             for (const ir::IrInstr &in : b.instrs) {
                 if (in.op != ir::IrOp::INLINE_ASM) continue;
@@ -6818,36 +6733,10 @@ void vx_report_asm_preconditions(const ir::IrModule &mod, Diagnostics &diags,
     }
 }
 
-void vx_report_borrow_across_calls(const ir::IrModule &mod, Diagnostics &diags,
-                                   const std::string &file,
-                                   analysis::asa::FactBase &base,
-                                   DiagLevel level) {
-    for (const borrow::ExclusiveViolation &v :
-         borrow::check_exclusive_across_calls(mod, base)) {
-        SourceLoc loc;
-        /* La linea de la LLAMADA, que es donde se ve el fallo.  Dentro de la
-         * funcion los dos parametros son dos nombres y no hay nada que senalar:
-         * lo que los junta esta en quien la llama. */
-        loc.line = v.line;
-        loc.set_file(file);
-        diags.diag(
-            loc, level, "VX2053",
-            {std::to_string(v.promised), v.function, std::to_string(v.other)});
-        /* La PRUEBA, en datos: sin la llamada delante esto seria una acusacion
-         * que quien la lee no puede juzgar. */
-        diags.note(loc, vx::diag::format("VX2054", {std::to_string(v.line)}));
-        /* Y la salida, que depende de QUIEN hizo la promesa.  Derivada del
-         * tipo, se habla de prestamos y las salidas las define el modelo;
-         * escrita por el programador, lo que sobra o falta es su declaracion, y
-         * mandarle a terminar un prestamo seria mandarle a buscar algo que en
-         * su programa no existe. */
-        if (v.declared)
-            diags.note(
-                loc, vx::diag::format("VX2056", {std::to_string(v.promised)}));
-        else
-            diags.note(loc, vx::diag::format("VX2055", {}));
-    }
-}
+/* `vx_report_borrow_across_calls` vivia aqui, dentro del fichero del camino de
+ * proyecto, que es de todo menos el sitio de una comprobacion de prestamos.
+ * Ahora es `borrow::report_exclusive_across_calls`, en su modulo, junto a la
+ * que AVERIGUA lo que ella CUENTA. */
 
 void vx_report_bounds(const ir::IrModule &mod, Diagnostics &diags,
                       const std::string &file, analysis::asa::FactBase &base,
@@ -6860,8 +6749,13 @@ void vx_report_bounds(const ir::IrModule &mod, Diagnostics &diags,
      * para este mismo momento lo habria pagado dos veces. */
     analysis::effects::EffectAnalysis &ea =
         base.effects(mod, analysis::asa::kStagePostOpt);
+    /* Y los resumenes de frontera tambien: son los mismos con los que se
+     * construyo ese motor, asi que el comprobador no rehace nada. */
+    const analysis::RangeSummaries &boundary_summaries =
+        base.boundary(mod, analysis::asa::kStagePostOpt);
     for (const analysis::effects::BoundsViolation &v :
-         analysis::effects::check_region_bounds(mod, &ea)) {
+         analysis::effects::check_region_bounds(mod, &ea,
+                                                &boundary_summaries)) {
         SourceLoc loc;
         loc.line = v.line;
         loc.set_file(file);
@@ -6899,9 +6793,11 @@ void vx_report_bounds(const ir::IrModule &mod, Diagnostics &diags,
  */
 struct FnAddrReportCtx {
     analysis::asa::FactBase *base = nullptr;
-    const std::unordered_map<std::string, analysis::EscapeInfo> *by_name =
-        nullptr;
-    /// Lo que se contesta de una funcion que no esta en el mapa: nada escapa.
+    const ir::IrModule *mod = nullptr;
+    /// El escape de cada funcion del modulo, por su posicion.
+    const analysis::ModuleEscape *escape = nullptr;
+    /// Lo que se contesta de una funcion sin cuerpo (nativa): no hay nada suyo
+    /// que se pueda escapar DESDE aqui.
     analysis::EscapeInfo none;
 };
 
@@ -6923,8 +6819,8 @@ fn_addr_points_to_of(void *ctx, const ir::IrFunction &fn) {
 static const analysis::EscapeInfo &fn_addr_escape_of(void *ctx,
                                                      const ir::IrFunction &fn) {
     auto *c = static_cast<FnAddrReportCtx *>(ctx);
-    const auto it = c->by_name->find(fn.name);
-    return it == c->by_name->end() ? c->none : it->second;
+    const analysis::EscapeInfo *e = c->escape->find(*c->mod, fn);
+    return e == nullptr ? c->none : *e;
 }
 
 void vx_report_fn_addr_crossing(const ir::IrModule &mod,
@@ -6937,7 +6833,8 @@ void vx_report_fn_addr_crossing(const ir::IrModule &mod,
 
     FnAddrReportCtx ctx;
     ctx.base = &base;
-    ctx.by_name = &base.escape(mod);
+    ctx.mod = &mod;
+    ctx.escape = &base.escape(mod);
 
     analysis::FnAddrInputs in;
     in.facts = &fn_addr_facts_of;

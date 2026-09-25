@@ -18,9 +18,12 @@
 #include "util/crono_tramo.h" // partir la fase de emitir en lo que de verdad es
 #include "util/env_flags.h"
 #include "vx/compiler.h"
-#include "vx/source_text.h"  // un solo fin de linea para todo el pipeline
-#include "vx/c_header_gen.h" // Fase 4 interop C: vx --emit-header
-#include "vx/vxdbg_emit.h"   // base de conocimiento de depuracion
+#include "vx/source_text.h"    // un solo fin de linea para todo el pipeline
+#include "vx/c_header_gen.h"   // Fase 4 interop C: vx --emit-header
+#include "vx/borrow/borrow_ir_check.h" // la exclusividad cruzando llamadas
+#include "vx/contracts_collect.h"     // lo que el programa DECLARA
+#include "vx/module_checks.h"  // lo que se comprueba antes de optimizar
+#include "vx/vxdbg_emit.h"     // base de conocimiento de depuracion
 
 #include "analyze/bigo.h"
 #include "analyze/fingerprint.h"    // verificacion de contratos de huella
@@ -137,106 +140,13 @@ class PhaseChain {
  *
  * Cualquier valor fuera de rango cae en O1 (default conservador).
  */
-// Recolecta los contratos de huella declarados en el AST (recorriendo los
-// NamespaceDecl) a un mapa por nombre de funcion.  Se lleva APARTE del IR por
-// diseno: son metadata compile-time (modo --analyze) que el codegen no
-// necesita.
-static void collect_contracts_(
-    const std::vector<std::unique_ptr<ast::Node>> &decls,
-    std::unordered_map<std::string, analyze::FunctionContracts> &out) {
-    for (const auto &d : decls) {
-        if (!d) continue;
-        if (d->kind == ast::NodeKind::NamespaceDecl) {
-            collect_contracts_(
-                static_cast<const ast::NamespaceDecl *>(d.get())->decls, out);
-            continue;
-        }
-        if (d->kind == ast::NodeKind::FunctionDecl) {
-            const auto *fd = static_cast<const ast::FunctionDecl *>(d.get());
-            analyze::FunctionContracts c;
-            c.pure = fd->contract_pure;
-            c.nothrow = fd->contract_nothrow;
-            c.nopanic = fd->contract_nopanic;
-            c.alloc_total = fd->contract_alloc;
-            c.alloc_partial = fd->contract_alloc_partial;
-            c.stack_total = fd->contract_stack;
-            c.stack_partial = fd->contract_stack_partial;
-            if (c.any()) out[fd->name] = c;
-        }
-        // Metodos de struct/clase: el mismo contrato sobre lo mismo.  Un metodo
-        // baja a una IrFunction `Tipo__metodo`, asi que se registra con esa
-        // clave -- la que el analizador vera.  Sin esto, un tipo cuya API son
-        // METODOS podia DECLARAR sus contratos pero nadie los verificaba: peor
-        // que no tenerlos, porque parecerian comprobados.
-        auto tomar_metodos =
-            [&](const std::string &tipo,
-                const std::vector<std::unique_ptr<ast::ClassMethodDecl>> &ms) {
-                for (const auto &m : ms) {
-                    if (!m) continue;
-                    analyze::FunctionContracts c;
-                    c.pure = m->contract_pure;
-                    c.nothrow = m->contract_nothrow;
-                    c.nopanic = m->contract_nopanic;
-                    c.alloc_total = m->contract_alloc;
-                    c.alloc_partial = m->contract_alloc_partial;
-                    c.stack_total = m->contract_stack;
-                    c.stack_partial = m->contract_stack_partial;
-                    if (c.any()) out[tipo + "__" + m->name] = c;
-                }
-            };
-        // Los TEMPLATES genericos se saltan: no producen IR (solo lo hacen sus
-        // instanciaciones), asi que su clave no tiene nada contra que
-        // verificarse -- y como `Caja__leer` acaba casando por sufijo con
-        // `Caja_i64__leer`, registrarla haria que cada incumplimiento se
-        // reportase dos veces.  La monomorphizacion copia los contratos, asi
-        // que cada instanciacion se verifica por su cuenta.
-        if (d->kind == ast::NodeKind::StructDecl) {
-            const auto *sd = static_cast<const ast::StructDecl *>(d.get());
-            if (sd->type_params.empty() && !sd->is_specialization)
-                tomar_metodos(sd->name, sd->methods);
-        } else if (d->kind == ast::NodeKind::ClassDecl) {
-            const auto *cd = static_cast<const ast::ClassDecl *>(d.get());
-            if (cd->type_params.empty()) tomar_metodos(cd->name, cd->methods);
-        }
-    }
-}
+// Los contratos de huella se recogen en `vx/module_checks.h`, junto a las
+// comprobaciones que los consumen.  Aqui habia una copia, y el otro camino de
+// compilacion tenia la suya.
 
-// Recolecta los contratos de TIPO (@pod/@no_heap/@size) declarados sobre
-// struct/clase/enum a un mapa por nombre de tipo.  Mismo criterio que
-// collect_contracts_ (compile-time, sin serializar).
-static void collect_type_contracts_(
-    const std::vector<std::unique_ptr<ast::Node>> &decls,
-    std::unordered_map<std::string, analyze::TypeContracts> &out) {
-    for (const auto &d : decls) {
-        if (!d) continue;
-        if (d->kind == ast::NodeKind::NamespaceDecl) {
-            collect_type_contracts_(
-                static_cast<const ast::NamespaceDecl *>(d.get())->decls, out);
-            continue;
-        }
-        auto take = [&](const std::string &name, bool pod, bool no_heap,
-                        int64_t size) {
-            analyze::TypeContracts c;
-            c.pod = pod;
-            c.no_heap = no_heap;
-            c.size = size;
-            if (c.any()) out[name] = c;
-        };
-        if (d->kind == ast::NodeKind::StructDecl) {
-            const auto *sd = static_cast<const ast::StructDecl *>(d.get());
-            take(sd->name, sd->contract_pod, sd->contract_no_heap,
-                 sd->contract_size);
-        } else if (d->kind == ast::NodeKind::ClassDecl) {
-            const auto *cd = static_cast<const ast::ClassDecl *>(d.get());
-            take(cd->name, cd->contract_pod, cd->contract_no_heap,
-                 cd->contract_size);
-        } else if (d->kind == ast::NodeKind::EnumDecl) {
-            const auto *ed = static_cast<const ast::EnumDecl *>(d.get());
-            take(ed->name, ed->contract_pod, ed->contract_no_heap,
-                 ed->contract_size);
-        }
-    }
-}
+// Los contratos declarados se leen en `vx/contracts_collect.h`.  Aqui habia una
+// copia, y el otro camino de compilacion no tenia ninguna: declararlos no
+// comprobaba nada, que es peor que no tenerlos.
 
 // Computa la huella de cada TIPO agregado (struct/clase/enum) a partir de los
 // layouts ya resueltos del type checker.  @pod/@no_heap se componen sobre los
@@ -921,15 +831,7 @@ CompileResult compile_vx_source(const std::string &source,
      * hace pagar a quien solo quiere compilar.  El verificador existia desde
      * hace tiempo y NADIE lo llamaba; solo lo usaba un test sobre un modulo
      * escrito a mano, que es justo el codigo que no tiene los fallos. */
-    if (util::flag_on(util::FlagId::VerifyIr)) {
-        std::vector<std::string> ir_errs;
-        if (!ir::ir_verify(irmod, ir_errs)) {
-            for (const std::string &m : ir_errs)
-                std::fprintf(stderr, "[ir-verify] %s\n", m.c_str());
-            std::fprintf(stderr, "[ir-verify] %zu problemas en '%s'\n",
-                         ir_errs.size(), mod_name.c_str());
-        }
-    }
+    ir::ir_verify_if_asked(irmod, "lowered", mod_name);
 
     // Grafo de conocimiento del programa: los tipos, sus miembros y como se
     // relacionan, mas el mapa que liga los simbolos del artefacto con ellos.
@@ -1362,92 +1264,26 @@ CompileResult compile_vx_source(const std::string &source,
         // contra la huella del IR PRE-opt (@c irmod, donde TODAS las funciones
         // existen -> enforcement completo; semantica source-level: source<=N =>
         // efectivo<=N, sound).  Sound/asimetrico: solo error si es demostrable.
-        /* Antes que nada: si DOS definiciones de la misma nativa se
-         * contradicen, decirlo.  Va fuera del `if (!res.contracts.empty())` a
-         * proposito -- un conflicto lo es aunque el programa no escriba ni un
-         * contrato --, y antes de verificarlos porque explica por que uno puede
-         * no salir: el modulo ya se quedo con la union de lo peor de las dos.
-         */
-        analyze::report_native_effect_conflicts(irmod, filename,
-                                                res.diagnostics);
-        collect_contracts_(mod->decls, res.contracts);
-        if (!res.contracts.empty()) {
-            // Arch del TARGET activo (@Target/AOT cross-compile); vacio = host
-            // de build (x86_64).  Selecciona la tabla de efectos con la que se
-            // analiza cada bloque `asm { }` (x86_64/x86/arm64).
-            std::string fp_os, fp_arch;
-            vx::get_aot_condcomp_target(fp_os, fp_arch);
-            if (fp_arch.empty()) fp_arch = "x86_64";
-            auto fps = analyze::compute_module_fingerprints(irmod, fp_arch);
-            /* Con el modulo: lo que las importaciones DECLAREN de una nativa
-             * cuenta, en vez de volver opaco el cierre entero. */
-            analyze::compose_fingerprints(fps, &res.contracts, &irmod);
-            // En --analyze (`emit_ir_preopt`) NO se emite el error ni se aborta
-            // (ver la nota en compiler_project.cpp): analyze mide, el build
-            // real enforza.
-            if (!opts.emit_ir_preopt) {
-                /* Por la misma puerta que el camino de proyecto: un solo sitio
-                 * decide que hacer con cada veredicto, y el indecidible deja de
-                 * descartarse en silencio. */
-                const analyze::ContractReport rep =
-                    analyze::report_contract_checks(
-                        analyze::verify_contracts(fps, res.contracts), filename,
-                        res.diagnostics);
-                if (rep.violated != 0) {
-                    res.ok = false;
-                    return res;
-                }
-            }
-        }
-        // Contratos de TIPO (@pod/@no_heap/@size): recoger + computar la huella
-        // de los tipos (desde los layouts del type checker) + verificar.  La
-        // huella se calcula SIEMPRE (para el reporte de --analyze); los checks
-        // solo si hay contratos.  Decidibles del layout -> un VIOLATED es
-        // error.
-        collect_type_contracts_(mod->decls, res.type_contracts);
+        collect_function_contracts(mod->decls, res.contracts);
+        /* Los contratos de TIPO y la huella de cada tipo.  La huella se calcula
+         * SIEMPRE (el informe de `--analyze` la ensena); comprobarla es lo que
+         * depende de que haya contratos. */
+        collect_type_contracts(mod->decls, res.type_contracts);
         res.type_fingerprints = compute_type_fingerprints_(tc);
-        if (!res.type_contracts.empty()) {
-            /* Por la MISMA puerta que los de funcion.  Estos son decidibles del
-             * layout -- nunca sale un indecidible --, asi que esa rama no se
-             * usa aqui; pero el criterio de que hacer con cada veredicto tiene
-             * que estar escrito una sola vez, o el dia que cambie se cambiara
-             * en dos de los tres sitios. */
-            const analyze::ContractReport trep =
-                analyze::report_contract_checks(
-                    analyze::verify_type_contracts(res.type_fingerprints,
-                                                   res.type_contracts),
-                    filename, res.diagnostics);
-            if (trep.violated != 0) {
-                res.ok = false;
-                return res;
-            }
-        }
-        /* Una cuenta entera que se sale de su tipo, con los dos operandos
-         * sabidos.  Se mira el intermedio de ANTES de optimizar: es lo que el
-         * usuario escribio, y asi la regla no depende del nivel de
-         * optimizacion -- si dependiera, el mismo programa seria valido o no
-         * segun como se compile.
-         *
-         * Es un ERROR y no un aviso porque envolver sin querer no da un fallo,
-         * da otro numero, y eso no se ve hasta mucho despues.  Para que no lo
-         * sea se escribe un cast al tipo, `(i8)(a + b)`, igual que se declara
-         * cualquier otra conversion que pierde informacion. */
+        /* Y TODAS las comprobaciones previas a optimizar, por la puerta unica.
+         * Estaban escritas aqui dentro, y por eso el camino de proyecto -- que
+         * es el que toma todo programa real -- se quedo sin tres de ellas sin
+         * que nada fallara.  Lo que se comprueba y en que orden lo dice
+         * `vx/module_checks.h`; aqui solo se aporta lo que este camino sabe. */
         {
-            bool hubo_wrap = false;
-            for (const ir::IrFunction &f : irmod.functions) {
-                for (const analyze::IntWrap &w :
-                     analyze::find_int_wraparounds(f)) {
-                    vx::SourceLoc loc;
-                    loc.set_file(filename);
-                    loc.line = static_cast<int>(w.line);
-                    res.diagnostics.diag(
-                        loc, vx::DiagLevel::ERR, "VX2050",
-                        {std::to_string(w.exact), ir::ir_type_name(w.type),
-                         std::to_string(w.lo), std::to_string(w.hi)});
-                    hubo_wrap = true;
-                }
-            }
-            if (hubo_wrap) {
+            PreOptInput pre;
+            pre.module = &irmod;
+            pre.file = &filename;
+            pre.contracts = &res.contracts;
+            pre.type_contracts = &res.type_contracts;
+            pre.type_fingerprints = &res.type_fingerprints;
+            pre.measure_only = opts.emit_ir_preopt;
+            if (!run_pre_opt_checks(pre, res.diagnostics)) {
                 res.ok = false;
                 return res;
             }
@@ -1482,16 +1318,7 @@ CompileResult compile_vx_source(const std::string &source,
          * traen los imports, que puede venir de la cache y no de compilarlo
          * ahora --.  Con esta y la de despues se distingue quien lo rompio: si
          * salta aqui, llego roto; si solo salta despues, lo rompio un pase. */
-        if (util::flag_on(util::FlagId::VerifyIr)) {
-            std::vector<std::string> ir_errs;
-            if (!ir::ir_verify(irmod_for_section, ir_errs)) {
-                for (const std::string &m : ir_errs)
-                    std::fprintf(stderr, "[ir-verify pre-opt] %s\n", m.c_str());
-                std::fprintf(stderr,
-                             "[ir-verify pre-opt] %zu problemas en '%s'\n",
-                             ir_errs.size(), filename.c_str());
-            }
-        }
+        ir::ir_verify_if_asked(irmod_for_section, "pre-opt", filename);
         /* Lo que se sabe de este modulo, ANTES de optimizarlo.
          *
          * El orden no es un detalle: el ASA es donde vive lo que el compilador
@@ -1570,16 +1397,9 @@ CompileResult compile_vx_source(const std::string &source,
          * Base propia y corta: la de mas abajo mira el codigo YA optimizado, y
          * son dos codigos distintos.  Mezclarlos daria respuestas de uno sobre
          * el otro. */
-        {
-            analysis::asa::FactBase pre_opt_base(analysis::asa::kStagePreOpt);
-            /* Con el MISMO peso que en el camino de proyecto.  Aqui iba sin
-             * mirar la opcion, y era una respuesta distinta para el mismo
-             * programa: analizado como fichero suelto acusaba y abortaba,
-             * analizado como proyecto callaba. */
-            vx_report_borrow_across_calls(
-                irmod_for_section, res.diagnostics, filename, pre_opt_base,
-                opts.violations_are_errors ? DiagLevel::ERR : DiagLevel::WARN);
-        }
+        borrow::check_borrows_before_opt(irmod_for_section, filename,
+                                        opts.violations_are_errors,
+                                        res.diagnostics);
 
         /* Y el almacen, si alguien pidio el momento de EN MEDIO: lo que un
          * pase averigua y acto seguido deshace -- el desenrollador sabe
@@ -1613,17 +1433,7 @@ CompileResult compile_vx_source(const std::string &source,
          * optimizador opera SOBRE el grafo -- corta bloques, los une, mueve
          * instrucciones -- y una cirugia mal cerrada no se nota hasta que el
          * programa hace otra cosa. */
-        if (util::flag_on(util::FlagId::VerifyIr)) {
-            std::vector<std::string> ir_errs;
-            if (!ir::ir_verify(irmod_for_section, ir_errs)) {
-                for (const std::string &m : ir_errs)
-                    std::fprintf(stderr, "[ir-verify post-opt] %s\n",
-                                 m.c_str());
-                std::fprintf(stderr,
-                             "[ir-verify post-opt] %zu problemas en '%s'\n",
-                             ir_errs.size(), filename.c_str());
-            }
-        }
+        ir::ir_verify_if_asked(irmod_for_section, "post-opt", filename);
         /* No se serializa todavia: falta saber en que registro dejo el
          * asignador cada valor, y eso solo se sabe tras emitir.  Se guarda y
          * se serializa mas abajo, ya con esa informacion dentro. */

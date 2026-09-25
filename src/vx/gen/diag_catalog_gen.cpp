@@ -247,6 +247,7 @@ const CatEntry kEntries[] = {
     {"VX7043", {"the artifact handed in by the program embedding the VM", "el artefacto que entrego el programa que empotra la VM"}},
     {"VX7044", {"the call to '{0}' says it has arguments but hands in no block holding them", "la llamada a '{0}' dice traer argumentos pero no entrega el bloque que los guarda"}},
     {"VX7045", {"the call to '{0}' passes {1} arguments by the platform convention, and only {2} can be placed that way; declare where they go with register(\"...\") on its parameters", "la llamada a '{0}' pasa {1} argumentos por la convencion de la plataforma, y por ahi solo se pueden colocar {2}; di por donde van con register(\"...\") en sus parametros"}},
+    {"VX7046", {"the intermediate form does not hold up at '{0}': {1} problems in '{2}'", "el intermedio no se sostiene en '{0}': {1} problemas en '{2}'"}},
     {"VX7050", {"diagram written: {0}", "diagrama generado: {0}"}},
     {"VX7051", {"the diagram could not be written to '{0}'", "no se pudo escribir el diagrama en '{0}'"}},
     {"VX7052", {"unknown diagram format '{0}'; use mermaid, graphviz, html, both or all. Falling back to mermaid", "formato de diagrama desconocido '{0}'; usa mermaid, graphviz, html, both o all. Se usa mermaid"}},
@@ -539,6 +540,11 @@ const CatEntry kEntries[] = {
     {"VXA138", {"the construction is in a block nothing reaches", "la construccion esta en un bloque al que no se llega"}},
     {"VXA139", {"an argument of the construction that is not there, or is not valid", "un argumento de la construccion que no esta, o que no vale"}},
     {"VXA140", {"strict JIT: '{0}' was left to the interpreter, because of {1}", "JIT estricto: '{0}' se queda en el interprete, por {1}"}},
+    {"VXA141", {"a field is read on a path where nothing has written it", "un campo se lee por un camino en el que nada lo ha escrito"}},
+    {"VXA142", {"a merge would receive a field that one of its incoming paths never writes", "a una union de caminos le llegaria un campo que uno de ellos no escribe"}},
+    {"VXA143", {"a field written conditionally inside a loop: promoting it costs more than it saves", "un campo escrito de forma condicional dentro de un bucle: promoverlo cuesta mas de lo que ahorra"}},
+    {"VXA144", {"a constructor argument that is not an integer", "un argumento del constructor que no es entero"}},
+    {"VXA145", {"a constructor argument narrower than the field it initializes", "un argumento del constructor mas estrecho que el campo que inicializa"}},
     {"VXE930", {"@Hook(<point>) needs the instrumentation point.  Available: {0}", "@Hook(<punto>) necesita el punto de instrumentacion.  Disponibles: {0}"}},
     {"VXE931", {"unknown instrumentation point in @Hook: '{0}'.  Available: {1}", "punto de instrumentacion desconocido en @Hook: '{0}'.  Disponibles: {1}"}},
     {"VXE932", {"the selector of @Hook(<point>, ...) must be a string (e.g. \"std.*\")", "el selector de @Hook(<punto>, ...) debe ser una cadena (p.ej. \"std.*\")"}},
@@ -819,7 +825,7 @@ const CatEntry kEntries[] = {
     {"use_def.unused", {"'{2}' is never used", "'{2}' no se usa en ningun sitio"}},
     {"value_shape.none", {"it has no values with components", "no tiene valores con componentes"}},
 };
-const int kEntryCount = 798;
+const int kEntryCount = 804;
 
 } // namespace
 

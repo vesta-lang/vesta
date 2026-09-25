@@ -442,8 +442,8 @@ int main() {
         }
         EffectAnalysis ea;
         const ModuleSummary &ms = ea.module_summary(mod);
-        const FunctionSummary &caller = ms.fns.at("caller");
-        const FunctionSummary &callee = ms.fns.at("callee");
+        const FunctionSummary &caller = ms.at("caller");
+        const FunctionSummary &callee = ms.at("callee");
         check(callee.semantic.local.may_allocate,
               "fixpoint: callee local aloca");
         check(!caller.semantic.local.may_allocate,
@@ -487,10 +487,10 @@ int main() {
         }
         EffectAnalysis ea;
         const ModuleSummary &ms = ea.module_summary(mod);
-        check(ms.fns.at("A").semantic.closure.may_throw,
+        check(ms.at("A").semantic.closure.may_throw,
               "fixpoint transitivo: A->B->C(throw) -> A closure may_throw");
         bool a_nothrow = true;
-        for (const auto &c : derive_contracts(ms.fns.at("A")))
+        for (const auto &c : derive_contracts(ms.at("A")))
             if (std::string(c.name) == "nothrow") a_nothrow = c.holds;
         check(!a_nothrow, "fixpoint: A NO es nothrow (throw transitivo)");
     }
@@ -551,7 +551,7 @@ int main() {
         {
             EffectAnalysis ea;
             const ModuleSummary &ms = ea.module_summary(modB);
-            check(ms.fns.at("callB").semantic.closure.may_io,
+            check(ms.at("callB").semantic.closure.may_io,
                   "cross-mod: solo B, allocA externa -> callB closure top "
                   "(may_io)");
         }
@@ -559,8 +559,8 @@ int main() {
         {
             EffectAnalysis ea;
             const ModuleSummary &ps = ea.program_summary({&modA, &modB});
-            const FunctionSummary &cb = ps.fns.at("callB");
-            check(ps.fns.count("allocA") == 1,
+            const FunctionSummary &cb = ps.at("callB");
+            check(ps.get("allocA") != nullptr,
                   "cross-mod: program_summary ve allocA de otro modulo");
             check(cb.semantic.closure.may_allocate,
                   "cross-mod: callB closure aloca (via allocA de otro modulo)");

@@ -610,10 +610,10 @@ class FactBase {
      * pila --, asi que dejarlo morir era pagarlo y no cobrarlo.
      *
      * @param mod Modulo completo.
-     * @return Por nombre de funcion, lo que se le escapa.  Cacheado.
+     * @return Por posicion de cada funcion en el modulo, lo que se le escapa.
+     *         Cacheado.
      */
-    const std::unordered_map<std::string, EscapeInfo> &
-    escape(const ir::IrModule &mod);
+    const ModuleEscape &escape(const ir::IrModule &mod);
 
     /**
      * @brief Los hechos de @p fn han caducado porque su IR cambio.

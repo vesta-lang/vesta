@@ -1804,10 +1804,10 @@ std::string asm_contador_de_repeticion(const std::string &arch) {
     return std::string();
 }
 
-uint32_t asm_ancho_acceso_bytes(
-    const std::vector<std::string> &ops, size_t idx_mem,
-    const std::vector<std::pair<std::string, std::string>> &clases_operando,
-    const std::string &arch) {
+uint32_t asm_ancho_acceso_bytes(const std::vector<std::string> &ops,
+                                size_t idx_mem,
+                                const AsmOperandClasses &clases_operando,
+                                const std::string &arch) {
     if (idx_mem >= ops.size()) return 0;
 
     /* Primero, la pista de tamano si el fuente la escribio (`qword ptr [rdi]`).
@@ -1826,11 +1826,9 @@ uint32_t asm_ancho_acceso_bytes(
         uint32_t bits = 0;
         if (ops[k][0] == '$') {
             // Lo eligio el compilador: su ancho es el de la clase declarada.
-            for (const auto &co : clases_operando)
-                if (co.first == ops[k]) {
-                    bits = asm_ancho_bits_de_clase(co.second);
-                    break;
-                }
+            if (const std::string *cls =
+                    asm_declared_class_of(clases_operando, ops[k]))
+                bits = asm_ancho_bits_de_clase(*cls);
         } else {
             bits = asm_ancho_bits_de_clase(ops[k]);
         }
@@ -1868,9 +1866,9 @@ AsmInferResult asm_infer_clobbers(const std::string &nasm_body,
     return asm_infer_clobbers(nasm_body, bound_canon, {});
 }
 
-AsmInferResult asm_infer_clobbers(
-    const std::string &nasm_body, const std::vector<std::string> &bound_canon,
-    const std::vector<std::pair<std::string, std::string>> &clases_operando) {
+AsmInferResult asm_infer_clobbers(const std::string &nasm_body,
+                                  const std::vector<std::string> &bound_canon,
+                                  const AsmOperandClasses &clases_operando) {
     AsmInferResult res;
     // Set de regs ligados (canonicos) a EXCLUIR de los clobbers.
     std::unordered_set<std::string> bound(bound_canon.begin(),
@@ -2038,11 +2036,9 @@ AsmInferResult asm_infer_clobbers(
                      * ligaduras.  Sin esto, justo la forma que usa la stdlib se
                      * quedaba sin poder comprobarse. */
                     uint32_t bits = 0;
-                    for (const auto &co : clases_operando)
-                        if (co.first == toks[k]) {
-                            bits = asm_ancho_bits_de_clase(co.second);
-                            break;
-                        }
+                    if (const std::string *cls =
+                            asm_declared_class_of(clases_operando, toks[k]))
+                        bits = asm_ancho_bits_de_clase(*cls);
                     if (bits == 0) {
                         const instr_db::ParsedOp po =
                             instr_db::parse_operand(isa_actual(), toks[k]);

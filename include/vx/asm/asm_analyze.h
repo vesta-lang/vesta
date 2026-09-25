@@ -47,6 +47,8 @@
 #include <string>
 #include <vector>
 
+#include "vx/asm/asm_operand_class.h" // clases declaradas de los operandos
+
 namespace vx {
 
 /**
@@ -278,13 +280,13 @@ AsmBlockEffects asm_analyze_block_no_classes(const std::string &nasm_body,
  *
  * @param nasm_body Cuerpo NASM/ARM.
  * @param arch      Arquitectura del cuerpo.
- * @param clases_operando Pares (marcador en el cuerpo, clase declarada).
+ * @param clases_operando Clase declarada de cada operando ligado.
  * @return Los mismos efectos, con la extension de cada acceso resuelta hasta
  *         donde el bloque permita.
  */
-AsmBlockEffects asm_analyze_block(
-    const std::string &nasm_body, const std::string &arch,
-    const std::vector<std::pair<std::string, std::string>> &clases_operando);
+AsmBlockEffects asm_analyze_block(const std::string &nasm_body,
+                                  const std::string &arch,
+                                  const AsmOperandClasses &clases_operando);
 
 } // namespace vx
 

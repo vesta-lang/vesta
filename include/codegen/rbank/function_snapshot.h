@@ -97,7 +97,8 @@
  * ===========================================================================
  *      value_reqs()                          [Values]
  *        |-- liveness()                       [Liveness]  compute_liveness
- *        |-- loop_facts()                     [Loops]     compute_loop_facts
+ *        |     '-- block_liveness()           [BlockLive] compute_block_liveness
+ *        |-- loop_facts()                    [Loops]     compute_loop_facts
  *        |-- profile_facts()                  [Profile]
  *        |     '-- loop_facts()   (cache hit)
  *        '-- call positions <- liveness()   (cache hit)
@@ -114,7 +115,8 @@
  * ===========================================================================
  *   Fact      value_type                   productor           capa
  *   -------   --------------------------   -----------------   ----------
- *   Liveness  ir::LivenessResult           compute_liveness    STRUCTURAL
+ *   BlockLive ir::BlockLiveness            compute_block_live  STRUCTURAL
+ *   Liveness  ir::LivenessResult           compute_liveness    DERIVED
  *   Loops     analysis::LoopFacts          compute_loop_facts  DERIVED
  *   Profile   analysis::ProfileFacts       compute_profile..   DERIVED
  *   Values    vector<ValueRequirements>    assemble_value..    adaptador
@@ -180,8 +182,9 @@ enum class Fact : uint32_t {
     Remat =
         1u << 4, ///< RematFacts (Tipo A, IR-driven: recomputabilidad + receta).
     UseDef = 1u << 5, ///< UseDefFacts (Tipo A, IR-driven: next-use por valor).
-    // Futuro: Dom = 1u<<6, Alias = 1u<<7, Escape = 1u<<8, Memory = 1u<<9, ...
-    All = Liveness | Loops | Profile | Values | Remat | UseDef,
+    BlockLive = 1u << 6, ///< Vivos por bloque (Tipo A; de ellos sale Liveness).
+    // Futuro: Dom = 1u<<7, Alias = 1u<<8, Escape = 1u<<9, Memory = 1u<<10, ...
+    All = Liveness | Loops | Profile | Values | Remat | UseDef | BlockLive,
 };
 
 /**
@@ -242,6 +245,7 @@ struct FunctionSnapshot {
     LazyFact<analysis::RematFacts>
         remat; ///< Tipo A (recomputabilidad + receta).
     LazyFact<analysis::UseDefFacts> use_def; ///< Tipo A (next-use por valor).
+    LazyFact<ir::BlockLiveness> block_live;  ///< Tipo A (vivos por bloque).
     // Futuro: LazyFact<analysis::DomFacts> dom;  LazyFact<analysis::AliasFacts>
     // alias; ...
 
@@ -254,6 +258,7 @@ struct FunctionSnapshot {
         case Fact::Values: return values.ready();
         case Fact::Remat: return remat.ready();
         case Fact::UseDef: return use_def.ready();
+        case Fact::BlockLive: return block_live.ready();
         default: return false;
         }
     }
@@ -281,6 +286,10 @@ struct FunctionSnapshot {
 
     // --- Accessors de conveniencia (azucar sobre query<T>(); nombres
     // estables). ---
+    /** @brief Vivos a la entrada y a la salida de cada bloque. */
+    const ir::BlockLiveness &block_liveness() const {
+        return query<ir::BlockLiveness>();
+    }
     /** @brief Intervalos de vida. */
     const ir::LivenessResult &liveness() const {
         return query<ir::LivenessResult>();
@@ -392,6 +401,11 @@ inline const LazyFact<analysis::UseDefFacts> &
 FunctionSnapshot::cell<analysis::UseDefFacts>() const {
     return use_def;
 }
+template <>
+inline const LazyFact<ir::BlockLiveness> &
+FunctionSnapshot::cell<ir::BlockLiveness>() const {
+    return block_live;
+}
 
 // ---------------------------------------------------------------------------
 //  Productores registrados por tipo (QueryProducer<T>): AQUI vive el ALGORITMO.
@@ -399,9 +413,14 @@ FunctionSnapshot::cell<analysis::UseDefFacts>() const {
 //  QueryProducer<T>::produce. Las dependencias se resuelven SOLAS (produce
 //  llama a s.query<U>()).
 // ---------------------------------------------------------------------------
+template <> struct QueryProducer<ir::BlockLiveness> {
+    static ir::BlockLiveness produce(const FunctionSnapshot &s) {
+        return ir::compute_block_liveness(*s.fn);
+    }
+};
 template <> struct QueryProducer<ir::LivenessResult> {
     static ir::LivenessResult produce(const FunctionSnapshot &s) {
-        return ir::compute_liveness(*s.fn);
+        return ir::compute_liveness(*s.fn, s.query<ir::BlockLiveness>());
     }
 };
 template <> struct QueryProducer<analysis::LoopFacts> {

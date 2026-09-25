@@ -88,6 +88,12 @@ struct AsmBindingFacts {
     /// Son unas pocas por funcion, y estan en el camino de cada bloque de asm.
     std::vector<LigaduraAsm> ligaduras;
 
+    /// La clase declarada de cada ligadura, en la forma que pide el analisis
+    /// del texto de un bloque, y en el mismo orden que @ref ligaduras.  Se
+    /// arma AQUI y una vez: cada consumidor la reconstruia copiando las dos
+    /// cadenas de cada ligadura en un par sin nombres.
+    vx::AsmOperandClasses operand_classes;
+
     /**
      * @struct Candidatas
      * @brief Las ligaduras que responden a un nombre, contiguas en memoria.

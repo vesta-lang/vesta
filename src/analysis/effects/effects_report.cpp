@@ -770,9 +770,9 @@ void print_effects_report(std::ostream &os, const ir::IrModule &mod,
        << backend_name(backend) << " ===\n\n";
     // Orden estable: el de mod.functions.
     for (const ir::IrFunction &fn : mod.functions) {
-        auto it = ms.fns.find(fn.name);
-        if (it == ms.fns.end()) continue;
-        const FunctionSummary &s = it->second;
+        const FunctionSummary *found = ms.get(fn.name);
+        if (found == nullptr) continue;
+        const FunctionSummary &s = *found;
 
         os << fn.name << "\n";
         /* Los que SE CUMPLEN, y detras los que NO con su motivo.  Saber que un
@@ -1022,9 +1022,9 @@ void effects_json(std::ostream &os, const ir::IrModule &mod, Backend backend) {
     os << "{\"functions\":[";
     bool first = true;
     for (const ir::IrFunction &fn : mod.functions) {
-        auto it = ms.fns.find(fn.name);
-        if (it == ms.fns.end()) continue;
-        const FunctionSummary &s = it->second;
+        const FunctionSummary *found = ms.get(fn.name);
+        if (found == nullptr) continue;
+        const FunctionSummary &s = *found;
         if (!first) os << ",";
         first = false;
 

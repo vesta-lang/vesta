@@ -23,15 +23,23 @@
 #include "jit/ssa_coalesce.h"
 
 #include "jit/interval.h" // LiveInterval (add_range, first_overlap_from)
+#include "ir/block_liveness.h" // vivos por bloque, el productor comun
+#include "util/named_alloc.h"
 
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
-#include <functional>
 #include <unordered_set>
 #include <vector>
 
 namespace jit {
+
+namespace scratch {
+struct CoalesceLiveInHere;  ///< Bloque en el que el valor vive a la entrada.
+struct CoalesceLiveOutHere; ///< Bloque en el que el valor vive a la salida.
+struct CoalesceRangedIn;    ///< Bloque en el que ya se le dio rango al valor.
+struct CoalesceCandidates;  ///< Valores a los que dar rango en el bloque.
+} // namespace scratch
 
 /**
  * @brief Que le hace al destino de un binop la ALU de @p isa.
@@ -72,6 +80,115 @@ bool is_alu_binop(ir::IrOp op) noexcept {
 /// puede compartir registro con op1 (operands[1]): el `mov dst, op0`
 /// clobberearia op1 antes de leerlo.  Donde la ALU es de tres direcciones no
 /// hay tal `mov`, y por tanto tampoco la restriccion.
+/// Los usos de una instruccion: pocos, dentro del propio objeto.
+using InstrUses = util::SmallVector<ir::IrValueId, 4>;
+
+/**
+ * @brief Deja en @p out los USOS de @p in.
+ *
+ * Los argumentos de PHI NO son usos en este bloque: se usan al final del
+ * predecesor, y los trata aparte quien los necesite.  Es la misma definicion de
+ * uso que la de `compute_block_liveness`: el `func_ptr` cuenta en CUALQUIER
+ * operacion que lo lleve -- antes solo en CALLIND, y el de CALLCLOSURE parecia
+ * muerto antes de la llamada.
+ */
+void collect_uses(const ir::IrInstr &in, InstrUses &out) {
+    out.clear();
+    if (in.op == ir::IrOp::PHI) return; // args gestionados aparte
+    for (ir::IrValueId u : in.operands)
+        if (u != ir::IR_NO_VALUE) out.push_back(u);
+    if (in.func_ptr != ir::IR_NO_VALUE) out.push_back(in.func_ptr);
+}
+
+/// Estado de un valor dentro del bloque que se recorre, al dar rangos.
+struct BlockTouch {
+    std::vector<uint32_t> &first, &first_def, &last_use;
+    std::vector<uint8_t> &used, &def;
+    std::vector<uint32_t> &touched; ///< los tocados, para limpiarlos luego.
+
+    /// Apunta @p v como tocado en este bloque la primera vez que aparece.
+    void mark(uint32_t v) {
+        if (first[v] == UINT32_MAX && first_def[v] == UINT32_MAX && !used[v] &&
+            !def[v])
+            touched.push_back(v);
+    }
+};
+
+/**
+ * @brief Los grupos de valores que se van fundiendo, y lo que decide si dos
+ *        pueden fundirse.
+ *
+ * Union-busqueda sobre los valores, con los miembros de cada grupo en su
+ * representante.  Las tres preguntas miran el grupo MENOR, que es lo que las
+ * mantiene baratas cuando un grupo crece.
+ */
+struct CoalesceClusters {
+    std::vector<uint32_t> &parent;
+    std::vector<util::SmallVector<uint32_t, 2>> &members;
+    /// Pares que no pueden compartir registro: destino y segundo operando de
+    /// una operacion de dos direcciones.
+    const std::vector<util::SmallVector<uint32_t, 2>> &forbidden;
+    /// Grafo de interferencia preciso sobre los valores originales.
+    const std::vector<util::SmallVector<uint32_t, 8>> &adj;
+    /// El valor esta vivo a traves de una llamada.
+    const std::vector<char> &crosses;
+    uint32_t nv;
+
+    /// Representante del grupo de @p x, comprimiendo el camino.
+    uint32_t find(uint32_t x) {
+        while (parent[x] != x) {
+            parent[x] = parent[parent[x]];
+            x = parent[x];
+        }
+        return x;
+    }
+
+    /// Algun par prohibido une los dos grupos.
+    bool has_forbidden(uint32_t ra, uint32_t rb) {
+        const uint32_t small =
+            members[ra].size() <= members[rb].size() ? ra : rb;
+        const uint32_t other = (small == ra) ? rb : ra;
+        for (uint32_t m : members[small])
+            for (uint32_t f : forbidden[m])
+                if (find(f) == other) return true;
+        return false;
+    }
+
+    /// Algun par de miembros, uno de cada grupo, interfiere.  Correcto sobre
+    /// los valores originales: si dos originales interfieren, sus grupos no
+    /// pueden fundirse.
+    bool interfere(uint32_t ra, uint32_t rb) {
+        const uint32_t small =
+            members[ra].size() <= members[rb].size() ? ra : rb;
+        const uint32_t other = (small == ra) ? rb : ra;
+        for (uint32_t ma : members[small]) {
+            if (ma >= nv) continue;
+            for (uint32_t nb : adj[ma])
+                if (find(nb) == other) return true;
+        }
+        return false;
+    }
+
+    /// Algun miembro del grupo esta vivo a traves de una llamada.
+    bool crosses_call(uint32_t rep) const {
+        for (uint32_t m : members[rep])
+            if (m < nv && crosses[m]) return true;
+        return false;
+    }
+};
+
+/**
+ * @brief Reescribe @p o a su representante si es un vreg fundido.
+ * @return true si cambio.
+ */
+bool remap_operand(MOperand &o, const std::vector<ir::IrValueId> &remap) {
+    if (!o.is_vreg()) return false;
+    const uint32_t vid = o.vreg_id();
+    if (vid >= remap.size() || remap[vid] == vid) return false;
+    o = MOperand::make_vreg(remap[vid], o.vreg_class(), o.width);
+    return true;
+}
+
 bool is_two_addr_ir(ir::IrOp op, DstKind dst) noexcept {
     return dst == DstKind::Destructive && is_alu_binop(op);
 }
@@ -80,6 +197,12 @@ bool is_two_addr_ir(ir::IrOp op, DstKind dst) noexcept {
 
 std::vector<ir::IrValueId> ssa_phi_coalesce_remap(const ir::IrFunction &fn,
                                                   DstKind dst) {
+    return ssa_phi_coalesce_remap(fn, dst, ir::compute_block_liveness(fn));
+}
+
+std::vector<ir::IrValueId> ssa_phi_coalesce_remap(const ir::IrFunction &fn,
+                                                  DstKind dst,
+                                                  const ir::BlockLiveness &live) {
     const uint32_t NV = static_cast<uint32_t>(fn.values.size());
     const uint32_t NB = static_cast<uint32_t>(fn.blocks.size());
     std::vector<ir::IrValueId> remap; // vacio = nada que coalescer
@@ -100,117 +223,22 @@ std::vector<ir::IrValueId> ssa_phi_coalesce_remap(const ir::IrFunction &fn,
         }
     }
 
-    /* Helper: recorre los USOS (IrValueId) de una instr.  Los args de PHI NO
-     * son usos en este bloque (se usan al final del predecesor). */
-    auto each_use = [](const ir::IrInstr &in, auto &&fn_use) {
-        if (in.op == ir::IrOp::PHI) return; // args gestionados aparte
-        for (ir::IrValueId u : in.operands)
-            if (u != ir::IR_NO_VALUE) fn_use(u);
-        if (in.op == ir::IrOp::CALLIND && in.func_ptr != ir::IR_NO_VALUE)
-            fn_use(in.func_ptr);
-    };
+    /* Los usos de cada instruccion se dejan aqui (ver @ref collect_uses); la
+     * lista se reutiliza, asi que no pide memoria tras la primera. */
+    InstrUses uses;
 
-    /* ---- 2) gen/kill por bloque (bitsets de 64 bits) ----
+    /* ---- 2) Los vivos por bloque llegan en `live` ----
      *
-     * Un BIT por valor, no un byte.  Son CUATRO tablas de NB*NV, y el punto
-     * fijo las recorre enteras en cada vuelta: en una funcion grande eso son
-     * decenas de megabytes moviendose una y otra vez, y este era el mayor coste
-     * propio del compilador (1,692 s de 19,4 s).
-     *
-     * Con palabras de 64 bits se pide ocho veces menos memoria y, sobre todo,
-     * las tres operaciones del bucle interno -- unir con los sucesores,
-     * comparar con lo anterior, y gen U (out - kill) -- pasan a resolver 64
-     * valores por instruccion en vez de uno, y sin ninguna rama. */
-    const size_t W = (size_t(NV) + 63) / 64;
-    auto row = [W](std::vector<uint64_t> &t, uint32_t b) {
-        return t.data() + size_t(b) * W;
-    };
-    auto crow = [W](const std::vector<uint64_t> &t, uint32_t b) {
-        return t.data() + size_t(b) * W;
-    };
-    auto get_bit = [](const uint64_t *r, uint32_t v) {
-        return (r[v >> 6] >> (v & 63)) & 1ull;
-    };
-    auto set_bit = [](uint64_t *r, uint32_t v) {
-        r[v >> 6] |= 1ull << (v & 63);
-    };
-    auto clr_bit = [](uint64_t *r, uint32_t v) {
-        r[v >> 6] &= ~(1ull << (v & 63));
-    };
+     * Antes se calculaban aqui con un punto fijo sobre bitsets de BLOQUES POR
+     * VALORES: cada vuelta recorria la tabla entera, y con el `main` de 205.000
+     * instrucciones de un fuente generado eso era el primer coste del
+     * compilador (36 s de 99 medidos con VTune) y buena parte de su pico de
+     * memoria.  Los da `compute_block_liveness`, que sube desde cada uso hasta
+     * la definicion con un coste del tamano de la respuesta; el emisor los
+     * consulta al snapshot de la funcion y los comparte con la vivacidad de
+     * sus intervalos, asi que nadie los calcula dos veces. */
 
-    std::vector<uint64_t> gen(size_t(NB) * W, 0), kill(size_t(NB) * W, 0);
-    for (uint32_t b = 0; b < NB; ++b) {
-        uint64_t *g = row(gen, b);
-        uint64_t *k = row(kill, b);
-        for (const ir::IrInstr &in : fn.blocks[b].instrs) {
-            each_use(in, [&](ir::IrValueId u) {
-                if (u < NV && !get_bit(k, u)) set_bit(g, u);
-            });
-            if (in.dst != ir::IR_NO_VALUE && in.dst < NV)
-                set_bit(k, in.dst); // incluye phi dst
-        }
-    }
-
-    /* ---- 3) Liveness dataflow PHI-aware a punto fijo ----
-     * live_out[b] = U_succ [ (live_in[succ] - phi_defs[succ]) U
-     *                        {args de phis de succ que vienen de b} ]
-     * live_in[b]  = gen[b] U (live_out[b] - kill[b]). */
-    std::vector<uint64_t> live_in(size_t(NB) * W, 0),
-        live_out(size_t(NB) * W, 0);
-    bool changed = true;
-    /* Fuera de los dos bucles: se reutiliza y se limpia, en vez de pedir y
-     * devolver memoria por cada bloque de cada vuelta.  El contenido se
-     * construye desde cero igual que antes -- se limpia al entrar --, asi que
-     * lo unico que desaparece es el ir y venir al asignador. */
-    std::vector<uint64_t> nout(W, 0);
-    while (changed) {
-        changed = false;
-        for (uint32_t bi = NB; bi-- > 0;) {
-            const ir::IrBlock &blk = fn.blocks[bi];
-            /* new_out */
-            std::fill(nout.begin(), nout.end(), 0);
-            for (ir::IrBlockId s : blk.succs) {
-                if (s >= NB) continue;
-                const ir::IrBlock &sb = fn.blocks[s];
-                /* live_in[s] menos los phi-defs de s */
-                const uint64_t *lis = crow(live_in, s);
-                for (size_t w = 0; w < W; ++w)
-                    nout[w] |= lis[w];
-                for (const ir::IrInstr &in : sb.instrs) {
-                    if (in.op != ir::IrOp::PHI) continue;
-                    if (in.dst < NV)
-                        clr_bit(nout.data(), in.dst); // quitar phi-def
-                }
-                /* mas los args de phis de s que vienen de bi */
-                for (const ir::IrInstr &in : sb.instrs) {
-                    if (in.op != ir::IrOp::PHI) continue;
-                    for (const ir::IrPhiArg &a : in.phi_args)
-                        if (a.block == bi && a.value < NV)
-                            set_bit(nout.data(), a.value);
-                }
-            }
-            uint64_t *lo = row(live_out, bi);
-            for (size_t w = 0; w < W; ++w) {
-                if (nout[w] != lo[w]) {
-                    lo[w] = nout[w];
-                    changed = true;
-                }
-            }
-            /* new_in = gen U (out - kill) */
-            const uint64_t *g = crow(gen, bi);
-            const uint64_t *k = crow(kill, bi);
-            uint64_t *li = row(live_in, bi);
-            for (size_t w = 0; w < W; ++w) {
-                const uint64_t ni = g[w] | (lo[w] & ~k[w]);
-                if (ni != li[w]) {
-                    li[w] = ni;
-                    changed = true;
-                }
-            }
-        }
-    }
-
-    /* ---- 4) Construccion de rangos precisos por valor ---- */
+    /* ---- 3) Construccion de rangos precisos por valor ---- */
     std::vector<LiveInterval> iv(NV);
     for (uint32_t v = 0; v < NV; ++v)
         iv[v].vreg = v;
@@ -218,6 +246,15 @@ std::vector<ir::IrValueId> ssa_phi_coalesce_remap(const ir::IrFunction &fn,
         b_last_use(NV, 0);
     std::vector<uint8_t> b_used(NV, 0), b_def(NV, 0);
     std::vector<uint32_t> touched;
+    /* Marcas por bloque: el bloque en curso las pone y nadie las limpia,
+     * porque la siguiente vuelta pregunta por OTRO bloque. */
+    util::NamedVector<ir::IrBlockId, scratch::CoalesceLiveInHere> in_here(
+        NV, ir::IR_NO_BLOCK);
+    util::NamedVector<ir::IrBlockId, scratch::CoalesceLiveOutHere> out_here(
+        NV, ir::IR_NO_BLOCK);
+    util::NamedVector<ir::IrBlockId, scratch::CoalesceRangedIn> ranged_in(
+        NV, ir::IR_NO_BLOCK);
+    util::NamedVector<ir::IrValueId, scratch::CoalesceCandidates> candidates;
     for (uint32_t b = 0; b < NB; ++b) {
         const ir::IrBlock &blk = fn.blocks[b];
         const uint32_t bstart = block_start[b], bend = block_end[b];
@@ -229,19 +266,17 @@ std::vector<ir::IrValueId> ssa_phi_coalesce_remap(const ir::IrFunction &fn,
             b_def[v] = 0;
         }
         touched.clear();
-        auto mark = [&](uint32_t v) {
-            if (b_first[v] == UINT32_MAX && b_first_def[v] == UINT32_MAX &&
-                !b_used[v] && !b_def[v])
-                touched.push_back(v);
-        };
+        BlockTouch touch{b_first, b_first_def, b_last_use,
+                         b_used,  b_def,       touched};
         const uint32_t base = first_gi[b];
         for (size_t j = 0; j < blk.instrs.size(); ++j) {
             const ir::IrInstr &in = blk.instrs[j];
             const uint32_t gi = base + static_cast<uint32_t>(j);
             const uint32_t use_pos = 2u * gi, def_pos = 2u * gi + 1u;
-            each_use(in, [&](ir::IrValueId u) {
-                if (u >= NV) return;
-                mark(u);
+            collect_uses(in, uses);
+            for (ir::IrValueId u : uses) {
+                if (u >= NV) continue;
+                touch.mark(u);
                 b_used[u] = 1;
                 b_last_use[u] = use_pos;
                 if (use_pos < b_first[u]) b_first[u] = use_pos;
@@ -252,23 +287,39 @@ std::vector<ir::IrValueId> ssa_phi_coalesce_remap(const ir::IrFunction &fn,
                  * Rellenarlas aqui era un vector en el monton por valor que
                  * nadie leia, y la copia `merged = iv` lo duplicaba: 1.732.250
                  * reservas al compilar 441.089 lineas, el 1,5% del total. */
-            });
+            }
             if (in.dst != ir::IR_NO_VALUE && in.dst < NV) {
-                mark(in.dst);
+                touch.mark(in.dst);
                 b_def[in.dst] = 1;
                 if (def_pos < b_first_def[in.dst])
                     b_first_def[in.dst] = def_pos;
                 if (def_pos < b_first[in.dst]) b_first[in.dst] = def_pos;
             }
         }
-        /* Rango de cada valor relevante en este bloque. */
-        const uint64_t *li_b = crow(live_in, b);
-        const uint64_t *lo_b = crow(live_out, b);
-        for (uint32_t v = 0; v < NV; ++v) {
-            const bool in_ = get_bit(li_b, v) != 0;
-            const bool out_ = get_bit(lo_b, v) != 0;
+        /* Rango de cada valor relevante en este bloque.  Solo los que
+         * APARECEN en el o viven a su entrada o salida: preguntar por los NV
+         * valores de la funcion en cada bloque era bloques por valores, y casi
+         * todas las respuestas eran que no. */
+        const ir::IrBlockId bid = ir::IrBlockId(b);
+        const ir::IrValueList ins_b = live.live_in(bid);
+        const ir::IrValueList outs_b = live.live_out(bid);
+        candidates.clear();
+        for (ir::IrValueId v : ins_b) {
+            in_here[v] = bid;
+            candidates.push_back(v);
+        }
+        for (ir::IrValueId v : outs_b) {
+            out_here[v] = bid;
+            candidates.push_back(v);
+        }
+        for (uint32_t v : touched)
+            candidates.push_back(ir::IrValueId(v));
+        for (ir::IrValueId v : candidates) {
+            if (ranged_in[v] == bid) continue; // ya salio por otra lista
+            ranged_in[v] = bid;
+            const bool in_ = in_here[v] == bid;
+            const bool out_ = out_here[v] == bid;
             const bool appears = (b_first[v] != UINT32_MAX);
-            if (!in_ && !out_ && !appears) continue;
             const uint32_t start =
                 in_ ? bstart : (appears ? b_first[v] : bstart);
             uint32_t end;
@@ -290,17 +341,10 @@ std::vector<ir::IrValueId> ssa_phi_coalesce_remap(const ir::IrFunction &fn,
     // de state_machine -- sin perder el coalescing del acumulador
     // loop-carried.)
 
-    /* ---- 5) Coalescing de congruencias de PHI ---- */
+    /* ---- 4) Coalescing de congruencias de PHI ---- */
     std::vector<uint32_t> parent(NV);
     for (uint32_t v = 0; v < NV; ++v)
         parent[v] = v;
-    std::function<uint32_t(uint32_t)> find = [&](uint32_t x) -> uint32_t {
-        while (parent[x] != x) {
-            parent[x] = parent[parent[x]];
-            x = parent[x];
-        }
-        return x;
-    };
     /* Que valores tenian ALGUN rango vivo ANTES de fundir.  La decision de mas
      * abajo mira eso -- "este valor no vive en ningun sitio, no hay nada que
      * coalescer" -- y tiene que ser del intervalo ORIGINAL: fundir solo ANADE
@@ -349,15 +393,6 @@ std::vector<ir::IrValueId> ssa_phi_coalesce_remap(const ir::IrFunction &fn,
             }
         }
     }
-    auto has_forbidden = [&](uint32_t ra, uint32_t rb) -> bool {
-        const uint32_t small =
-            members[ra].size() <= members[rb].size() ? ra : rb;
-        const uint32_t other = (small == ra) ? rb : ra;
-        for (uint32_t m : members[small])
-            for (uint32_t f : forbidden[m])
-                if (find(f) == other) return true;
-        return false;
-    };
     /* ---- Grafo de interferencia PRECISO (live-at-def, Chaitin/Hack) ----
      * El overlap de rangos LINEALES (first_overlap_from) es impreciso en dos
      * clases: (a) hermanos de un if/else -- el diamante `%d=phi[%s,%o]` con
@@ -369,7 +404,7 @@ std::vector<ir::IrValueId> ssa_phi_coalesce_remap(const ir::IrFunction &fn,
      * `%s=%o+c` -> NO coalesce).  Construccion: walk BACKWARD por bloque desde
      * live_out; en cada def, aristas dst<->{vivos-tras-el-def}.  Los phi dsts
      * (def en la entrada, en paralelo) NO interfieren entre si ni con sus args
-     * (each_use excluye los phi args) -> se preservan como candidatos a
+     * (collect_uses excluye los phi args) -> se preservan como candidatos a
      * coalescer.  Gated con VESTA_SSA_COALESCE (el flag maestro). */
     /* Listas contiguas, no conjuntos hash.  Eran NV conjuntos, cada uno con sus
      * propios nodos y sus propias peticiones de memoria, y lo unico que se hace
@@ -392,21 +427,11 @@ std::vector<ir::IrValueId> ssa_phi_coalesce_remap(const ir::IrFunction &fn,
             for (uint32_t v : vivos)
                 liveset[v] = 0;
             vivos.clear();
-            /* Solo los bits ENCENDIDOS: los conjuntos vivos son dispersos, asi
-             * que preguntar por los NV valores era recorrer sobre todo ceros.
-             * Con `ctz` se salta directamente al siguiente vivo. */
-            const uint64_t *lo_b = crow(live_out, b);
-            for (size_t w = 0; w < W; ++w) {
-                uint64_t bits = lo_b[w];
-                while (bits) {
-                    const uint32_t v =
-                        static_cast<uint32_t>(w * 64) +
-                        static_cast<uint32_t>(__builtin_ctzll(bits));
-                    bits &= bits - 1;
-                    liveset[v] = 1;
-                    donde[v] = static_cast<uint32_t>(vivos.size());
-                    vivos.push_back(v);
-                }
+            /* Los vivos a la salida, tal cual vienen: la fila ya es dispersa. */
+            for (ir::IrValueId v : live.live_out(ir::IrBlockId(b))) {
+                liveset[v] = 1;
+                donde[v] = static_cast<uint32_t>(vivos.size());
+                vivos.push_back(v);
             }
             const auto &ins = fn.blocks[b].instrs;
             for (size_t j = ins.size(); j-- > 0;) {
@@ -427,30 +452,16 @@ std::vector<ir::IrValueId> ssa_phi_coalesce_remap(const ir::IrFunction &fn,
                         vivos.pop_back();
                     }
                 }
-                each_use(in, [&](ir::IrValueId u) {
-                    if (u >= NV || liveset[u]) return;
+                collect_uses(in, uses);
+                for (ir::IrValueId u : uses) {
+                    if (u >= NV || liveset[u]) continue;
                     liveset[u] = 1; // uso -> vivo antes del def
                     donde[u] = static_cast<uint32_t>(vivos.size());
                     vivos.push_back(u);
-                });
+                }
             }
         }
     }
-    /* Interferencia de CLUSTERS: dos representantes interfieren sii algun par
-     * de miembros (uno de cada) tiene una arista.  Static adj sobre vregs
-     * originales; correcto porque si dos originales interfieren, sus clusters
-     * no pueden fusionarse.  Itera el cluster menor. */
-    auto interfere = [&](uint32_t ra, uint32_t rb) -> bool {
-        const uint32_t small =
-            members[ra].size() <= members[rb].size() ? ra : rb;
-        const uint32_t other = (small == ra) ? rb : ra;
-        for (uint32_t ma : members[small]) {
-            if (ma >= NV) continue;
-            for (uint32_t nb : adj[ma])
-                if (find(nb) == other) return true;
-        }
-        return false;
-    };
 
     /* Posiciones de CALL en el IR (use_pos).  Un valor coalescido que cruza
      * un call debe ir a callee-saved; la interaccion del cluster multi-def
@@ -523,34 +534,22 @@ std::vector<ir::IrValueId> ssa_phi_coalesce_remap(const ir::IrFunction &fn,
                      op == ir::IrOp::ALLOCA || op == ir::IrOp::LOAD ||
                      op == ir::IrOp::STORE);
                 if (seen_call) {
-                    each_use(ins[j], [&](ir::IrValueId u) {
+                    collect_uses(ins[j], uses);
+                    for (ir::IrValueId u : uses)
                         if (u < NV) vcross[u] = 1;
-                    });
                 }
                 if (is_c) seen_call = true;
             }
             /* Si el bloque tiene un call, los valores LIVE-IN cruzan ese call
              * (viven desde antes del bloque, atraviesan el call). */
-            if (seen_call) {
-                const uint64_t *li_b = crow(live_in, b);
-                for (size_t w = 0; w < W; ++w) {
-                    uint64_t bits = li_b[w];
-                    while (bits) {
-                        const uint32_t v =
-                            static_cast<uint32_t>(w * 64) +
-                            static_cast<uint32_t>(__builtin_ctzll(bits));
-                        bits &= bits - 1;
-                        vcross[v] = 1;
-                    }
-                }
-            }
+            if (seen_call)
+                for (ir::IrValueId v : live.live_in(ir::IrBlockId(b)))
+                    vcross[v] = 1;
         }
     }
-    auto crosses_call = [&](uint32_t rep) -> bool {
-        for (uint32_t m : members[rep])
-            if (m < NV && vcross[m]) return true;
-        return false;
-    };
+    /* Los grupos y las tres preguntas que deciden si dos se funden: ver
+     * @ref CoalesceClusters. */
+    CoalesceClusters clusters{parent, members, forbidden, adj, vcross, NV};
 
     static const bool dbg = util::flag_on(util::FlagId::SsaCoalDbg);
 
@@ -677,17 +676,17 @@ std::vector<ir::IrValueId> ssa_phi_coalesce_remap(const ir::IrFunction &fn,
                 // -- `acc` cuyo `acc+1` es un uso no-phi legitimo.  La
                 // correccion real es confiar en el grafo preciso + sibling_dep,
                 // no rodearlo.)
-                const uint32_t rd = find(d), rs = find(s);
+                const uint32_t rd = clusters.find(d), rs = clusters.find(s);
                 if (rd == rs) continue;
-                if (crosses_call(rd) || crosses_call(rs)) {
+                if (clusters.crosses_call(rd) || clusters.crosses_call(rs)) {
                     if (dbg)
                         std::fprintf(stderr,
                                      "[ssa-coal] %s phi v%u<-v%u CROSSCALL\n",
                                      fn.name.c_str(), d, s);
                     continue;
                 }
-                const bool itf = interfere(rd, rs);
-                const bool fbd = itf ? false : has_forbidden(rd, rs);
+                const bool itf = clusters.interfere(rd, rs);
+                const bool fbd = itf ? false : clusters.has_forbidden(rd, rs);
                 if (itf || fbd) {
                     if (dbg) {
                         /* Localizar la razon: INTERFERE (overlap de rangos
@@ -727,7 +726,7 @@ std::vector<ir::IrValueId> ssa_phi_coalesce_remap(const ir::IrFunction &fn,
     if (!any) return remap; // vacio
     remap.resize(NV);
     for (uint32_t v = 0; v < NV; ++v)
-        remap[v] = ir::IrValueId(find(v));
+        remap[v] = ir::IrValueId(clusters.find(v));
     return remap;
 }
 
@@ -750,21 +749,14 @@ bool apply_ssa_coalesce(MFunction &mf, const ir::IrFunction &fn, DstKind dst) {
     if (off) return false;
     const std::vector<ir::IrValueId> remap = ssa_phi_coalesce_remap(fn, dst);
     if (remap.empty()) return false;
-    const uint32_t NVAL = static_cast<uint32_t>(remap.size());
     bool changed = false;
-    auto rw = [&](MOperand &o) {
-        if (!o.is_vreg()) return;
-        const uint32_t vid = o.vreg_id();
-        if (vid < NVAL && remap[vid] != vid) {
-            o = MOperand::make_vreg(remap[vid], o.vreg_class(), o.width);
-            changed = true;
-        }
-    };
     for (MBlock &b : mf.blocks) {
         for (MInstr &in : b.instrs) {
-            rw(in.dst);
-            rw(in.src1);
-            rw(in.src2);
+            /* Los tres, sin cortocircuito: cada uno se reescribe aunque otro
+             * ya haya cambiado. */
+            changed |= remap_operand(in.dst, remap);
+            changed |= remap_operand(in.src1, remap);
+            changed |= remap_operand(in.src2, remap);
         }
     }
     /* Eliminar los phi-copies que quedaron self (`MOV vX, vX`) ANTES de

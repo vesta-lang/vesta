@@ -69,10 +69,6 @@ constexpr size_t kInlineBlocks = 8;
 using Neighbors = util::SmallVector<IrBlockId, 2>;
 /// Bloque -> su numero de postorden.
 using PostorderNums = util::SmallVector<uint32_t, kInlineBlocks>;
-/// Cabecera -> indice de su bucle.
-using LoopOfHeader = util::SmallVector<int32_t, kInlineBlocks>;
-/// Que bloques forman el cuerpo de un bucle.
-using LoopBody = util::SmallVector<uint8_t, kInlineBlocks>;
 /// Una lista de bloques: el postorden, su inverso, una pila de recorrido.
 using BlockList = util::SmallVector<IrBlockId, kInlineBlocks>;
 /// @}
@@ -221,6 +217,23 @@ void compute_rpo(const Graph &succs, IrBlockId entry, PostorderNums &po,
         rpo.push_back(order[i]);
 }
 
+/**
+ * @brief El dominador comun mas cercano de @p a y @p b, subiendo por @p idom.
+ *
+ * Numeros de postorden mas ALTOS = mas cerca de la entrada en RPO; se sube por
+ * el que este mas lejos hasta que se encuentran.
+ */
+IrBlockId idom_intersect(const BlockList &idom, const PostorderNums &po,
+                         IrBlockId a, IrBlockId b) {
+    while (a != b) {
+        while (po[a] < po[b])
+            a = idom[a];
+        while (po[b] < po[a])
+            b = idom[b];
+    }
+    return a;
+}
+
 /** @brief idom via CHK.  idom[b] = IR_NO_BLOCK si inalcanzable. */
 BlockList compute_idom(const Graph &preds, const PostorderNums &po,
                        const BlockList &rpo, IrBlockId entry) {
@@ -228,17 +241,6 @@ BlockList compute_idom(const Graph &preds, const PostorderNums &po,
     BlockList idom(N, ir::IR_NO_BLOCK);
     if (rpo.empty()) return idom;
     idom[entry] = entry;
-
-    auto intersect = [&](IrBlockId a, IrBlockId b) -> IrBlockId {
-        while (a != b) {
-            // Numeros postorden mas ALTOS = mas cerca de la entrada en RPO.
-            while (po[a] < po[b])
-                a = idom[a];
-            while (po[b] < po[a])
-                b = idom[b];
-        }
-        return a;
-    };
 
     bool changed = true;
     while (changed) {
@@ -249,8 +251,9 @@ BlockList compute_idom(const Graph &preds, const PostorderNums &po,
             for (IrBlockId p : preds[b]) {
                 if (idom[p] == ir::IR_NO_BLOCK)
                     continue; // pred aun sin procesar
-                new_idom =
-                    (new_idom == ir::IR_NO_BLOCK) ? p : intersect(p, new_idom);
+                new_idom = (new_idom == ir::IR_NO_BLOCK)
+                               ? p
+                               : idom_intersect(idom, po, p, new_idom);
             }
             if (new_idom != ir::IR_NO_BLOCK && idom[b] != new_idom) {
                 idom[b] = new_idom;
@@ -261,17 +264,99 @@ BlockList compute_idom(const Graph &preds, const PostorderNums &po,
     return idom;
 }
 
-/** @brief True si @p a domina a @p b (recorre la cadena idom de @p b). */
-bool dominates(const BlockList &idom, IrBlockId a, IrBlockId b) {
-    if (idom[b] == ir::IR_NO_BLOCK) return false; // b inalcanzable
-    IrBlockId cur = b;
-    while (true) {
-        if (cur == a) return true;
-        if (idom[cur] == cur)
-            return false; // llego a la entrada sin encontrar a
-        cur = idom[cur];
+/// Instante en que el recorrido del arbol de dominadores entra o sale de un
+/// bloque.
+enum DomTick : uint32_t {};
+/// Un bloque inalcanzable: no esta en el arbol.
+constexpr DomTick NO_DOM_TICK = DomTick(0xFFFFFFFFu);
+/// Posicion en la lista aplanada de hijos del arbol.
+enum DomChildSlot : uint32_t {};
+
+/**
+ * @brief El arbol de dominadores numerado: cuando se ENTRA y cuando se SALE de
+ *        cada bloque en un recorrido en profundidad.
+ *
+ * Existe para contestar "domina" en tiempo CONSTANTE.  Antes se subia por la
+ * cadena de dominadores inmediatos desde el bloque, y esa pregunta se hace por
+ * cada arista al buscar bucles: con el codigo que deja el inliner el arbol es
+ * casi una cadena, y eso era aristas por profundidad.
+ */
+struct DomNumbering {
+    util::SmallVector<DomTick, kInlineBlocks> pre, post;
+
+    /// @p a domina a @p b: @p b cae dentro del subarbol de @p a.
+    bool dominates(IrBlockId a, IrBlockId b) const {
+        if (pre[a] == NO_DOM_TICK || pre[b] == NO_DOM_TICK) return false;
+        return pre[a] <= pre[b] && post[b] <= post[a];
     }
+};
+
+/// Un paso pendiente del recorrido que numera el arbol.
+struct DomWalkStep {
+    IrBlockId block;
+    DomChildSlot next; ///< siguiente hijo por visitar.
+};
+
+/** @brief Numera el arbol de dominadores dado por @p idom (iterativo). */
+DomNumbering number_dom_tree(const BlockList &idom, IrBlockId entry) {
+    const size_t N = idom.size();
+    DomNumbering d;
+    d.pre.assign(N, NO_DOM_TICK);
+    d.post.assign(N, NO_DOM_TICK);
+    if (N == 0 || idom[entry] == ir::IR_NO_BLOCK) return d;
+    /* Los hijos de cada bloque, contiguos. */
+    util::SmallVector<DomChildSlot, kInlineBlocks + 1> off(N + 1,
+                                                          DomChildSlot(0));
+    for (size_t b = 0; b < N; ++b)
+        if (IrBlockId(b) != entry && idom[b] != ir::IR_NO_BLOCK)
+            off[idom[b] + 1] = DomChildSlot(off[idom[b] + 1] + 1);
+    for (size_t b = 0; b < N; ++b)
+        off[b + 1] = DomChildSlot(off[b + 1] + off[b]);
+    BlockList kids;
+    kids.resize(off[N], IrBlockId(0));
+    {
+        util::SmallVector<DomChildSlot, kInlineBlocks> next(N, DomChildSlot(0));
+        for (size_t b = 0; b < N; ++b)
+            next[b] = off[b];
+        for (size_t b = 0; b < N; ++b)
+            if (IrBlockId(b) != entry && idom[b] != ir::IR_NO_BLOCK) {
+                const IrBlockId p = idom[b];
+                kids[next[p]] = IrBlockId(b);
+                next[p] = DomChildSlot(next[p] + 1);
+            }
+    }
+    uint32_t clock = 0; // instantes repartidos
+    util::SmallVector<DomWalkStep, kInlineBlocks> walk;
+    d.pre[entry] = DomTick(clock++);
+    walk.push_back({entry, off[entry]});
+    while (!walk.empty()) {
+        DomWalkStep &top = walk.back();
+        if (top.next < off[top.block + 1]) {
+            const IrBlockId c = kids[top.next];
+            top.next = DomChildSlot(top.next + 1);
+            d.pre[c] = DomTick(clock++);
+            /* `top` ya no se usa: apilar puede mover la tabla. */
+            walk.push_back({c, off[c]});
+        } else {
+            d.post[top.block] = DomTick(clock++);
+            walk.pop_back();
+        }
+    }
+    return d;
 }
+
+/// Indice de un bucle mientras se construyen.
+enum LoopIdx : uint32_t {};
+/// Ningun bucle.
+constexpr LoopIdx NO_LOOP_IDX = LoopIdx(0xFFFFFFFFu);
+/// Posicion en las listas aplanadas por bucle (latches y cuerpos).
+enum LoopSlot : uint32_t {};
+
+/// Una arista de retroceso: del latch a la cabecera que lo domina.
+struct BackEdge {
+    IrBlockId latch;
+    IrBlockId header;
+};
 
 } // namespace
 
@@ -291,90 +376,120 @@ LoopFacts compute_loop_facts(const IrFunction &fn) {
     BlockList rpo;
     compute_rpo(succs, entry, po, rpo);
     auto idom = compute_idom(preds, po, rpo, entry);
+    const DomNumbering dom = number_dom_tree(idom, entry);
 
-    // Back-edges (b -> h con h dominando b), agrupados por cabecera = 1 bucle.
-    struct Loop {
-        IrBlockId header;
-        LoopBody body;
-        size_t size = 0;
-    };
-    std::vector<Loop> loops;
-    LoopOfHeader loop_of_header(N, -1); // header -> indice en loops
-
-    for (size_t b = 0; b < N; ++b) {
+    /* Aristas de retroceso (b -> h con h dominando b).  Cada cabecera es UN
+     * bucle, numerado en el orden en que aparece su primera arista. */
+    util::SmallVector<BackEdge, kInlineBlocks> back;
+    util::SmallVector<LoopIdx, kInlineBlocks> loop_of_header(N, NO_LOOP_IDX);
+    BlockList headers; // cabecera de cada bucle, por indice
+    for (size_t b = 0; b < N; ++b)
         for (IrBlockId h : succs[b]) {
-            if (!dominates(idom, h, static_cast<IrBlockId>(b))) continue;
-            // Back-edge b->h.  Obtener/crear el bucle de cabecera h.
-            int32_t li = loop_of_header[h];
-            if (li < 0) {
-                loops.push_back(Loop{h, LoopBody(N, 0), 0});
-                li = static_cast<int32_t>(loops.size()) - 1;
-                loop_of_header[h] = li;
-                loops[li].body[h] = 1;
+            if (!dom.dominates(h, IrBlockId(b))) continue;
+            back.push_back({IrBlockId(b), h});
+            if (loop_of_header[h] == NO_LOOP_IDX) {
+                loop_of_header[h] = LoopIdx(headers.size());
+                headers.push_back(h);
             }
-            Loop &lp = loops[li];
-            // Cuerpo: BFS inverso desde b por preds, sin pasar de h.
-            BlockList stk;
-            if (!lp.body[b]) {
-                lp.body[b] = 1;
-                stk.push_back(static_cast<IrBlockId>(b));
-            }
-            while (!stk.empty()) {
-                IrBlockId x = stk.back();
-                stk.pop_back();
-                if (x == h) continue;
-                for (IrBlockId p : preds[x])
-                    if (!lp.body[p]) {
-                        lp.body[p] = 1;
-                        if (p != h) stk.push_back(p);
-                    }
-            }
+        }
+    const size_t n_loops = headers.size();
+
+    /* Los latches de cada bucle, contiguos. */
+    util::SmallVector<LoopSlot, kInlineBlocks + 1> latch_off(n_loops + 1,
+                                                            LoopSlot(0));
+    for (const BackEdge &e : back)
+        latch_off[loop_of_header[e.header] + 1] =
+            LoopSlot(latch_off[loop_of_header[e.header] + 1] + 1);
+    for (size_t l = 0; l < n_loops; ++l)
+        latch_off[l + 1] = LoopSlot(latch_off[l + 1] + latch_off[l]);
+    BlockList latches;
+    latches.resize(latch_off[n_loops], IrBlockId(0));
+    {
+        util::SmallVector<LoopSlot, kInlineBlocks> next(n_loops, LoopSlot(0));
+        for (size_t l = 0; l < n_loops; ++l)
+            next[l] = latch_off[l];
+        for (const BackEdge &e : back) {
+            const LoopIdx l = loop_of_header[e.header];
+            latches[next[l]] = e.latch;
+            next[l] = LoopSlot(next[l] + 1);
         }
     }
 
-    // Tamanos + hechos por bloque.
-    for (Loop &lp : loops) {
-        lp.size = 0;
-        for (size_t b = 0; b < N; ++b)
-            lp.size += lp.body[b];
+    /* El cuerpo de cada bucle como LISTA de sus bloques, no como un mapa del
+     * tamano de la funcion.  Con un mapa por bucle, cada uno costaba lo que la
+     * funcion entera -- al crearlo, al contarlo y al repartirlo --, y eran
+     * bucles por bloques, en tiempo y en memoria.  La lista cuesta lo que el
+     * cuerpo.  Desde todos los latches a la vez: BFS inverso por
+     * predecesores, sin pasar de la cabecera.  La marca lleva el bucle en
+     * curso, asi que no se limpia entre uno y el siguiente. */
+    util::SmallVector<LoopIdx, kInlineBlocks> in_body(N, NO_LOOP_IDX);
+    util::SmallVector<LoopSlot, kInlineBlocks + 1> body_off(n_loops + 1,
+                                                           LoopSlot(0));
+    BlockList body; // los cuerpos, uno tras otro
+    BlockList stk;
+    for (size_t l = 0; l < n_loops; ++l) {
+        const LoopIdx li = LoopIdx(l);
+        const IrBlockId h = headers[l];
+        body_off[l] = LoopSlot(body.size());
+        in_body[h] = li;
+        body.push_back(h);
+        stk.clear();
+        for (LoopSlot s = latch_off[l]; s < latch_off[l + 1];
+             s = LoopSlot(s + 1)) {
+            const IrBlockId b = latches[s];
+            if (in_body[b] == li) continue;
+            in_body[b] = li;
+            body.push_back(b);
+            stk.push_back(b);
+        }
+        while (!stk.empty()) {
+            const IrBlockId x = stk.back();
+            stk.pop_back();
+            for (IrBlockId p : preds[x])
+                if (in_body[p] != li) {
+                    in_body[p] = li;
+                    body.push_back(p);
+                    if (p != h) stk.push_back(p);
+                }
+        }
     }
-    f.loop_count = static_cast<uint32_t>(loops.size());
-    for (size_t li = 0; li < loops.size(); ++li) {
-        const Loop &lp = loops[li];
-        f.is_loop_header[lp.header] = 1;
-        for (size_t b = 0; b < N; ++b) {
-            if (!lp.body[b]) continue;
+    body_off[n_loops] = LoopSlot(body.size());
+
+    /* Hechos por bloque, y el padre de cada bucle, recorriendo los cuerpos
+     * una vez.  El bucle MAS INTERNO de un bloque es el de menor cuerpo que lo
+     * contiene; el PADRE de un bucle, el de menor cuerpo que contiene
+     * PROPIAMENTE a su cabecera.  Los empates se resuelven como siempre: gana
+     * el de indice menor, que es el que se ve primero. */
+    f.loop_count = static_cast<uint32_t>(n_loops);
+    f.loop_header.resize(n_loops);
+    f.parent_loop.assign(n_loops, LoopFacts::NO_LOOP);
+    for (size_t l = 0; l < n_loops; ++l) {
+        f.loop_header[l] = headers[l];
+        f.is_loop_header[headers[l]] = 1;
+    }
+    for (size_t l = 0; l < n_loops; ++l) {
+        const size_t size = body_off[l + 1] - body_off[l];
+        for (LoopSlot s = body_off[l]; s < body_off[l + 1];
+             s = LoopSlot(s + 1)) {
+            const IrBlockId b = body[s];
             f.in_loop[b] = 1;
             f.loop_depth[b] += 1; // un bucle mas que contiene el bloque
-            // loop_id = bucle MAS INTERNO (menor cuerpo) que contiene el
-            // bloque.
-            uint32_t cur = f.loop_id[b];
-            if (cur == LoopFacts::NO_LOOP || lp.size < loops[cur].size)
-                f.loop_id[b] = static_cast<uint32_t>(li);
+            const uint32_t cur = f.loop_id[b];
+            if (cur == LoopFacts::NO_LOOP ||
+                size < size_t(body_off[cur + 1] - body_off[cur]))
+                f.loop_id[b] = static_cast<uint32_t>(l);
+            /* Si `b` es la cabecera de otro bucle, este lo contiene: es
+             * candidato a padre si es PROPIAMENTE mayor. */
+            const LoopIdx inner = loop_of_header[b];
+            if (inner == NO_LOOP_IDX || size_t(inner) == l) continue;
+            const size_t inner_size =
+                body_off[inner + 1] - body_off[inner];
+            if (size <= inner_size) continue;
+            const uint32_t best = f.parent_loop[inner];
+            if (best == LoopFacts::NO_LOOP ||
+                size < size_t(body_off[best + 1] - body_off[best]))
+                f.parent_loop[inner] = static_cast<uint32_t>(l);
         }
-    }
-
-    // Hechos POR BUCLE: cabecera + bucle padre (el bucle mas pequeno que
-    // CONTIENE PROPIAMENTE a este = su cabecera cae en el cuerpo de otro
-    // mayor).
-    f.loop_header.resize(loops.size());
-    f.parent_loop.assign(loops.size(), LoopFacts::NO_LOOP);
-    for (size_t li = 0; li < loops.size(); ++li) {
-        f.loop_header[li] = loops[li].header;
-        const IrBlockId h = loops[li].header;
-        uint32_t best = LoopFacts::NO_LOOP;
-        size_t best_size = SIZE_MAX;
-        for (size_t lj = 0; lj < loops.size(); ++lj) {
-            if (lj == li) continue;
-            if (!loops[lj].body[h]) continue; // lj contiene la cabecera de li
-            if (loops[lj].size <= loops[li].size)
-                continue; // contencion PROPIA (mayor)
-            if (loops[lj].size < best_size) {
-                best_size = loops[lj].size;
-                best = static_cast<uint32_t>(lj);
-            }
-        }
-        f.parent_loop[li] = best;
     }
     return f;
 }

@@ -1098,29 +1098,10 @@ void vx_report_callind_memory(const ir::IrModule &mod, Diagnostics &diags,
 void vx_report_fn_addr_crossing(const ir::IrModule &mod,
                                 analysis::asa::FactBase &base);
 
-/**
- * @brief Avisa de las promesas de exclusividad que el programa incumple.
- *
- * El comprobador de prestamos del AST aplica la exclusividad por nombre y
- * dentro de una funcion; esto cierra lo que se le escapa: dos prestamos
- * exclusivos de la misma region que llegan a la misma llamada por separado.  La
- * pregunta no se puede contestar mientras se baja -- ahi los parametros son dos
- * nombres --, asi que necesita el IR terminado y el modulo.
- *
- * Igual que el de arriba, el conocimiento sale de la BASE y no se calcula aqui:
- * lo mismo lo consume el productor de contratos de parametro.
- *
- * @param mod   Modulo con el IR ya terminado.
- * @param diags Donde se dejan los errores.
- * @param file  Fichero que citar.
- * @param base  La base de hechos.
- * @param level Peso del veredicto: @c ERR al construir, @c WARN al analizar.
- *              @see CompileOptions::violations_are_errors
- */
-void vx_report_borrow_across_calls(const ir::IrModule &mod, Diagnostics &diags,
-                                   const std::string &file,
-                                   analysis::asa::FactBase &base,
-                                   DiagLevel level);
+/* Lo que se dice de las promesas de exclusividad incumplidas cruzando una
+ * llamada vive en `vx/borrow/borrow_ir_check.h`, con la comprobacion que lo
+ * averigua.  Estaba declarado aqui y definido dentro del fichero del camino de
+ * proyecto, o sea repartido entre dos sitios que no son el suyo. */
 
 } // namespace vx
 

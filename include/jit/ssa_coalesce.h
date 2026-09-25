@@ -41,6 +41,7 @@
 #ifndef VESTA_JIT_SSA_COALESCE_H
 #define VESTA_JIT_SSA_COALESCE_H
 
+#include "ir/block_liveness.h"
 #include "ir/ssa_ir.h"
 #include "jit/machine_ir.h"
 #include "jit/sched/machine_effects.h" // EffIsa: para quien se genera este codigo
@@ -79,6 +80,14 @@ DstKind dst_kind_of_isa(sched::EffIsa isa) noexcept;
 /* Devuelve identificadores SSA, no enteros sueltos, y el tipo lo dice: asi el
  * perfil de reservas lo distingue de las otras decenas de vectores de cuatro
  * bytes del compilador en vez de llamarlos a todos `vector<unsigned int>`. */
+std::vector<ir::IrValueId> ssa_phi_coalesce_remap(const ir::IrFunction &fn,
+                                                  DstKind dst,
+                                                  const ir::BlockLiveness &live);
+
+/**
+ * @brief Atajo para quien no tiene los vivos por bloque a mano: los pide a su
+ *        unico productor y hace lo mismo que la forma de tres argumentos.
+ */
 std::vector<ir::IrValueId> ssa_phi_coalesce_remap(const ir::IrFunction &fn,
                                                   DstKind dst);
 

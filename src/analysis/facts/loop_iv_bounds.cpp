@@ -157,8 +157,13 @@ LoopIvBounds compute_loop_iv_bounds(const ir::IrFunction &fn,
         return true;
     };
 
+    /* Lo que la forma de los bucles necesita de la funcion, una vez para
+     * todos: por bucle era recorrerla entera cada vez. */
+    const LoopStructureIndex loop_index =
+        build_loop_structure_index(fn, loops);
     for (uint32_t L : orden) {
-        const LoopStructure ls = detect_loop_structure(fn, loops, L);
+        const LoopStructure ls =
+            detect_loop_structure(fn, loops, L, loop_index);
         /* CONTABLE basta: la cota de la variable sale de la guarda y del paso,
          * y una salida anticipada no la sube -- solo hace que se llegue menos
          * lejos. */

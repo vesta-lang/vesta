@@ -5,6 +5,8 @@
  */
 #include "util/fnv.h" // la semilla y el primo, en UN sitio
 #include "util/env_flags.h"
+#include "util/named_alloc.h" // contenedores que dicen de quien son
+#include "util/scc.h" // los ciclos de dependencias, compartido con el ir/
 #include "vx/incremental.h"
 
 #include <algorithm>
@@ -48,65 +50,15 @@ std::string simple_name(const std::string &q) {
     return (p == std::string::npos) ? q : q.substr(p + 1);
 }
 
-/// Tarjan: componentes fuertemente conexas de un grafo dirigido dado como
-/// listas de adyacencia (indices).  @p out_comp[i] = id de la SCC del nodo i.
-/// Devuelve el numero de SCCs.  Las SCCs se numeran en orden topologico
-/// INVERSO (una SCC recibe id MENOR que las SCCs de las que depende), lo que
-/// nos da directamente "dependencias primero" al iterar por id ascendente.
-size_t tarjan_scc(const std::vector<std::vector<uint32_t>> &adj,
-                  std::vector<uint32_t> &out_comp) {
-    const size_t n = adj.size();
-    out_comp.assign(n, UINT32_MAX);
-    std::vector<int64_t> idx(n, -1), low(n, 0);
-    std::vector<char> on_stack(n, 0);
-    std::vector<uint32_t> stack;
-    stack.reserve(n);
-    int64_t counter = 0;
-    uint32_t scc_id = 0;
+/* Las componentes fuertemente conexas viven en `util/scc.h`: las necesita
+ * tambien el optimizador del intermedio, que esta en una capa que no puede ver
+ * esta. */
 
-    // DFS iterativo (evita desbordar la pila del host con modulos grandes).
-    std::vector<std::pair<uint32_t, size_t>> work; // (nodo, siguiente vecino)
-    for (uint32_t s = 0; s < n; ++s) {
-        if (idx[s] != -1) continue;
-        work.push_back({s, 0});
-        while (!work.empty()) {
-            auto &[v, i] = work.back();
-            if (i == 0) {
-                idx[v] = low[v] = counter++;
-                stack.push_back(v);
-                on_stack[v] = 1;
-            }
-            if (i < adj[v].size()) {
-                const uint32_t w = adj[v][i];
-                ++i; // avanzar al siguiente vecino para la proxima visita.
-                if (idx[w] == -1) {
-                    work.push_back({w, 0});
-                } else if (on_stack[w]) {
-                    low[v] = std::min(low[v], idx[w]);
-                }
-            } else {
-                // Todos los vecinos visitados: cerrar SCC si v es raiz.
-                if (low[v] == idx[v]) {
-                    for (;;) {
-                        const uint32_t w = stack.back();
-                        stack.pop_back();
-                        on_stack[w] = 0;
-                        out_comp[w] = scc_id;
-                        if (w == v) break;
-                    }
-                    ++scc_id;
-                }
-                const uint32_t child = v;
-                work.pop_back();
-                if (!work.empty()) {
-                    const uint32_t parent = work.back().first;
-                    low[parent] = std::min(low[parent], low[child]);
-                }
-            }
-        }
-    }
-    return scc_id;
-}
+/* El grafo de dependencias entre simbolos, con nombre para el perfil de
+ * reservas. */
+struct DepOffsetsTag; ///< Donde empiezan las dependencias de cada simbolo.
+struct DepTargetsTag; ///< ... y de que simbolo es cada una.
+struct DepCompTag;    ///< Simbolo -> su componente fuertemente conexa.
 
 } // namespace
 
@@ -188,26 +140,35 @@ MerkleKeys compute_merkle_keys(const SemanticIndex &idx) {
     for (uint32_t i = 0; i < n; ++i)
         by_simple[simple_name(syms[i].name)].push_back(i);
 
-    // 2. Grafo de adyacencia (i -> sus deps).  Deduplicado + sin auto-aristas.
-    std::vector<std::vector<uint32_t>> adj(n);
+    /* 2. Grafo de dependencias (i -> sus deps), deduplicado y sin aristas a si
+     * mismo, en PLANO: las de `i` son `dep_to[dep_off[i] .. dep_off[i+1])`.
+     * Una lista por simbolo eran tantas reservas como simbolos. */
+    util::NamedVector<util::SccEdge, DepOffsetsTag> dep_off(n + 1,
+                                                            util::SccEdge(0));
+    util::NamedVector<util::SccNode, DepTargetsTag> dep_to;
     for (uint32_t i = 0; i < n; ++i) {
-        std::vector<uint32_t> outs;
+        dep_off[i] = util::SccEdge(dep_to.size());
+        const size_t first = dep_to.size();
         for (const auto &d : syms[i].deps) {
             auto it = by_simple.find(d);
             if (it == by_simple.end()) continue;
             for (uint32_t j : it->second)
-                if (j != i) outs.push_back(j);
+                if (j != i) dep_to.push_back(util::SccNode(j));
         }
-        std::sort(outs.begin(), outs.end());
-        outs.erase(std::unique(outs.begin(), outs.end()), outs.end());
-        adj[i] = std::move(outs);
+        /* Deduplicar solo el tramo de este simbolo, que acaba de anadirse. */
+        std::sort(dep_to.begin() + static_cast<long>(first), dep_to.end());
+        dep_to.erase(std::unique(dep_to.begin() + static_cast<long>(first),
+                                 dep_to.end()),
+                     dep_to.end());
     }
+    dep_off[n] = util::SccEdge(dep_to.size());
 
     // 3. SCCs (Tarjan): numeradas en orden topologico inverso (id menor =
     //    dependencia primero), asi al iterar por id ascendente las deps ya
     //    tienen clave.
-    std::vector<uint32_t> comp;
-    const size_t n_scc = tarjan_scc(adj, comp);
+    util::NamedVector<util::SccComp, DepCompTag> comp(n, util::SCC_NO_COMP);
+    const size_t n_scc =
+        util::tarjan_scc(dep_off.data(), dep_to.data(), n, comp.data());
 
     // Miembros por SCC.
     std::vector<std::vector<uint32_t>> members(n_scc);
@@ -224,7 +185,8 @@ MerkleKeys compute_merkle_keys(const SemanticIndex &idx) {
         std::vector<uint64_t> content_hashes, ext_dep_keys;
         for (uint32_t m : members[s]) {
             content_hashes.push_back(syms[m].content_hash);
-            for (uint32_t w : adj[m]) {
+            for (uint32_t e = dep_off[m]; e < dep_off[m + 1]; ++e) {
+                const util::SccNode w = dep_to[e];
                 if (comp[w] == s) continue;         // dep interna a la SCC.
                 ext_dep_keys.push_back(sym_key[w]); // ya calculada (topo).
             }

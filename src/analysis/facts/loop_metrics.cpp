@@ -83,12 +83,63 @@ bool is_expensive(IrOp op) {
 
 } // namespace
 
-LoopMetrics compute_loop_metrics(const ir::IrFunction &fn,
-                                 const std::vector<IrBlockId> &body) {
-    LoopMetrics m;
-    std::unordered_set<IrValueId> body_defs;
-    std::unordered_set<IrBlockId> body_set(body.begin(), body.end());
+namespace {
 
+/// Un bucle de la lista que se mide.
+enum MeasuredLoop : uint32_t {};
+/// Ningun bucle medido.
+constexpr MeasuredLoop NO_MEASURED_LOOP = MeasuredLoop(0xFFFFFFFFu);
+/// Si un valor ya se conto como vivo fuera de su cuerpo.
+enum LiveSeen : uint8_t { LIVE_NOT_SEEN = 0, LIVE_SEEN = 1 };
+
+} // namespace
+
+util::NamedVector<LiveAcross, scratch::LiveAcrossCounts> compute_live_across(
+    const ir::IrFunction &fn,
+    const std::vector<const std::vector<IrBlockId> *> &bodies) {
+    const size_t nb = fn.blocks.size();
+    const size_t nv = fn.values.size();
+    util::NamedVector<LiveAcross, scratch::LiveAcrossCounts> count(
+        bodies.size(), LiveAcross(0));
+    /* De que cuerpo es cada bloque, y en que cuerpo se define cada valor. */
+    util::NamedVector<MeasuredLoop, scratch::LiveAcrossLoopOf> loop_of(
+        nb, NO_MEASURED_LOOP);
+    for (size_t k = 0; k < bodies.size(); ++k)
+        for (IrBlockId b : *bodies[k])
+            if (b < nb) loop_of[b] = MeasuredLoop(k);
+    util::NamedVector<MeasuredLoop, scratch::LiveAcrossDefIn> def_in(
+        nv, NO_MEASURED_LOOP);
+    for (size_t b = 0; b < nb; ++b) {
+        if (loop_of[b] == NO_MEASURED_LOOP) continue;
+        for (const IrInstr &in : fn.blocks[b].instrs)
+            if (in.dst < nv) def_in[in.dst] = loop_of[b];
+    }
+    /* Cada uso una vez: si el valor es de un cuerpo y el uso esta fuera de
+     * el, ese valor esta vivo a traves del cuerpo.  Cada valor cuenta una sola
+     * vez, lo usen fuera cuantas instrucciones lo usen. */
+    util::NamedVector<LiveSeen, scratch::LiveAcrossSeen> seen(nv,
+                                                              LIVE_NOT_SEEN);
+    for (size_t b = 0; b < nb; ++b) {
+        const MeasuredLoop here = loop_of[b];
+        for (const IrInstr &in : fn.blocks[b].instrs) {
+            const size_t n_ops = in.operands.size();
+            for (size_t j = 0; j < n_ops + in.phi_args.size(); ++j) {
+                const IrValueId v = j < n_ops ? in.operands[j]
+                                              : in.phi_args[j - n_ops].value;
+                if (v >= nv || def_in[v] == NO_MEASURED_LOOP) continue;
+                if (def_in[v] == here || seen[v] == LIVE_SEEN) continue;
+                seen[v] = LIVE_SEEN;
+                count[def_in[v]] = LiveAcross(count[def_in[v]] + 1);
+            }
+        }
+    }
+    return count;
+}
+
+LoopMetrics compute_loop_metrics(const ir::IrFunction &fn,
+                                 const std::vector<IrBlockId> &body,
+                                 LiveAcross live_across) {
+    LoopMetrics m;
     for (IrBlockId b : body) {
         if (b >= fn.blocks.size()) continue;
         ++m.basic_blocks;
@@ -120,7 +171,6 @@ LoopMetrics compute_loop_metrics(const ir::IrFunction &fn,
                     m.has_side_effects = true;
             }
             if (in.op == IrOp::BR_COND) ++m.branches;
-            if (in.dst != IR_NO_VALUE) body_defs.insert(in.dst);
         }
     }
 
@@ -130,19 +180,9 @@ LoopMetrics compute_loop_metrics(const ir::IrFunction &fn,
     // vivos a la vez; los temporales intra-iteracion se consumen dentro de su
     // copia y NO cuentan.  (El proxy anterior miraba el latch: en un bucle de
     // un solo bloque latch == cuerpo, contaba los temporales intra-iteracion e
-    // inflaba la presion, capando el factor.)
-    std::unordered_set<IrValueId> live;
-    for (size_t b = 0; b < fn.blocks.size(); ++b) {
-        if (body_set.count((IrBlockId)b))
-            continue; // solo bloques FUERA del cuerpo
-        for (const IrInstr &in : fn.blocks[b].instrs) {
-            for (IrValueId o : in.operands)
-                if (body_defs.count(o)) live.insert(o);
-            for (const auto &pa : in.phi_args)
-                if (body_defs.count(pa.value)) live.insert(pa.value);
-        }
-    }
-    m.live_across = (int)live.size();
+    // inflaba la presion, capando el factor.)  Se calcula fuera, para todos los
+    // bucles a la vez: ver @ref compute_live_across.
+    m.live_across = static_cast<int>(live_across);
     return m;
 }
 

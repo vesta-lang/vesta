@@ -39,6 +39,7 @@
 #include <utility>
 #include <vector>
 
+#include "vx/asm/asm_operand_class.h" // clases declaradas de los operandos
 #include "vx/asm/instr_db.h" // vx::instr_db::Isa (la ISA del objetivo)
 
 namespace vx {
@@ -274,15 +275,15 @@ std::string asm_contador_de_repeticion(const std::string &arch);
  *
  * @param ops Operandos de la linea, en orden textual.
  * @param idx_mem Indice del operando de memoria dentro de @p ops.
- * @param clases_operando Pares (marcador, clase declarada); puede ir vacio.
+ * @param clases_operando Clase declarada de cada operando; puede ir vacio.
  * @param arch Arquitectura del cuerpo.
  * @return Ancho en bytes, o 0 si no se puede determinar -- que NO significa
  *         cero bytes, significa que no se afirma cuantos.
  */
-uint32_t asm_ancho_acceso_bytes(
-    const std::vector<std::string> &ops, size_t idx_mem,
-    const std::vector<std::pair<std::string, std::string>> &clases_operando,
-    const std::string &arch);
+uint32_t asm_ancho_acceso_bytes(const std::vector<std::string> &ops,
+                                size_t idx_mem,
+                                const AsmOperandClasses &clases_operando,
+                                const std::string &arch);
 
 /**
  * @brief Cuanto MIDE un operando de la clase @p clase, en bits.
@@ -571,13 +572,13 @@ AsmInferResult asm_infer_clobbers(const std::string &nasm_body,
  *
  * @param nasm_body Cuerpo NASM Intel.
  * @param bound_canon Registros ya ligados por `register(...)`, canonicos.
- * @param clases_operando Pares (nombre en el cuerpo, clase declarada:
- *        `"reg"`, `"xmm"`, `"ymm"`, `"zmm"`, `"mem"`...).
+ * @param clases_operando Clase declarada de cada operando del cuerpo
+ *        (`"reg"`, `"xmm"`, `"ymm"`, `"zmm"`, `"mem"`...).
  * @return El mismo resultado, con las exigencias ya resueltas a bytes.
  */
-AsmInferResult asm_infer_clobbers(
-    const std::string &nasm_body, const std::vector<std::string> &bound_canon,
-    const std::vector<std::pair<std::string, std::string>> &clases_operando);
+AsmInferResult asm_infer_clobbers(const std::string &nasm_body,
+                                  const std::vector<std::string> &bound_canon,
+                                  const AsmOperandClasses &clases_operando);
 
 } // namespace vx
 

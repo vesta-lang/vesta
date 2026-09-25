@@ -35,6 +35,7 @@
 
 #include "analysis/facts/ir_facts.h"
 #include "analysis/memory/points_to.h"
+#include "util/named_alloc.h"
 
 #include <cstdint>
 #include <functional>
@@ -78,7 +79,41 @@ EscapeInfo compute_escape(const ir::IrFunction &fn, const IrFacts &facts,
 /// callee que captura su param) y devuelve el EscapeInfo COMPLETO de cada
 /// funcion (con escaping_stack ya resuelto interproceduralmente).  Recibe la
 /// base de hechos por funcion via las factories (no la construye aqui).
-std::unordered_map<std::string, EscapeInfo> compute_escape_module(
+namespace scratch {
+struct EscapeByFn;     ///< El escape de cada funcion del modulo.
+struct EscapeFnStates; ///< Si cada funcion del modulo se analizo.
+} // namespace scratch
+
+/// Si el escape de una funcion se calculo o no habia cuerpo que mirar.
+enum class EscapeFnState : uint8_t {
+    NO_BODY,  ///< Nativa: no hay nada que analizar, y no se afirma nada.
+    ANALYZED, ///< Calculado sobre su cuerpo.
+};
+
+/**
+ * @brief El escape de TODAS las funciones de un modulo, por POSICION.
+ *
+ * Por posicion y no por nombre: quien pregunta ya tiene la funcion en la mano
+ * -- recorre `mod.functions` --, y buscarla por su nombre era hashear una
+ * cadena para encontrar algo cuya posicion ya se conocia.
+ */
+struct ModuleEscape {
+    /// Uno por funcion de `mod.functions`, en el mismo orden.  Las nativas no
+    /// tienen cuerpo que analizar y se quedan vacias, y @ref find las rechaza.
+    util::NamedVector<EscapeInfo, scratch::EscapeByFn> by_fn;
+    /// Cuales de @ref by_fn se analizaron (las que tienen cuerpo).
+    util::NamedVector<EscapeFnState, scratch::EscapeFnStates> state;
+
+    /**
+     * @brief El escape de @p fn, que tiene que ser una funcion de @p mod.
+     * @return Nulo si @p fn no es de ese modulo o no se analizo (nativa): no
+     *         saber si algo escapa no es saber que no escapa.
+     */
+    const EscapeInfo *find(const ir::IrModule &mod,
+                           const ir::IrFunction &fn) const;
+};
+
+ModuleEscape compute_escape_module(
     const ir::IrModule &mod,
     const std::function<const IrFacts &(const ir::IrFunction &)> &facts_of,
     const std::function<const PointsTo &(const ir::IrFunction &)> &pt_of);

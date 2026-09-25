@@ -26,22 +26,197 @@ using ir::IrInstr;
 using ir::IrOp;
 using ir::IrValueId;
 
+namespace {
+
+/**
+ * @brief Sale DICIENDO cual de las condiciones fallo.
+ *
+ * Eran siete y todas contestaban lo mismo, asi que quien preguntaba no podia
+ * distinguir un bucle con dos salidas de uno cuya cabecera hace de mas -- y se
+ * arreglan de formas distintas: una es un hueco de este analisis y la otra del
+ * programa.
+ */
+LoopStructure loop_bail(LoopStructure &st, const char *code) {
+    st.why = code;
+    return st;
+}
+
+/**
+ * @brief Calculo PURO admitido en la guarda de la cabecera.
+ *
+ * Es una lista de PERMITIDOS y no de prohibidos, a proposito: lo que no se
+ * conoce se rechaza, asi que una op nueva del IR no se cuela sola en un sitio
+ * donde hay que poder CLONAR sin cambiar nada.  Crece cuando aparezca una
+ * guarda que la necesite, no antes.
+ */
+bool loop_guard_op_is_pure(IrOp op) {
+    switch (op) {
+    case IrOp::CONST:
+    case IrOp::BORROW: // copia del puntero: computo puro
+    case IrOp::MOV:
+    case IrOp::ADD:
+    case IrOp::SUB:
+    case IrOp::MUL:
+    case IrOp::SHL:
+    case IrOp::TRUNC:
+    case IrOp::ZEXT:
+    case IrOp::SEXT: return true;
+    default: return false;
+    }
+}
+
+/// Tope al subir por el arbol de anidamiento: por si llegara con un ciclo.  Un
+/// analisis no debe colgar el compilador ni cuando le mienten.
+constexpr int kMaxNestingHops = 64;
+
+/// Si el bloque cuyo bucle mas interno es @p inner esta dentro de @p loop,
+/// anidado o no.
+bool loop_contains_nest(const LoopFacts &lf, uint32_t inner, uint32_t loop) {
+    for (int hops = 0; inner != LoopFacts::NO_LOOP && hops <= kMaxNestingHops;
+         ++hops) {
+        if (inner == loop) return true;
+        inner = lf.parent_of(inner);
+    }
+    return false;
+}
+
+/// Convierte cuentas por clave (en la posicion siguiente) en el inicio de la
+/// lista de cada una.
+template <typename Tag>
+void loop_prefix_sum(util::NamedVector<LoopListSlot, Tag> &off) {
+    for (size_t i = 1; i < off.size(); ++i)
+        off[i] = LoopListSlot(off[i] + off[i - 1]);
+}
+
+} // namespace
+
+LoopStructureIndex build_loop_structure_index(const ir::IrFunction &fn,
+                                              const LoopFacts &lf) {
+    LoopStructureIndex ix;
+    const size_t nb = fn.blocks.size();
+    const uint32_t nl = lf.loop_count;
+    const size_t nv = fn.values.size();
+
+    /* Pertenencia y cuerpo: cada bloque, en su bucle mas interno y en todos
+     * los que lo contienen.  Bloques por profundidad de anidamiento, no
+     * bloques por bucles. */
+    ix.member_off.assign(size_t(nl) + 1, LoopListSlot(0));
+    ix.body_off.assign(size_t(nl) + 1, LoopListSlot(0));
+    for (size_t b = 0; b < nb; ++b) {
+        uint32_t L = lf.innermost(IrBlockId(b));
+        if (L == LoopFacts::NO_LOOP || L >= nl) continue;
+        if (IrBlockId(b) != lf.header_block_of(L))
+            ix.body_off[L + 1] = LoopListSlot(ix.body_off[L + 1] + 1);
+        for (int hops = 0; L != LoopFacts::NO_LOOP && L < nl &&
+                           hops <= kMaxNestingHops;
+             ++hops, L = lf.parent_of(L))
+            ix.member_off[L + 1] = LoopListSlot(ix.member_off[L + 1] + 1);
+    }
+    loop_prefix_sum(ix.member_off);
+    loop_prefix_sum(ix.body_off);
+    ix.members.resize(ix.member_off[nl]);
+    ix.body.resize(ix.body_off[nl]);
+    {
+        util::NamedVector<LoopListSlot, scratch::LoopMemberOffsets> mnext(
+            ix.member_off.begin(), ix.member_off.end() - 1);
+        util::NamedVector<LoopListSlot, scratch::LoopBodyOffsets> bnext(
+            ix.body_off.begin(), ix.body_off.end() - 1);
+        for (size_t b = 0; b < nb; ++b) {
+            uint32_t L = lf.innermost(IrBlockId(b));
+            if (L == LoopFacts::NO_LOOP || L >= nl) continue;
+            if (IrBlockId(b) != lf.header_block_of(L)) {
+                ix.body[bnext[L]] = IrBlockId(b);
+                bnext[L] = LoopListSlot(bnext[L] + 1);
+            }
+            for (int hops = 0; L != LoopFacts::NO_LOOP && L < nl &&
+                               hops <= kMaxNestingHops;
+                 ++hops, L = lf.parent_of(L)) {
+                ix.members[mnext[L]] = IrBlockId(b);
+                mnext[L] = LoopListSlot(mnext[L] + 1);
+            }
+        }
+    }
+
+    /* Cuantos bucles tiene cada uno justo dentro. */
+    ix.inner_count.assign(nl, LoopChildCount(0));
+    for (uint32_t L = 0; L < nl; ++L) {
+        const uint32_t p = lf.parent_of(L);
+        if (p != LoopFacts::NO_LOOP && p < nl)
+            ix.inner_count[p] = LoopChildCount(ix.inner_count[p] + 1);
+    }
+
+    /* Predecesores desde los terminadores, cada uno una vez aunque salte dos
+     * veces al mismo bloque. */
+    ix.pred_off.assign(nb + 1, LoopListSlot(0));
+    for (int pass = 0; pass < 2; ++pass) {
+        util::NamedVector<LoopListSlot, scratch::LoopPredOffsets> next;
+        if (pass == 1) {
+            loop_prefix_sum(ix.pred_off);
+            ix.preds.resize(ix.pred_off[nb]);
+            next.assign(ix.pred_off.begin(), ix.pred_off.end() - 1);
+        }
+        for (size_t p = 0; p < nb; ++p) {
+            const auto &pins = fn.blocks[p].instrs;
+            if (pins.empty()) continue;
+            const IrInstr &t = pins.back();
+            IrBlockId to[2] = {IR_NO_BLOCK, IR_NO_BLOCK};
+            if (t.op == IrOp::BR) {
+                to[0] = t.target_block;
+            } else if (t.op == IrOp::BR_COND) {
+                to[0] = t.target_block;
+                if (t.false_block != t.target_block) to[1] = t.false_block;
+            }
+            for (IrBlockId s : to) {
+                if (s >= nb) continue;
+                if (pass == 0) {
+                    ix.pred_off[s + 1] = LoopListSlot(ix.pred_off[s + 1] + 1);
+                } else {
+                    ix.preds[next[s]] = IrBlockId(p);
+                    next[s] = LoopListSlot(next[s] + 1);
+                }
+            }
+        }
+    }
+
+    /* Loop-closed SSA: un valor definido en el CUERPO de un bucle -- su nivel,
+     * sin la cabecera -- no puede usarse en un bloque de fuera.  Se mira cada
+     * uso una vez y se marca el bucle de su definicion: usos por profundidad,
+     * no bucles por instrucciones. */
+    ix.escapes.assign(nl, LOOP_VALUES_STAY);
+    util::NamedVector<IrBlockId, scratch::LoopDefBlock> def_block(
+        nv, IR_NO_BLOCK);
+    for (size_t b = 0; b < nb; ++b)
+        for (const IrInstr &in : fn.blocks[b].instrs)
+            if (in.dst < nv) def_block[in.dst] = IrBlockId(b);
+    for (size_t b = 0; b < nb; ++b) {
+        const uint32_t here = lf.innermost(IrBlockId(b));
+        for (const IrInstr &in : fn.blocks[b].instrs) {
+            const size_t n_ops = in.operands.size();
+            for (size_t k = 0; k < n_ops + in.phi_args.size(); ++k) {
+                const IrValueId v = k < n_ops ? in.operands[k]
+                                              : in.phi_args[k - n_ops].value;
+                if (v >= nv || def_block[v] == IR_NO_BLOCK) continue;
+                const IrBlockId d = def_block[v];
+                const uint32_t L = lf.innermost(d);
+                if (L == LoopFacts::NO_LOOP || L >= nl) continue;
+                if (d == lf.header_block_of(L)) continue; // no es del cuerpo
+                if (ix.escapes[L] == LOOP_VALUE_ESCAPES) continue;
+                if (!loop_contains_nest(lf, here, L))
+                    ix.escapes[L] = LOOP_VALUE_ESCAPES;
+            }
+        }
+    }
+    return ix;
+}
+
 LoopStructure detect_loop_structure(const ir::IrFunction &fn,
                                     const analysis::LoopFacts &lf,
-                                    uint32_t loop_id) {
+                                    uint32_t loop_id,
+                                    const LoopStructureIndex &index) {
     LoopStructure st;
-    /* Salir DICIENDO cual de las condiciones fallo.  Eran siete y todas
-     * contestaban lo mismo, asi que quien preguntaba no podia distinguir un
-     * bucle con dos salidas de uno cuya cabecera hace de mas -- y se arreglan
-     * de formas distintas: una es un hueco de este analisis y la otra del
-     * programa. */
-    auto bail = [&st](const char *code) -> LoopStructure {
-        st.why = code;
-        return st;
-    };
     const IrBlockId H = lf.header_block_of(loop_id);
     if (H == (IrBlockId)IR_NO_BLOCK || H >= fn.blocks.size())
-        return bail("loop.no_header");
+        return loop_bail(st, "loop.no_header");
     /* `no_unroll` NO se mira aqui.
      *
      * La marca dice "no desenrolles ESTE", y la pone el propio desenrollador
@@ -70,30 +245,16 @@ LoopStructure detect_loop_structure(const ir::IrFunction &fn,
      *
      * Con las dos cosas mezcladas, el bloque que entra al bucle de dentro
      * saltaba a algo "de fuera" y el analisis se rendia con `body_exits`. */
-    const size_t Nb = fn.blocks.size();
+    /* Las dos listas salen del indice de la funcion, que las hizo en un solo
+     * recorrido para todos los bucles. */
+    if (loop_id >= lf.loop_count) return loop_bail(st, "loop.no_header");
     st.loop_blocks.insert(H);
-    for (size_t bi = 0; bi < Nb; ++bi) {
-        const uint32_t mio = lf.innermost((IrBlockId)bi);
-        if (mio == LoopFacts::NO_LOOP) continue;
-        if (mio == loop_id) {
-            st.loop_blocks.insert((IrBlockId)bi);
-            if ((IrBlockId)bi != H) st.body.push_back((IrBlockId)bi);
-            continue;
-        }
-        /* De un bucle de dentro?  Se sube por los padres.  El tope es por si
-         * el arbol llegara con un ciclo: un analisis no debe colgar el
-         * compilador ni cuando le mienten. */
-        uint32_t p = lf.parent_of(mio);
-        for (int saltos = 0; saltos < 64 && p != LoopFacts::NO_LOOP; ++saltos) {
-            if (p == loop_id) {
-                st.loop_blocks.insert((IrBlockId)bi);
-                break;
-            }
-            p = lf.parent_of(p);
-        }
-    }
-    for (uint32_t L = 0; L < lf.loop_count; ++L)
-        if (lf.parent_of(L) == loop_id) ++st.inner_loops;
+    for (LoopListSlot s = index.member_off[loop_id];
+         s < index.member_off[loop_id + 1]; s = LoopListSlot(s + 1))
+        st.loop_blocks.insert(index.members[s]);
+    st.body.assign(index.body.begin() + index.body_off[loop_id],
+                   index.body.begin() + index.body_off[loop_id + 1]);
+    st.inner_loops = index.inner_count[loop_id];
     /* Un bucle de UN SOLO BLOQUE que salta a si mismo esta tan contado como
      * cualquiera: las PHIs, el cuerpo y la guarda viven todos ahi.  Es en lo
      * que el optimizador convierte un `do { } while (...)` pequeno, asi que
@@ -109,7 +270,7 @@ LoopStructure detect_loop_structure(const ir::IrFunction &fn,
         const bool vuelve_a_si =
             !t.empty() && t.back().op == IrOp::BR_COND &&
             (t.back().target_block == H || t.back().false_block == H);
-        if (!vuelve_a_si) return bail("loop.degenerate");
+        if (!vuelve_a_si) return loop_bail(st, "loop.degenerate");
     }
 
     /* El LATCH primero, porque en un bucle ROTADO la guarda vive en el.
@@ -129,12 +290,12 @@ LoopStructure detect_loop_structure(const ir::IrFunction &fn,
                                 (bt.op == IrOp::BR_COND &&
                                  (bt.target_block == H || bt.false_block == H));
             if (vuelve) {
-                if (st.latch != IR_NO_BLOCK) return bail("loop.two_latches");
+                if (st.latch != IR_NO_BLOCK) return loop_bail(st, "loop.two_latches");
                 st.latch = b;
             }
         }
     }
-    if (st.latch == IR_NO_BLOCK) return bail("loop.no_latch");
+    if (st.latch == IR_NO_BLOCK) return loop_bail(st, "loop.no_latch");
 
     /* Header limpio: [PHIs...] + [calculo de la guarda] + [br_cond].
      *
@@ -144,19 +305,19 @@ LoopStructure detect_loop_structure(const ir::IrFunction &fn,
      * `do { } while (i < 24)` es exactamente eso, y sin reconocerlo el coste
      * declaraba O(n) veinticuatro vueltas fijas. */
     const auto &hins = fn.blocks[H].instrs;
-    if (hins.size() < 2) return bail("loop.header_too_small");
+    if (hins.size() < 2) return loop_bail(st, "loop.header_too_small");
     const IrInstr &hterm = hins.back();
     st.rotated = hterm.op != IrOp::BR_COND;
     const IrBlockId G = st.rotated ? st.latch : H; // donde esta la guarda
     const auto &gins = fn.blocks[G].instrs;
     const IrInstr &term = gins.back();
     if (term.op != IrOp::BR_COND || term.operands.empty())
-        return bail("loop.header_not_conditional");
+        return loop_bail(st, "loop.header_not_conditional");
     const IrValueId cond = term.operands[0];
     const bool t_in = st.contains(term.target_block);
     const bool f_in = st.contains(term.false_block);
     // Exactamente uno dentro y uno fuera.
-    if (t_in == f_in) return bail("loop.header_branch_not_exit");
+    if (t_in == f_in) return loop_bail(st, "loop.header_branch_not_exit");
     st.body_entry = t_in ? term.target_block : term.false_block;
     st.exit = t_in ? term.false_block : term.target_block;
     /* Rotado, la cabecera no se comprueba: no hay guarda que mirar en ella, y
@@ -190,29 +351,23 @@ LoopStructure detect_loop_structure(const ir::IrFunction &fn,
      * y el analisis de coste heredaba el hueco: declaraba O(?) una funcion
      * cuyo coste sabia perfectamente.  Un analisis que renuncia por esto esta
      * midiendo al optimizador, no al programa. */
-    // Preheader: unico pred del header FUERA del bucle.  Se calcula LOCALMENTE
-    // desde los terminadores (no desde fn.blocks[].preds, que un pase previo
-    // pudo dejar obsoletos) para no depender de mutar el CFG de la funcion.
-    for (size_t p = 0; p < Nb; ++p) {
-        if (st.contains((IrBlockId)p)) continue;
-        const auto &pins = fn.blocks[p].instrs;
-        if (pins.empty()) continue;
-        const IrInstr &pt = pins.back();
-        const bool goes_to_H = (pt.op == IrOp::BR && pt.target_block == H) ||
-                               (pt.op == IrOp::BR_COND &&
-                                (pt.target_block == H || pt.false_block == H));
-        if (goes_to_H) {
-            if (st.preheader != IR_NO_BLOCK)
-                return bail("loop.two_entries"); // >1 entrada.
-            st.preheader = (IrBlockId)p;
-        }
+    // Preheader: unico pred del header FUERA del bucle.  Los predecesores son
+    // los de los terminadores (no los de fn.blocks[].preds, que un pase previo
+    // pudo dejar obsoletos), y los tiene el indice.
+    for (LoopListSlot s = index.pred_off[H]; s < index.pred_off[H + 1];
+         s = LoopListSlot(s + 1)) {
+        const IrBlockId p = index.preds[s];
+        if (st.contains(p)) continue;
+        if (st.preheader != IR_NO_BLOCK)
+            return loop_bail(st, "loop.two_entries"); // >1 entrada.
+        st.preheader = p;
     }
-    if (st.preheader == IR_NO_BLOCK) return bail("loop.no_preheader");
+    if (st.preheader == IR_NO_BLOCK) return loop_bail(st, "loop.no_preheader");
 
     // PHIs del header: cada una con {arg preheader, arg latch}.
     for (const IrInstr &in : hins) {
         if (in.op != IrOp::PHI) continue;
-        if (in.phi_args.size() != 2) return bail("loop.phi_not_binary");
+        if (in.phi_args.size() != 2) return loop_bail(st, "loop.phi_not_binary");
         HeaderPhi hp;
         hp.dst = in.dst;
         for (const auto &pa : in.phi_args) {
@@ -221,13 +376,13 @@ LoopStructure detect_loop_structure(const ir::IrFunction &fn,
             else if (pa.block == st.latch)
                 hp.back = pa.value;
             else
-                return bail("loop.phi_from_elsewhere");
+                return loop_bail(st, "loop.phi_from_elsewhere");
         }
         if (hp.init == IR_NO_VALUE || hp.back == IR_NO_VALUE)
-            return bail("loop.phi_incomplete");
+            return loop_bail(st, "loop.phi_incomplete");
         st.phis.push_back(hp);
     }
-    if (st.phis.empty()) return bail("loop.header_without_phis");
+    if (st.phis.empty()) return loop_bail(st, "loop.header_without_phis");
 
     /* Hasta aqui, la propiedad DEBIL: cabecera con guarda contada, un solo
      * latch, un solo preheader y PHIs completas.  Con eso el numero de vueltas
@@ -241,24 +396,10 @@ LoopStructure detect_loop_structure(const ir::IrFunction &fn,
 
     // Loop-closed SSA: ningun valor del CUERPO se usa fuera del bucle (los
     // live-out salen por las PHIs del header).  Sin esto el remainder podria
-    // dejar un valor indefinido en el exit.
-    std::unordered_set<IrValueId> body_defs;
-    for (IrBlockId b : st.body)
-        for (const IrInstr &in : fn.blocks[b].instrs)
-            if (in.dst != IR_NO_VALUE) body_defs.insert(in.dst);
-    for (size_t bi = 0; bi < Nb; ++bi) {
-        if (st.contains((IrBlockId)bi)) continue; // dentro del bucle: OK.
-        for (const IrInstr &in : fn.blocks[bi].instrs) {
-            for (IrValueId o : in.operands)
-                if (body_defs.count(o)) return bail("loop.value_escapes");
-            for (const auto &pa : in.phi_args) {
-                if (st.contains(pa.block) && body_defs.count(pa.value))
-                    return bail("loop.value_escapes");
-                if (body_defs.count(pa.value) && !st.contains(pa.block))
-                    return bail("loop.value_escapes");
-            }
-        }
-    }
+    // dejar un valor indefinido en el exit.  Lo contesta el indice, que miro
+    // cada uso de la funcion una vez para todos los bucles.
+    if (index.escapes[loop_id] == LOOP_VALUE_ESCAPES)
+        return loop_bail(st, "loop.value_escapes");
 
     /* En el header solo PHIs y el CALCULO DE LA GUARDA -- para CLONARLO.
      *
@@ -280,39 +421,19 @@ LoopStructure detect_loop_structure(const ir::IrFunction &fn,
             for (IrValueId o : in.operands)
                 feeds_cond.insert(o);
         }
-        /* Calculo PURO admitido en la guarda.
-         *
-         * Es una lista de PERMITIDOS y no de prohibidos, a proposito: lo que
-         * no se conoce se rechaza, asi que una op nueva del IR no se cuela
-         * sola en un sitio donde hay que poder CLONAR sin cambiar nada.  Crece
-         * cuando aparezca una guarda que la necesite, no antes.
-         *
-         * Lo de "no toca memoria" se pregunta al vocabulario compartido y no se
+        /* Calculo PURO admitido en la guarda: @ref loop_guard_op_is_pure.  Lo
+         * de "no toca memoria" se pregunta al vocabulario compartido y no se
          * repite aqui. */
-        auto pure_compute = [](IrOp op) {
-            switch (op) {
-            case IrOp::CONST:
-            case IrOp::BORROW: // copia del puntero: computo puro
-            case IrOp::MOV:
-            case IrOp::ADD:
-            case IrOp::SUB:
-            case IrOp::MUL:
-            case IrOp::SHL:
-            case IrOp::TRUNC:
-            case IrOp::ZEXT:
-            case IrOp::SEXT: return true;
-            default: return false;
-            }
-        };
         for (size_t i = 0; i + 1 < hins.size(); ++i) { // sin el terminador.
             const IrInstr &in = hins[i];
             if (in.op == IrOp::PHI) continue;
             if (in.dst == cond) continue; // la que define la condicion
             if (in.dst == IR_NO_VALUE || !feeds_cond.count(in.dst))
-                return bail("loop.header_does_more"); // no aporta a la guarda
-            if (!pure_compute(in.op)) return bail("loop.header_impure");
+                return loop_bail(st, "loop.header_does_more"); // no aporta a la guarda
+            if (!loop_guard_op_is_pure(in.op))
+                return loop_bail(st, "loop.header_impure");
             if (analysis::memory_access_kind(in.op).touches)
-                return bail("loop.header_touches_memory");
+                return loop_bail(st, "loop.header_touches_memory");
         }
     }
 
@@ -326,26 +447,26 @@ LoopStructure detect_loop_structure(const ir::IrFunction &fn,
     for (IrBlockId b : st.loop_blocks) {
         if (b == H) continue; // el header sale a proposito: es la guarda
         const auto &bi = fn.blocks[b].instrs;
-        if (bi.empty()) return bail("loop.empty_body_block");
+        if (bi.empty()) return loop_bail(st, "loop.empty_body_block");
         const IrInstr &bt = bi.back();
         if (bt.op == IrOp::BR) {
-            if (!st.contains(bt.target_block)) return bail("loop.body_exits");
+            if (!st.contains(bt.target_block)) return loop_bail(st, "loop.body_exits");
         } else if (bt.op == IrOp::BR_COND) {
             if (!st.contains(bt.target_block) || !st.contains(bt.false_block))
-                return bail("loop.body_exits");
+                return loop_bail(st, "loop.body_exits");
         } else {
             // RET/THROW/etc. dentro del cuerpo: mas de una salida.
-            return bail("loop.body_terminates");
+            return loop_bail(st, "loop.body_terminates");
         }
     }
 
     /* Rotado se CUENTA pero no se transforma: quien desenrolla da por hecho
      * que la guarda esta en la cabecera y que puede no entrar ninguna vez, y
      * aqui se entra siempre al menos una. */
-    if (st.rotated) return bail("loop.rotated");
+    if (st.rotated) return loop_bail(st, "loop.rotated");
     /* Y el de un solo bloque tampoco se clona: el latch es la propia cabecera,
      * asi que no hay cuerpo que copiar sin copiar tambien la guarda. */
-    if (st.self_loop) return bail("loop.self_loop");
+    if (st.self_loop) return loop_bail(st, "loop.self_loop");
 
     st.valid = true;
     return st;

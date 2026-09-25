@@ -107,17 +107,9 @@ static EffectAnalysisResult opaque_asm_effects(const ir::IrFunction &fn,
         ligp = &propias;
     }
     const analysis::AsmBindingFacts &lig = *ligp;
-    std::vector<std::pair<std::string, std::string>> clases;
-    {
-        // La decision de medir es de QUIEN mide: el cronometro es una utilidad
-        // y
-        // no sabe bajo que bandera vive cada uno de sus usuarios.
-        util::CronoTramo crono__("  effects:build classes",
-                                 util::flag_on(util::FlagId::Times));
-        clases.reserve(lig.ligaduras.size());
-        for (const analysis::LigaduraAsm &l : lig.ligaduras)
-            clases.emplace_back(l.marcador, l.clase);
-    }
+    /* Las clases vienen hechas con las ligaduras: armarlas aqui era copiar dos
+     * cadenas por ligadura en cada bloque de asm analizado. */
+    const vx::AsmOperandClasses &clases = lig.operand_classes;
     /* EL TEXTO A ANALIZAR, que no siempre esta donde estaba.
      *
      * Un `INLINE_ASM` lleva su cuerpo en `func_name`.  Un `ASM_MICRO` NO: lleva

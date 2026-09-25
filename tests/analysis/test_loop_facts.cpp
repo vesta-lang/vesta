@@ -172,7 +172,8 @@ static void counted_loop_before_optimizing() {
     CHECK(lf.loop_count == 1, "no se detecto el bucle");
 
     const analysis::LoopStructure st =
-        analysis::detect_loop_structure(fn, lf, 0);
+        analysis::detect_loop_structure(
+            fn, lf, 0, analysis::build_loop_structure_index(fn, lf));
     CHECK(st.valid,
           "una copia y una constante en la cabecera NO descalifican el bucle");
     if (!st.valid) return;
@@ -383,7 +384,8 @@ static void an_accumulator_does_not_hide_the_iv() {
     const analysis::IrFacts facts = analysis::build_ir_facts(fn);
     const LoopFacts lf = compute_loop_facts(fn);
     const analysis::LoopStructure st =
-        analysis::detect_loop_structure(fn, lf, 0);
+        analysis::detect_loop_structure(
+            fn, lf, 0, analysis::build_loop_structure_index(fn, lf));
     CHECK(st.valid, "la forma se reconoce con dos phis");
     if (!st.valid) return;
 
@@ -524,14 +526,17 @@ static void an_outer_loop_is_recognized_too() {
           "el de dentro cuelga del de fuera");
 
     // (1) La FORMA del bucle EXTERNO se reconoce.
-    const LoopStructure so = detect_loop_structure(fn, lf, outer_id);
+    const LoopStructureIndex loop_index = build_loop_structure_index(fn, lf);
+    const LoopStructure so =
+        detect_loop_structure(fn, lf, outer_id, loop_index);
     CHECK(so.valid, "el bucle externo tiene forma de bucle contado");
     CHECK(so.inner_loops == 1 && !so.flat(),
           "y se dice que lleva otro dentro: quien clone tiene que mirarlo");
     CHECK(so.contains(blk(3)),
           "un bloque del bucle de DENTRO esta dentro del de fuera");
 
-    const LoopStructure si = detect_loop_structure(fn, lf, inner_id);
+    const LoopStructure si =
+        detect_loop_structure(fn, lf, inner_id, loop_index);
     CHECK(si.valid && si.flat(), "el de dentro sigue siendo plano");
 
     // Y sus vueltas se cuentan: 32 el de fuera, 16 el de dentro.
@@ -796,7 +801,8 @@ static void a_multiplying_loop_is_logarithmic() {
         const ir::IrFunction &fn = *fnp;
         const LoopFacts lf = compute_loop_facts(fn);
         const IrFacts hechos = build_ir_facts(fn);
-        const LoopStructure st = detect_loop_structure(fn, lf, 0);
+        const LoopStructure st =
+        detect_loop_structure(fn, lf, 0, build_loop_structure_index(fn, lf));
         CHECK(st.valid, "la forma es la de un bucle contado");
 
         /* La induccion ARITMETICA no esta, y eso es correcto: quien
@@ -939,7 +945,8 @@ static void a_counting_down_loop_is_counted_too() {
         const ir::IrFunction fn = construir(c.cmp, c.init, c.paso);
         const LoopFacts lf = compute_loop_facts(fn);
         const IrFacts hechos = build_ir_facts(fn);
-        const LoopStructure st = detect_loop_structure(fn, lf, 0);
+        const LoopStructure st =
+        detect_loop_structure(fn, lf, 0, build_loop_structure_index(fn, lf));
         CHECK(st.valid, "la forma es la de un bucle contado");
 
         /* Quien va a CLONAR o a calcular direcciones sigue sin verlo, y eso es
@@ -1208,7 +1215,8 @@ static void an_early_exit_still_leaves_the_loop_bounded() {
 
     const LoopFacts lf = compute_loop_facts(fn);
     const IrFacts hechos = build_ir_facts(fn);
-    const LoopStructure st = detect_loop_structure(fn, lf, 0);
+    const LoopStructure st =
+        detect_loop_structure(fn, lf, 0, build_loop_structure_index(fn, lf));
 
     /* Las DOS propiedades, y que NO son la misma.  Si alguien vuelve a
      * colapsarlas, este par de comprobaciones es lo que lo dice. */
@@ -1328,7 +1336,8 @@ static void a_do_while_is_counted_with_one_more_turn() {
 
     const LoopFacts lf = compute_loop_facts(fn);
     const IrFacts hechos = build_ir_facts(fn);
-    const LoopStructure st = detect_loop_structure(fn, lf, 0);
+    const LoopStructure st =
+        detect_loop_structure(fn, lf, 0, build_loop_structure_index(fn, lf));
 
     CHECK(st.rotated, "se reconoce que la guarda esta al final");
     CHECK(st.countable, "y que se puede contar");
@@ -1422,7 +1431,8 @@ static void a_self_loop_is_counted_too() {
 
     const LoopFacts lf = compute_loop_facts(fn);
     const IrFacts hechos = build_ir_facts(fn);
-    const LoopStructure st = detect_loop_structure(fn, lf, 0);
+    const LoopStructure st =
+        detect_loop_structure(fn, lf, 0, build_loop_structure_index(fn, lf));
 
     CHECK(st.self_loop, "se reconoce el bucle de un solo bloque");
     CHECK(st.countable, "y se puede contar");

@@ -41,6 +41,10 @@
 #ifndef VX_BORROW_IR_CHECK_H
 #define VX_BORROW_IR_CHECK_H
 
+#include "analysis/asa/fact_store.h" // la base de hechos del momento mirado
+#include "ir/ssa_ir.h"
+#include "vx/diagnostic.h" // donde se cuenta lo que se encuentra
+
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -89,6 +93,55 @@ struct ExclusiveViolation {
 std::vector<ExclusiveViolation>
 check_exclusive_across_calls(const ir::IrModule &mod,
                              analysis::asa::FactBase &base);
+
+/**
+ * @brief Lo mismo, ya DICHO: cada violacion con su prueba y su salida.
+ *
+ * Separado de @ref check_exclusive_across_calls porque son dos
+ * responsabilidades: una AVERIGUA y la otra CUENTA.  El texto sale del catalogo
+ * multi-idioma, nunca escrito aqui.
+ *
+ * Vivia dentro del fichero del camino de proyecto, que es de todo menos el sitio
+ * de una comprobacion de prestamos.
+ *
+ * @param mod   Modulo con el IR ya terminado.
+ * @param diags Donde se depositan.
+ * @param file  Fichero al que atribuirlas.
+ * @param base  La base de hechos del momento que se esta mirando.
+ * @param level El peso del veredicto, que lo decide quien llama.
+ */
+void report_exclusive_across_calls(const ir::IrModule &mod, Diagnostics &diags,
+                                   const std::string &file,
+                                   analysis::asa::FactBase &base,
+                                   DiagLevel level);
+
+/**
+ * @brief La exclusividad de los prestamos ANTES de optimizar, con su base.
+ *
+ * Es el punto por el que pasan los DOS caminos de compilacion, y existe porque
+ * escrita en cada uno dio dos respuestas para el mismo programa: como fichero
+ * suelto acusaba y abortaba, como proyecto callaba, porque uno miraba la opcion
+ * y el otro no.
+ *
+ * Va antes de optimizar por dos razones que apuntan al mismo sitio.  De
+ * correccion: esa promesa es lo que autoriza al optimizador a reordenar
+ * accesos, asi que comprobarla despues seria comprobar si valia lo que ya se
+ * uso.  Y de posibilidad: lo que demuestra el fallo es una LLAMADA que pasa las
+ * dos regiones, y al inlinar esa llamada desaparece -- medido --.
+ *
+ * Se comprueba SIEMPRE.  La opcion decide el PESO del veredicto, no si se mira:
+ * saltarsela dejaba a `--analyze` sin nada que ensenar.
+ *
+ * La base es PROPIA y corta: la que se usa despues mira el codigo YA
+ * optimizado, y son dos codigos distintos.
+ *
+ * @param mod   El modulo que se va a optimizar.
+ * @param file  Fichero al que atribuir lo que se diga.
+ * @param violations_are_errors Si una violacion demostrada es error o aviso.
+ * @param diags Donde se depositan.
+ */
+void check_borrows_before_opt(const ir::IrModule &mod, const std::string &file,
+                              bool violations_are_errors, Diagnostics &diags);
 
 } // namespace borrow
 } // namespace vx

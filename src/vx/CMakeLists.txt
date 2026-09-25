@@ -426,6 +426,14 @@ add_library(vx_lib STATIC
     borrow/borrow_ir_check.cpp
     compiler.cpp
     compiler_project.cpp
+    # Lo que se comprueba sobre el intermedio de ANTES de optimizar.  Vive
+    # APARTE de los dos ficheros de arriba a proposito: escrito dentro de cada
+    # uno, el camino de proyecto -- que es el que toma todo programa real -- se
+    # habia quedado sin tres comprobaciones y nadie se enteraba.
+    module_checks.cpp
+    # Y leer del AST lo que el programa DECLARA, que es otra responsabilidad:
+    # estaba escrito en uno de los dos caminos y el otro no lo hacia.
+    contracts_collect.cpp
     # Traductor de los tipos de Vesta a entidades de la base de conocimiento de
     # depuracion (vxdbg).  Vive en el frontend porque la correspondencia entre
     # el vocabulario de Vesta y el modelo generico solo la conoce quien declara

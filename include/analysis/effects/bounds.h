@@ -64,9 +64,13 @@ struct BoundsViolation {
  *            aqui, lo que significa rehacer el escape y los resumenes de todo
  *            el modulo: medido en un fuente de 300 funciones, esa repeticion
  *            era la mitad de lo que tardaba el informe.
+ * @param summaries Resumenes de frontera del modulo, de quien ya los tenga (la
+ *            base de hechos).  Si el motor ya se construyo con ESTOS, no se
+ *            rehace nada.  Sin ellos se calculan aqui.
  */
-std::vector<BoundsViolation> check_region_bounds(const ir::IrModule &mod,
-                                                 EffectAnalysis *ea = nullptr);
+std::vector<BoundsViolation>
+check_region_bounds(const ir::IrModule &mod, EffectAnalysis *ea = nullptr,
+                    const analysis::RangeSummaries *summaries = nullptr);
 
 } // namespace effects
 } // namespace analysis

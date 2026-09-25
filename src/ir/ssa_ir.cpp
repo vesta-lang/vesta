@@ -26,9 +26,12 @@
  *   ir_verify()      -- verificar forma SSA
  */
 
-#include "util/fnv.h" // la semilla y el primo, en UN sitio
+#include "util/env_flags.h"        // la bandera que pide verificar
+#include "util/fnv.h"              // la semilla y el primo, en UN sitio
+#include "vx/diag/diag_catalog.h"  // el texto, en todos los idiomas
 #include "ir/ssa_ir.h"
 
+#include <cstdio>
 #include <sstream>
 #include <ostream>
 #include <cassert>
@@ -2261,28 +2264,54 @@ bool ir_verify(const IrModule &mod, std::vector<std::string> &errors) {
     return ok;
 }
 
+bool ir_verify_if_asked(const IrModule &mod, const char *stage,
+                        const std::string &file) {
+    /* Apagada por defecto: esto es una autocomprobacion del compilador.  El
+     * porque de que este en un solo sitio, en la cabecera. */
+    if (!util::flag_on(util::FlagId::VerifyIr)) return true;
+    std::vector<std::string> errors;
+    if (ir_verify(mod, errors)) return true;
+    /* Con el MOMENTO por delante: el mismo problema en dos momentos distintos
+     * son dos cosas, y sin la etiqueta no se sabe cual se esta mirando.  La
+     * etiqueta es una MARCA, no prosa; lo que se lee sale del catalogo. */
+    for (const std::string &m : errors)
+        std::fprintf(stderr, "[ir-verify %s] %s\n", stage, m.c_str());
+    const std::string summary = vx::diag::format(
+        "VX7046", {stage, std::to_string(errors.size()), file});
+    std::fprintf(stderr, "[ir-verify] %s\n", summary.c_str());
+    return false;
+}
+
+void IrFunction::recompute_succs_of(IrBlockId b) {
+    const size_t N = blocks.size();
+    if (b >= N) return;
+    IrBlock &blk = blocks[b];
+    blk.succs.clear();
+    if (blk.instrs.empty()) return;
+    const IrInstr &t = blk.instrs.back();
+    /* Un destino fuera de la funcion no es una arista: lo dejaria colgando
+     * quien construyo mal el terminador, y aqui no se inventa. */
+    auto add = [&](IrBlockId s) {
+        if (s != IR_NO_BLOCK && s < N) blk.succs.push_back(s);
+    };
+    if (t.op == IrOp::BR) {
+        add(t.target_block);
+    } else if (t.op == IrOp::BR_COND) {
+        add(t.target_block);
+        add(t.false_block);
+    } else if (t.op == IrOp::SWITCH_DENSE) {
+        add(t.target_block);
+        for (IrBlockId s : t.jump_targets)
+            add(s);
+    }
+}
+
 void IrFunction::recompute_edges() {
     const size_t N = blocks.size();
+    /* Los sucesores, bloque a bloque, por la regla de UN sitio. */
     for (size_t b = 0; b < N; ++b) {
-        blocks[b].succs.clear();
         blocks[b].preds.clear();
-    }
-    for (size_t b = 0; b < N; ++b) {
-        if (blocks[b].instrs.empty()) continue;
-        const IrInstr &t = blocks[b].instrs.back();
-        auto add = [&](IrBlockId s) {
-            if (s != IR_NO_BLOCK && s < N) blocks[b].succs.push_back(s);
-        };
-        if (t.op == IrOp::BR) {
-            add(t.target_block);
-        } else if (t.op == IrOp::BR_COND) {
-            add(t.target_block);
-            add(t.false_block);
-        } else if (t.op == IrOp::SWITCH_DENSE) {
-            add(t.target_block);
-            for (IrBlockId s : t.jump_targets)
-                add(s);
-        }
+        recompute_succs_of(static_cast<IrBlockId>(b));
     }
     for (size_t b = 0; b < N; ++b)
         for (IrBlockId s : blocks[b].succs)

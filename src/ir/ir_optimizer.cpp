@@ -21,6 +21,8 @@
 #include "vx/diag/diag_catalog.h" // los motivos, en todos los idiomas
 #include "util/fnv.h"             // dispersion de las claves de la CSE
 #include "util/phase_memory.h" // la frontera al cerrar una vuelta del punto fijo
+#include "util/scc.h" // que funciones se llaman en ciclo, para el inliner
+#include "util/name_pool.h" // nombres de clase internados, como clave
 #include "util/thread_owned.h" // un objeto por hilo, sin `thread_local`
 #include "util/named_alloc.h" // que el perfil diga QUE es cada estructura auxiliar
 #include "util/os/thread_slot.h" // los vectores de trabajo, uno por hilo
@@ -160,7 +162,53 @@ struct IsYielder;      ///< ... y la que cede el paso.
 struct Ownable;        ///< ... y de la que se puede tomar propiedad.
 struct IsConstDef;     ///< La definicion del valor es una constante.
 struct Unreachable;    ///< Bloque al que no se llega desde la entrada.
+
+/* El inliner multibloque: el grafo de llamadas en plano, para saber quien esta
+ * en un ciclo, y lo que el barrido lleva por llamante. */
+struct InlineCallOffsets; ///< Grafo de llamadas: donde empiezan las de cada una.
+struct InlineCallTargets; ///< ... y a quien llama cada llamada.
+struct InlineCallComp;    ///< Funcion -> su componente fuertemente conexa.
+struct InlineCompSize;    ///< Componente -> cuantas funciones tiene.
+struct InlineRecursive;   ///< La funcion esta en un ciclo de llamadas.
+struct InlineTimes;       ///< Veces que se aplano un recursivo en ESTE llamante.
+struct InlineTouched;     ///< Cuales de esas cuentas hay que volver a cero.
+struct InlinePositions;   ///< Llamadas inlinables de un bloque.
+
+/* El arbol de dominadores numerado, para contestar "domina" sin subir por el. */
+struct DomPre;  ///< Cuando entra el recorrido en cada bloque.
+struct DomPost; ///< ... y cuando sale.
+struct DomWalk; ///< La pila de ese recorrido.
+struct LoopWalk; ///< La pila al marcar los bloques de un bucle.
+
+/* mem2reg por lotes: todos los objetos de una funcion en un recorrido. */
+struct SrObjOf;        ///< Valor -> objeto cuya direccion es.
+struct SrVarOf;        ///< ... y la variable del campo al que apunta.
+struct SrOffsets;      ///< Desplazamientos distintos de los campos de un objeto.
+struct SrObjects;      ///< Estado de cada objeto que se intenta promover.
+struct SrVars;         ///< Variables (objeto, campo) que se promueven.
+struct SrPhis;         ///< Phis planeados.
+struct SrPhiOffsets;   ///< Bloque -> donde empiezan sus phis.
+struct SrPhiOfBlock;   ///< ... y cuales son.
+struct SrIdfMark;      ///< Frontera iterada: bloque ya en la lista.
+struct SrPhiMark;      ///< ... bloque que ya tiene phi para la variable.
+struct SrIdfWork;      ///< ... la lista de bloques pendientes.
+struct SrRenameWalk;   ///< La pila del renombrado sobre el arbol.
+struct SrPushed;       ///< Variables con una definicion apilada en el bloque.
+struct SrLoadRepl;     ///< Carga -> el valor que la sustituye.
+struct SrRebuilt;      ///< Instrucciones de un bloque, ya reescritas.
+struct GcSiteAccesses; ///< Escalarizar objetos: los accesos de cada sitio.
+struct GcSiteDead;     ///< ... las instrucciones que sobran de cada sitio.
 } // namespace scratch
+
+/// Si una funcion esta en un ciclo de llamadas, que es lo unico que puede hacer
+/// que el inliner se desboque.
+enum InlineRecursion : uint8_t {
+    INLINE_NOT_RECURSIVE = 0, ///< Fuera de todo ciclo: su inlinado termina.
+    INLINE_RECURSIVE = 1,     ///< En un ciclo: inlinarla vuelve a traerla.
+};
+
+/// Posicion de una llamada dentro de las instrucciones de su bloque.
+enum InlineCallPos : uint32_t {};
 
 /**
  * @brief "Alguien usa este valor?", una marca de un byte por valor SSA.
@@ -2887,16 +2935,29 @@ struct SrFieldInit {
     uint64_t const_val = 0; ///< (CONST) valor literal
 };
 
+/// Orden de las inicializaciones de un modelo: por desplazamiento del campo.
+inline bool sr_init_before(const SrFieldInit &a, const SrFieldInit &b) {
+    return a.offset < b.offset;
+}
+
+/// Orden para buscar un desplazamiento entre las inicializaciones.
+inline bool sr_init_before_offset(const SrFieldInit &a, uint32_t off) {
+    return a.offset < off;
+}
+
 /** @brief Modelo de un ctor "inicializador trivial de campos". */
 struct SrCtorModel {
     bool valid = false;
     uint32_t num_new_args = 0;      ///< params del ctor sin contar `this`
-    std::vector<SrFieldInit> inits; ///< una entrada por campo inicializado
+    /// Una entrada por campo inicializado, ORDENADAS por desplazamiento.
+    std::vector<SrFieldInit> inits;
 
+    /// La inicializacion del campo en @p off, o nulo.  Por mitades: se pregunta
+    /// una vez por campo de cada objeto promovido.
     const SrFieldInit *find(uint32_t off) const {
-        for (const auto &i : inits)
-            if (i.offset == off) return &i;
-        return nullptr;
+        const auto it = std::lower_bound(inits.begin(), inits.end(), off,
+                                         sr_init_before_offset);
+        return (it != inits.end() && it->offset == off) ? &*it : nullptr;
     }
 };
 
@@ -3109,8 +3170,6 @@ bool sr_build_ctor_model(const IrModule &mod, const std::string &class_name,
                                     ? ctor->values[val].type
                                     : IrType::I64;
             }
-            /* No permitir dos stores al mismo offset (ambiguo). */
-            if (out.find(off)) return bail("VXA117");
             out.inits.push_back(fi);
             break;
         }
@@ -3121,6 +3180,15 @@ bool sr_build_ctor_model(const IrModule &mod, const std::string &class_name,
             return bail("VXA118");
         }
     }
+
+    /* Ordenadas por desplazamiento: es lo que deja a @ref SrCtorModel::find
+     * buscar por mitades.  Y ordenadas, dos stores al mismo campo -- ambiguo,
+     * no se sabe cual vale -- quedan juntos: se ven comparando vecinos, en vez
+     * de buscar cada uno entre los anteriores. */
+    std::sort(out.inits.begin(), out.inits.end(), sr_init_before);
+    for (size_t i = 1; i < out.inits.size(); ++i)
+        if (out.inits[i].offset == out.inits[i - 1].offset)
+            return bail("VXA117");
 
     out.valid = true;
     return true;
@@ -3142,7 +3210,7 @@ bool sr_build_ctor_model(const IrModule &mod, const std::string &class_name,
  *
  * Esta escrito una vez porque las tres reescrituras que adelantan un valor
  * -- desde un argumento del constructor, desde una escritura previa, y la de
- * @c sr_mem2reg_object -- tenian la misma linea copiada, y solo una se
+ * @c sr_mem2reg_batch -- tenian la misma linea copiada, y solo una se
  * arreglo la primera vez.
  *
  * @param fn       Funcion.
@@ -3277,6 +3345,21 @@ bool sr_rewrite_load_zero(IrInstr &ld, IrFunction &fn, bool apply) {
 //  Dominancia: idom + dominance frontier + dom-tree (para SROA/mem2reg).
 //==============================================================================
 
+/// Instante del recorrido del arbol de dominadores en que se entra en un
+/// bloque o se sale de el.
+enum SrDomOrder : uint32_t {};
+/// Un bloque inalcanzable: no esta en el arbol y no tiene instante.
+static constexpr SrDomOrder SR_NO_DOM_ORDER = SrDomOrder(0xFFFFFFFFu);
+
+/// Cual de los hijos de un bloque en el arbol de dominadores toca visitar.
+enum SrChildPos : uint32_t {};
+
+/// Un paso pendiente al numerar el arbol de dominadores.
+struct SrDomWalk {
+    IrBlockId block;
+    SrChildPos next_child;
+};
+
 struct SrDom {
     size_t N = 0;
     IrBlockId UNDEF = IrBlockId(0);
@@ -3285,16 +3368,29 @@ struct SrDom {
     std::vector<std::vector<IrBlockId>> df;           ///< dominance frontier
     std::vector<std::vector<IrBlockId>> dom_children; ///< hijos en el dom-tree
     util::NamedVector<uint8_t, scratch::Reachable> reachable; ///< desde entry
+    /// Numeracion del arbol de dominadores: cuando se ENTRA y cuando se SALE de
+    /// cada bloque en un recorrido en profundidad.  Un bloque inalcanzable no
+    /// esta en el arbol y queda en @c SR_NO_DOM_ORDER.
+    util::NamedVector<SrDomOrder, scratch::DomPre> dom_pre;
+    util::NamedVector<SrDomOrder, scratch::DomPost> dom_post;
 
+    /**
+     * @brief Si @p T domina a @p B, en tiempo CONSTANTE.
+     *
+     * T domina a B exactamente cuando B cae dentro del subarbol de T, y eso es
+     * que el recorrido entra en B despues que en T y sale antes.
+     *
+     * Antes se subia por la cadena de dominadores inmediatos desde B, que es
+     * O(profundidad del arbol).  En una funcion con mucho codigo inlinado el
+     * arbol es casi una cadena -- profundidad del orden de los bloques --, y
+     * esta consulta se hace por cada arista al buscar bucles: cuadratico.
+     */
     bool dominates(IrBlockId T, IrBlockId B) const {
         if (T == B) return true;
-        if (T >= N || B >= N || idom[B] == UNDEF) return false;
-        IrBlockId cur = B;
-        while (idom[cur] != cur) {
-            cur = idom[cur];
-            if (cur == T) return true;
-        }
-        return false;
+        if (T >= N || B >= N) return false;
+        if (dom_pre[T] == SR_NO_DOM_ORDER || dom_pre[B] == SR_NO_DOM_ORDER)
+            return false;
+        return dom_pre[T] <= dom_pre[B] && dom_post[B] <= dom_post[T];
     }
 };
 
@@ -3404,6 +3500,34 @@ SrDom sr_compute_dom(const IrFunction &fn) {
             d.dom_children[d.idom[b]].push_back(b);
     }
 
+    /* Numerar el arbol: entrada y salida de cada bloque en un recorrido en
+     * profundidad.  Es lo que deja contestar "domina" en tiempo constante --
+     * ver @ref SrDom::dominates --.  Iterativo: una funcion con mucho codigo
+     * inlinado tiene un arbol casi en cadena, y una recursion por nivel
+     * desbordaria la pila del proceso. */
+    d.dom_pre.assign(N, SR_NO_DOM_ORDER);
+    d.dom_post.assign(N, SR_NO_DOM_ORDER);
+    {
+        uint32_t clock = 0; // cuantos instantes se han repartido
+        util::NamedVector<SrDomWalk, scratch::DomWalk> walk;
+        walk.push_back({entry, SrChildPos(0)});
+        d.dom_pre[entry] = SrDomOrder(clock++);
+        while (!walk.empty()) {
+            SrDomWalk &top = walk.back();
+            const auto &kids = d.dom_children[top.block];
+            if (top.next_child < kids.size()) {
+                const IrBlockId c = kids[top.next_child];
+                top.next_child = SrChildPos(top.next_child + 1);
+                d.dom_pre[c] = SrDomOrder(clock++);
+                /* `top` ya no se usa: apilar puede mover el vector. */
+                walk.push_back({c, SrChildPos(0)});
+            } else {
+                d.dom_post[top.block] = SrDomOrder(clock++);
+                walk.pop_back();
+            }
+        }
+    }
+
     /* Dominance frontier (Cytron): por cada bloque b con >=2 preds, por cada
      * pred p, sube en el dom-tree desde p hasta idom[b] añadiendo b al DF. */
     for (IrBlockId b = IrBlockId(0); b < N; ++b) {
@@ -3420,578 +3544,704 @@ SrDom sr_compute_dom(const IrFunction &fn) {
     return d;
 }
 
-//==============================================================================
-//  SROA/mem2reg de los campos de un objeto GC no-escapante.
-//
-//  Promueve cada campo (offset) del objeto a forma SSA a traves del control de
-//  flujo (incluyendo loops): inserta PHIs en el dominance frontier de las
-//  definiciones (ctor-init + stores) y renombra (Cytron) reemplazando cada load
-//  por la definicion que lo alcanza.  Tras esto el objeto no toca memoria -> el
-//  alloc + los stores se borran.
-//
-//  Precondiciones (el caller las garantiza salvo lo que se revalida aqui):
-//    - El objeto NO escapa y TODOS sus usos son field-access (load/store de
-//      `obj` o de `add obj, Kconst`), nunca en phi_args/func_ptr/CALL/RET.
-//    - El ctor es un inicializador trivial (modelo @p model).
-//    - CFG reducible (el frontend Vesta lo garantiza).
-//
-//  Conservador: si cualquier campo accedido no esta en el modelo, no es entero,
-//  o los tipos no son consistentes -> bail (no muta nada).
-//==============================================================================
+/// Si un bloque es la cabecera de un bucle.
+enum SrLoopHeaderMark : uint8_t {
+    SR_NOT_LOOP_HEADER = 0,
+    SR_LOOP_HEADER = 1,
+};
 
-//  @p stack_mode: cuando true, el "alloc" es un ALLOCA de PILA (struct
-//  value-type), NO un objeto GC.  Diferencias: (1) @p model puede ser nullptr
-//  (no hay ctor -- los STORE del init-list siembran los defs); (2) el alloc NO
-//  provee valor inicial de ningun campo -> una lectura de un campo antes de que
-//  un store lo domine hace bail ("load sin def alcanzante"), que es CORRECTO
-//  (la pila no se zero-inicializa); (3) el paso final NOPea el ALLOCA en vez de
-//  un CALL de helper.  El GC-mode (stack_mode=false) queda byte-identico.
-bool sr_mem2reg_object(
-    IrFunction &fn, const SrCtorModel *model, size_t call_bi, size_t call_ii,
-    IrValueId obj, IrValueList args,
-    const std::unordered_map<IrValueId, uint32_t> &fieldaddr_off,
-    const char *&reason, bool stack_mode = false) {
+/// Si un bloque esta dentro de algun bucle.
+enum SrInLoopMark : uint8_t {
+    SR_OUTSIDE_LOOP = 0,
+    SR_INSIDE_LOOP = 1,
+};
+
+/**
+ * @brief Lo que mem2reg necesita del GRAFO de una funcion: dominadores y
+ *        bucles.
+ *
+ * Se calcula UNA vez por funcion y sirve para todos los objetos que se
+ * promuevan en ella, porque promover no toca el grafo -- reescribe cargas y
+ * almacenes e inserta PHIs, pero no crea bloques ni cambia aristas --.
+ *
+ * Antes se recalculaba entero por CADA objeto: con cientos de structs de pila
+ * en una funcion grande -- justo lo que deja el inliner -- eso era objetos x
+ * tamano de la funcion.
+ */
+struct SrFnGraph {
+    SrDom dom;
+    util::NamedVector<SrLoopHeaderMark, scratch::LoopHeader> loop_header;
+    util::NamedVector<SrInLoopMark, scratch::InLoop> in_loop;
+};
+
+/**
+ * @brief Dominadores y bucles de @p fn, para todos los objetos que se promuevan.
+ * @param fn La funcion.
+ * @return Su grafo, listo para @ref sr_mem2reg_batch.
+ */
+SrFnGraph sr_fn_graph(const IrFunction &fn) {
+    SrFnGraph g;
+    g.dom = sr_compute_dom(fn);
     const size_t N = fn.blocks.size();
-    if (N == 0) {
-        reason = "VXA133";
-        return false;
-    }
-
-    /* Helper: la instr es un load/store de un campo del objeto?  Devuelve
-     * offset + si es store + el valor almacenado. */
-    auto classify = [&](const IrInstr &in, uint32_t &off, bool &is_ld,
-                        bool &is_st, IrValueId &sval) -> bool {
-        is_ld = is_st = false;
-        if (in.op == IrOp::LOAD && !in.operands.empty()) {
-            IrValueId a = in.operands[0];
-            if (a == obj) {
-                off = 0;
-                is_ld = true;
-                return true;
-            }
-            auto it = fieldaddr_off.find(a);
-            if (it != fieldaddr_off.end()) {
-                off = it->second;
-                is_ld = true;
-                return true;
-            }
-        } else if (in.op == IrOp::STORE && in.operands.size() >= 2) {
-            IrValueId a = in.operands[1];
-            if (a == obj) {
-                off = 0;
-                is_st = true;
-                sval = in.operands[0];
-                return true;
-            }
-            auto it = fieldaddr_off.find(a);
-            if (it != fieldaddr_off.end()) {
-                off = it->second;
-                is_st = true;
-                sval = in.operands[0];
-                return true;
-            }
-        }
-        return false;
-    };
-
-    /* 1) Recolectar offsets accedidos + tipo por offset + bloques con store. */
-    std::unordered_map<uint32_t, IrType> field_type; /* offset -> tipo */
-    std::unordered_map<uint32_t, std::vector<IrBlockId>> store_blocks;
-    util::NamedVector<uint32_t, scratch::StrcatOffsets> offsets;
-    for (size_t bi = 0; bi < N; ++bi) {
-        for (const auto &in : fn.blocks[bi].instrs) {
-            uint32_t off;
-            bool ld, st;
-            IrValueId sv;
-            if (!classify(in, off, ld, st, sv)) continue;
-            /* Tipo del campo: para load = in.type; para store = tipo del valor.
-             */
-            IrType t =
-                ld ? in.type
-                   : (sv < fn.values.size() ? fn.values[sv].type : IrType::I64);
-            if (!type_is_integer(t)) {
-                reason = "VXA134";
-                return false;
-            }
-            auto fit = field_type.find(off);
-            if (fit == field_type.end()) {
-                field_type[off] = t;
-                offsets.push_back(off);
-            } else if (fit->second != t) {
-                reason = "VXA135";
-                return false;
-            }
-            if (st) store_blocks[off].push_back((IrBlockId)bi);
-        }
-    }
-    if (offsets.empty()) {
-        reason = "VXA136";
-        return false;
-    }
-
-    /* Cada offset accedido o bien lo inicializa el ctor (tipo debe coincidir) o
-     * bien NO -> default-0 (el objeto GC se zero-inicializa al alocar; el init
-     * sera un CONST 0 materializado abajo).  En stack_mode NO hay ctor: los
-     * defs vienen de los STORE explicitos (init-list); si un campo se lee antes
-     * de escribirse, el renaming hace bail (pila no zero-inicializada). */
-    for (uint32_t off : offsets) {
-        if (stack_mode) continue; /* sin modelo: los stores siembran los defs */
-        const SrFieldInit *fi = model->find(off);
-        if (!fi) {
-            /* Campo de usuario no inicializado -> default-0 (init = CONST 0,
-             * materializado abajo).  Pero un read de la CABECERA (offset < 24:
-             * class_ptr, etc.) NO es default-0 -> bail (identidad/reflexion).
-             */
-            if (off < SR_OBJ_HEADER_SIZE) {
-                reason = "VXA128";
-                return false;
-            }
-            continue; /* default-0 permitido para campo de usuario */
-        }
-        if (fi->field_type != field_type[off]) {
-            reason = "VXA137";
-            return false;
-        }
-    }
-
-    SrDom dom = sr_compute_dom(fn);
-    /* El bloque del alloc debe ser alcanzable (lo es: contiene el call). */
-    if (call_bi >= N || !dom.reachable[call_bi]) {
-        reason = "VXA138";
-        return false;
-    }
-    /* Todos los bloques con acceso a campos deben ser alcanzables + dominados
-     * por el alloc (garantizado por SSA, pero revalidamos defensivamente). */
-
-    /* 2) Materializar el valor de construccion (init) de cada campo como un
-     * SSA value disponible en el sitio del alloc.  Si requiere conversion
-     * (trunc) o es const, se insertara una instruccion JUSTO antes del call. */
-    std::unordered_map<uint32_t, IrValueId> init_val; /* offset -> SSA value */
-    std::vector<IrInstr> init_instrs; /* a insertar antes del call */
-    for (uint32_t off : offsets) {
-        if (stack_mode)
-            break; /* pila: sin init; los stores siembran los defs */
-        const SrFieldInit *fi = model->find(off);
-        const IrType T = field_type[off];
-        if (!fi) {
-            /* default-0: campo no inicializado por el ctor -> init = CONST 0.
-             * Sound porque el payload del objeto GC se zero-inicializa. */
-            IrInstr ci;
-            ci.op = IrOp::CONST;
-            ci.type = T;
-            ci.imm = 0;
-            IrValue nv;
-            nv.id = (IrValueId)fn.values.size();
-            nv.type = T;
-            nv.is_const = true;
-            nv.const_val = 0;
-            nv.name = "%m2ri" + std::to_string(nv.id);
-            ci.dst = nv.id;
-            fn.values.push_back(nv);
-            init_val[off] = nv.id;
-            init_instrs.push_back(std::move(ci));
-            continue;
-        }
-        if (fi->kind == SrFieldInit::CONST) {
-            uint64_t v = fi->const_val;
-            int sz = type_slot_bytes(T);
-            if (sz < 8) v &= ((uint64_t{1} << (sz * 8)) - 1);
-            IrInstr ci;
-            ci.op = IrOp::CONST;
-            ci.type = T;
-            ci.imm = v;
-            IrValue nv;
-            nv.id = (IrValueId)fn.values.size();
-            nv.type = T;
-            nv.is_const = true;
-            nv.const_val = v;
-            nv.name = "%m2ri" + std::to_string(nv.id);
-            ci.dst = nv.id;
-            fn.values.push_back(nv);
-            init_val[off] = nv.id; /* antes del move de ci */
-            init_instrs.push_back(std::move(ci));
-        } else {
-            /* PARAM. */
-            if (fi->new_arg_index < 0 ||
-                (size_t)fi->new_arg_index >= args.size()) {
-                reason = "VXA139";
-                return false;
-            }
-            IrValueId arg = args[fi->new_arg_index];
-            if (arg == IR_NO_VALUE || arg >= fn.values.size()) {
-                reason = "VXA139";
-                return false;
-            }
-            IrType Ta = fn.values[arg].type;
-            if (!type_is_integer(Ta)) {
-                reason = "arg no entero";
-                return false;
-            }
-            int szA = type_slot_bytes(Ta), szT = type_slot_bytes(T);
-            if (szA == szT) {
-                init_val[off] = arg; /* sin conversion */
-            } else if (szA > szT) {
-                IrInstr ti;
-                ti.op = IrOp::TRUNC;
-                ti.type = T;
-                ti.operands.push_back(arg);
-                IrValue nv;
-                nv.id = (IrValueId)fn.values.size();
-                nv.type = T;
-                nv.name = "%m2ri" + std::to_string(nv.id);
-                ti.dst = nv.id;
-                fn.values.push_back(nv);
-                init_val[off] = nv.id; /* antes del move de ti */
-                init_instrs.push_back(std::move(ti));
-            } else {
-                reason = "widening arg->campo no soportado";
-                return false; /* szA < szT */
-            }
-        }
-    }
-
-    /* 2.5) Deteccion de loops (headers + bloques in-loop) desde back-edges.
-     * Necesario para el COST-MODEL: un PHI in-loop que NO esta en un loop
-     * header (= escritura condicional de campo dentro de un loop) añade copies
-     * en el path no-tomado por iteracion.  Medido: regresiona el interp (16
-     * registros VM -> presion + copies).  Los PHIs de loop-header (acumuladores
-     * incondicionales) y los if-merge FUERA de loops (coste unico) SI son win.
-     */
-    util::NamedVector<uint8_t, scratch::LoopHeader> is_loop_header(N, 0);
-    util::NamedVector<uint8_t, scratch::InLoop> in_loop(N, 0);
+    g.loop_header.assign(N, SR_NOT_LOOP_HEADER);
+    g.in_loop.assign(N, SR_OUTSIDE_LOOP);
+    /* Bucles desde sus aristas de retroceso (la que va a un bloque que la
+     * domina).  Hace falta para el modelo de coste: un PHI dentro de un bucle
+     * que NO esta en su cabecera -- una escritura condicional de campo dentro
+     * del bucle -- anade copias en el camino no tomado de cada vuelta, y medido
+     * eso empeora el interprete.  Los de cabecera -- acumuladores -- y los de
+     * fuera de bucles si compensan. */
+    util::NamedVector<IrBlockId, scratch::LoopWalk> stk; // reutilizada
     for (IrBlockId b = IrBlockId(0); b < N; ++b) {
-        for (IrBlockId h : dom.succs[b]) {
-            if (!dom.dominates(h, b)) continue; /* back-edge b->h */
-            is_loop_header[h] = 1;
-            in_loop[h] = 1;
-            std::vector<IrBlockId> stk;
-            if (!in_loop[b]) {
-                in_loop[b] = 1;
+        for (IrBlockId h : g.dom.succs[b]) {
+            if (!g.dom.dominates(h, b)) continue; /* retroceso b->h */
+            g.loop_header[h] = SR_LOOP_HEADER;
+            g.in_loop[h] = SR_INSIDE_LOOP;
+            stk.clear();
+            if (g.in_loop[b] == SR_OUTSIDE_LOOP) {
+                g.in_loop[b] = SR_INSIDE_LOOP;
                 stk.push_back(b);
             }
             while (!stk.empty()) {
-                IrBlockId x = stk.back();
+                const IrBlockId x = stk.back();
                 stk.pop_back();
                 if (x == h) continue;
-                for (IrBlockId p : dom.preds[x]) {
-                    if (!in_loop[p]) {
-                        in_loop[p] = 1;
+                for (IrBlockId p : g.dom.preds[x]) {
+                    if (g.in_loop[p] == SR_OUTSIDE_LOOP) {
+                        g.in_loop[p] = SR_INSIDE_LOOP;
                         if (p != h) stk.push_back(p);
                     }
                 }
             }
         }
     }
+    return g;
+}
 
-    /* 3) Insercion de PHIs: por cada offset, iterated dominance frontier de los
-     * def-blocks (= {call_bi} U store_blocks).  Crea SSA values para los phis.
-     */
-    /* phi_value[offset][block] = SSA value del phi (IR_NO_VALUE = no hay). */
-    std::unordered_map<uint64_t, IrValueId>
-        phi_value; /* key = (off<<32)|block */
-    std::unordered_map<IrValueId, uint32_t> phi_dst_off; /* phi dst -> offset */
-    auto pkey = [](uint32_t off, IrBlockId b) -> uint64_t {
-        return ((uint64_t)off << 32) | (uint64_t)b;
-    };
-    /* COST-MODEL (default-on): permitir VESTA_ESCAPE_MEM2REG_FORCE para
-     * saltarlo y promover siempre (util para medir / casos JIT-only). */
-    static const bool force = util::flag_on(util::FlagId::EscapeMem2RegForce);
-    for (uint32_t off : offsets) {
-        std::vector<IrBlockId> worklist;
-        std::unordered_set<IrBlockId> on_work, has_phi;
-        /* En GC-mode el alloc inicializa TODOS los campos -> es def-block.  En
-         * stack_mode el alloc no define nada (los stores del init-list si). */
-        if (!stack_mode) {
-            worklist.push_back((IrBlockId)call_bi);
-            on_work.insert((IrBlockId)call_bi);
+//==============================================================================
+//  SROA/mem2reg por LOTES: los campos de TODOS los objetos candidatos de una
+//  funcion, en un solo renombrado.
+//
+//  Promueve cada campo de cada objeto a forma SSA a traves del control de flujo
+//  (incluidos los bucles): inserta PHIs en la frontera de dominancia de las
+//  definiciones (valor de construccion + stores) y renombra (Cytron)
+//  sustituyendo cada load por la definicion que lo alcanza.  Tras esto el
+//  objeto no toca memoria: la reserva y los stores se borran.
+//
+//  POR LOTES, y no objeto a objeto, porque objeto a objeto era objetos x
+//  tamano de la funcion: cada uno clasificaba todas las instrucciones, recorria
+//  el arbol de dominadores entero y lo aplicaba en cinco pasadas completas.
+//  Con el codigo que deja el inliner -- cientos de objetos en una funcion de
+//  cien mil instrucciones -- era el primer coste que quedaba al compilar.  Es
+//  lo mismo que hace un mem2reg clasico con todas las variables a la vez: cada
+//  par (objeto, campo) es una variable, y las variables de objetos distintos
+//  son disjuntas, asi que un objeto que no se puede promover renuncia SOLO, sin
+//  tocar a los demas.
+//
+//  Precondiciones (las garantiza quien llama):
+//    - Ningun objeto escapa y TODOS sus usos son accesos a campo (load/store
+//      de `obj` o de `add obj, Kconst`), nunca en phi_args/func_ptr/CALL/RET.
+//    - En un objeto GC, el ctor es un inicializador trivial (su modelo).
+//    - CFG reducible (el frontend Vesta lo garantiza).
+//
+//  En PILA (`stack_mode`) la reserva es un ALLOCA de un struct: no hay ctor, la
+//  reserva no da valor inicial a ningun campo, y una lectura que ningun store
+//  domina hace renunciar, que es lo correcto -- la pila no se pone a cero --.
+//==============================================================================
+
+/// Un objeto dentro de una promocion por lotes.
+enum SrObjIdx : uint32_t {};
+/// Ningun objeto del lote.
+static constexpr SrObjIdx SR_NO_OBJ = SrObjIdx(0xFFFFFFFFu);
+/// Una variable de la promocion: un campo de un objeto.
+enum SrVarIdx : uint32_t {};
+/// Ninguna variable.
+static constexpr SrVarIdx SR_NO_VAR = SrVarIdx(0xFFFFFFFFu);
+/// Un phi planeado.
+enum SrPhiIdx : uint32_t {};
+/// Posicion en la lista de phis agrupada por bloque.
+enum SrPhiSlot : uint32_t {};
+/// Cuantas variables habia apiladas en un momento del renombrado.
+enum SrPushedPos : uint32_t {};
+/// Desplazamiento de un campo desde el principio de su objeto, en bytes.
+enum SrFieldOffset : uint32_t {};
+
+/// Una direccion de campo de un objeto: el valor, y a que desplazamiento
+/// del objeto apunta.
+struct SrFieldAddr {
+    IrValueId addr;
+    SrFieldOffset offset;
+};
+
+/// Un objeto que quien llama quiere promover.
+struct SrPromotion {
+    IrValueId obj = IR_NO_VALUE;          ///< dst del `__new_X` o del ALLOCA.
+    const SrCtorModel *model = nullptr;   ///< modelo del ctor; nulo en pila.
+    IrOperands args;                      ///< argumentos del ctor (GC).
+    std::vector<SrFieldAddr> field_addrs; ///< sus direcciones de campo.
+    /// SALIDA: nulo si se promovio; si no, el motivo por el que renuncio.
+    const char *reason = nullptr;
+};
+
+/// Lo que el lote lleva de cada objeto mientras trabaja.
+struct SrObjState {
+    IrBlockId seed_block = IR_NO_BLOCK; ///< bloque de su `__new_X` o ALLOCA.
+    SrVarIdx first_var = SrVarIdx(0);   ///< sus variables: [first, end).
+    SrVarIdx end_var = SrVarIdx(0);
+    std::vector<SrVarIdx> vars;         ///< las de campos accedidos.
+    std::vector<IrInstr> init_instrs;   ///< a insertar antes del `__new_X`.
+    const char *reason = nullptr;       ///< nulo mientras siga siendo viable.
+};
+
+/// Un campo de un objeto, promovido a variable SSA.
+struct SrVar {
+    SrObjIdx obj;
+    SrFieldOffset offset;
+    IrType type = IrType::VOID;          ///< el del primer acceso.
+    bool accessed = false;               ///< alguien lo lee o lo escribe.
+    std::vector<IrBlockId> store_blocks; ///< bloques que lo escriben.
+    IrValueId init = IR_NO_VALUE;        ///< valor de construccion (GC).
+    std::vector<IrValueId> defs;         ///< pila del renombrado.
+};
+
+/// Un phi planeado para una variable en un bloque.
+struct SrPhi {
+    SrVarIdx var;
+    IrBlockId block;
+    IrValueId value;
+    std::vector<IrPhiArg> args;
+};
+
+/// Un paso del renombrado sobre el arbol de dominadores.
+struct SrRenameStep {
+    IrBlockId block;
+    SrChildPos next_child;
+    SrPushedPos pushed_mark; ///< cuantas habia apiladas al entrar.
+};
+
+/// Un acceso a un campo de alguno de los objetos del lote.
+struct SrAccess {
+    SrObjIdx obj = SR_NO_OBJ;
+    SrVarIdx var = SR_NO_VAR; ///< el campo al que se accede.
+    bool is_load = false;
+    IrValueId stored = IR_NO_VALUE; ///< el valor escrito, si es un STORE.
+};
+
+/// Direccion -> objeto del lote, y la variable del campo al que apunta.  Con
+/// la variable ya resuelta por direccion, clasificar un acceso no busca nada.
+struct SrAddrIndex {
+    util::NamedVector<SrObjIdx, scratch::SrObjOf> obj_of;
+    util::NamedVector<SrVarIdx, scratch::SrVarOf> var_of;
+};
+
+/**
+ * @brief Si @p in es un load o un store a un campo de algun objeto del lote.
+ * @param in    Instruccion.
+ * @param index Direcciones de los objetos del lote.
+ * @return El acceso; su @c obj es @c SR_NO_OBJ si no lo es.
+ */
+static SrAccess sr_classify_access(const IrInstr &in,
+                                   const SrAddrIndex &index) {
+    SrAccess a;
+    if (in.op == IrOp::LOAD && !in.operands.empty()) {
+        const IrValueId p = in.operands[0];
+        if (p < index.obj_of.size() && index.obj_of[p] != SR_NO_OBJ) {
+            a.obj = index.obj_of[p];
+            a.var = index.var_of[p];
+            a.is_load = true;
         }
-        for (IrBlockId b : store_blocks[off]) {
-            if (!on_work.count(b)) {
-                worklist.push_back(b);
-                on_work.insert(b);
-            }
-        }
-        size_t wp = 0;
-        while (wp < worklist.size()) {
-            IrBlockId b = worklist[wp++];
-            if (b >= N) continue;
-            for (IrBlockId f : dom.df[b]) {
-                if (has_phi.count(f)) continue;
-                if (!dom.reachable[f]) continue;
-                /* Solo PHIs en bloques DOMINADOS por el alloc: ahi todos los
-                 * preds estan dominados por el call -> el objeto existe en cada
-                 * pred -> el operando del phi siempre tiene def alcanzante.  Un
-                 * merge no-dominado no puede leer el campo (violaria SSA), asi
-                 * que su phi seria muerto; lo omitimos. */
-                if (!dom.dominates((IrBlockId)call_bi, f)) continue;
-                /* COST-MODEL: if-merge DENTRO de un loop = escritura
-                 * condicional en el loop -> pessimiza el interp.  Bail (a menos
-                 * que FORCE). */
-                if (!force && in_loop[f] && !is_loop_header[f]) {
-                    reason =
-                        "escritura condicional de campo en loop (cost-model)";
-                    return false;
-                }
-                has_phi.insert(f);
-                /* Crear el SSA value del phi. */
-                IrValue nv;
-                nv.id = (IrValueId)fn.values.size();
-                nv.type = field_type[off];
-                nv.name = "%m2rphi" + std::to_string(nv.id);
-                fn.values.push_back(nv);
-                phi_value[pkey(off, f)] = nv.id;
-                phi_dst_off[nv.id] = off;
-                if (!on_work.count(f)) {
-                    worklist.push_back(f);
-                    on_work.insert(f);
-                }
-            }
+    } else if (in.op == IrOp::STORE && in.operands.size() >= 2) {
+        const IrValueId p = in.operands[1];
+        if (p < index.obj_of.size() && index.obj_of[p] != SR_NO_OBJ) {
+            a.obj = index.obj_of[p];
+            a.var = index.var_of[p];
+            a.stored = in.operands[0];
         }
     }
+    return a;
+}
 
-    /* 4) Renaming (Cytron) DFS sobre el dom-tree.  current[off] = def
-     * alcanzante. Se construyen: load_repl (load dst -> valor), store_remove
-     * (posiciones), y los phi_args de cada phi insertado.  NO se muta el IR
-     * todavia. */
-    /* Plan de mutacion: */
-    std::unordered_map<IrValueId, IrValueId>
-        load_repl; /* load.dst -> valor reemplazo */
-    /* phi_args[phi_dst] = lista de (pred_block, value). */
-    std::unordered_map<IrValueId, std::vector<IrPhiArg>> phi_args_plan;
+/**
+ * @brief Si @p in es la reserva de un objeto del lote, cual.
+ * @return El objeto, o @c SR_NO_OBJ.
+ */
+static SrObjIdx sr_seed_of(const IrInstr &in, const SrAddrIndex &index,
+                           const std::vector<SrPromotion> &promos,
+                           bool stack_mode) {
+    if (in.dst == IR_NO_VALUE || in.dst >= index.obj_of.size())
+        return SR_NO_OBJ;
+    const SrObjIdx k = index.obj_of[in.dst];
+    if (k == SR_NO_OBJ || promos[k].obj != in.dst) return SR_NO_OBJ;
+    if (stack_mode) return in.op == IrOp::ALLOCA ? k : SR_NO_OBJ;
+    return (in.op == IrOp::CALL && is_new_helper_name(in.func_name, nullptr))
+               ? k
+               : SR_NO_OBJ;
+}
 
-    std::unordered_map<uint32_t, std::vector<IrValueId>>
-        stack; /* off -> pila de defs */
-    auto cur = [&](uint32_t off) -> IrValueId {
-        auto it = stack.find(off);
-        return (it != stack.end() && !it->second.empty()) ? it->second.back()
-                                                          : IR_NO_VALUE;
-    };
+/**
+ * @brief Crea un valor nuevo en @p fn para el mem2reg.
+ * @param fn     Funcion.
+ * @param type   Su tipo.
+ * @param prefix Prefijo del nombre legible.
+ * @return Su identificador.
+ */
+static IrValueId sr_new_value(IrFunction &fn, IrType type, const char *prefix) {
+    IrValue nv;
+    nv.id = static_cast<IrValueId>(fn.values.size());
+    nv.type = type;
+    nv.name = prefix + std::to_string(nv.id);
+    fn.values.push_back(nv);
+    return nv.id;
+}
 
-    bool rename_ok = true;
-    const char *rfail = nullptr;
-    std::function<void(IrBlockId, int)> rename = [&](IrBlockId b, int depth) {
-        if (!rename_ok) return;
-        if (depth > 4096) {
-            rename_ok = false;
-            rfail = "dom-tree demasiado profundo";
-            return;
+/**
+ * @brief Materializa el valor de construccion de cada campo de un objeto GC.
+ *
+ * Deja en @p o las instrucciones a insertar antes de su `__new_X` y en cada
+ * variable el valor que le da el ctor (o cero si no la inicializa).
+ *
+ * @return nulo si se pudo; si no, el motivo.
+ */
+static const char *
+sr_materialize_inits(IrFunction &fn, const SrPromotion &p, SrObjState &o,
+                     util::NamedVector<SrVar, scratch::SrVars> &vars) {
+    for (SrVarIdx vi : o.vars) {
+        SrVar &v = vars[vi];
+        const IrType T = v.type;
+        const SrFieldInit *fi = p.model->find(v.offset);
+        if (!fi || fi->kind == SrFieldInit::CONST) {
+            /* Sin inicializar por el ctor vale cero: el objeto GC se pone a
+             * cero al reservarlo.  Constante: truncada al ancho del campo. */
+            uint64_t k = 0;
+            if (fi) {
+                k = fi->const_val;
+                const int sz = type_slot_bytes(T);
+                if (sz < 8) k &= ((uint64_t{1} << (sz * 8)) - 1);
+            }
+            IrInstr ci;
+            ci.op = IrOp::CONST;
+            ci.type = T;
+            ci.imm = k;
+            ci.dst = sr_new_value(fn, T, "%m2ri");
+            fn.values[ci.dst].is_const = true;
+            fn.values[ci.dst].const_val = k;
+            v.init = ci.dst;
+            o.init_instrs.push_back(std::move(ci));
+            continue;
         }
-        std::vector<uint32_t>
-            pushed; /* offsets con un push en este bloque (para pop) */
-
-        /* (a) PHIs planeados para este bloque (aun NO insertados como
-         * instrucciones): definen current[off].  Se consultan via phi_value, no
-         * escaneando instrucciones (que no existen todavia en esta fase). */
-        for (uint32_t off : offsets) {
-            auto it = phi_value.find(pkey(off, b));
-            if (it == phi_value.end()) continue;
-            stack[off].push_back(it->second);
-            pushed.push_back(off);
+        /* PARAM. */
+        if (fi->new_arg_index < 0 ||
+            static_cast<size_t>(fi->new_arg_index) >= p.args.size())
+            return "VXA139";
+        const IrValueId arg = p.args[fi->new_arg_index];
+        if (arg == IR_NO_VALUE || arg >= fn.values.size()) return "VXA139";
+        const IrType Ta = fn.values[arg].type;
+        if (!type_is_integer(Ta)) return "VXA144";
+        const int szA = type_slot_bytes(Ta), szT = type_slot_bytes(T);
+        if (szA == szT) {
+            v.init = arg; // sin conversion
+        } else if (szA > szT) {
+            IrInstr ti;
+            ti.op = IrOp::TRUNC;
+            ti.type = T;
+            ti.operands.push_back(arg);
+            ti.dst = sr_new_value(fn, T, "%m2ri");
+            v.init = ti.dst;
+            o.init_instrs.push_back(std::move(ti));
+        } else {
+            return "VXA145";
         }
+    }
+    return nullptr;
+}
 
-        /* (b) instrucciones en orden. */
-        for (size_t ii = 0; ii < fn.blocks[b].instrs.size(); ++ii) {
-            const IrInstr &in = fn.blocks[b].instrs[ii];
-            /* El alloc: en GC-mode define todos los campos = init_val.  En
-             * stack_mode no define nada (el ALLOCA no es un load/store de campo
-             * -> classify lo ignora, y aqui no empujamos ningun def). */
-            // GC-mode: el call site (helper `__new_X`) siembra los init de cada
-            // campo; se identifica por (call_bi, call_ii) y se salta.
-            // stack_mode: el ALLOCA no siembra nada y `classify` ya lo ignora
-            // (solo reconoce LOAD/STORE) -> NO saltar por indice.  Saltarlo era
-            // redundante Y peligroso: `call_ii` se calcula al recolectar los
-            // sites, pero las promociones PREVIAS de otros ALLOCAs pueden
-            // reindexar el bloque, con lo que (call_bi, call_ii) acaba
-            // apuntando a un STORE de ESTE objeto
-            // -> el renaming lo saltaba y el valor se perdia (bug del patron
-            // `S r = this; r.x = v; return r`).
-            if (b == call_bi && ii == call_ii && !stack_mode) {
-                for (uint32_t off : offsets) {
-                    stack[off].push_back(init_val[off]);
-                    pushed.push_back(off);
-                }
+/**
+ * @brief El renombrado de Cytron para todas las variables del lote a la vez.
+ *
+ * Reune lo que consulta y lo que escribe, para que entrar en un bloque y salir
+ * de el no tengan que recibir una docena de argumentos.
+ */
+struct SrRenamer {
+    const IrFunction &fn;
+    const SrDom &dom;
+    const SrAddrIndex &index;
+    const std::vector<SrPromotion> &promos;
+    bool stack_mode;
+    util::NamedVector<SrObjState, scratch::SrObjects> &objs;
+    util::NamedVector<SrVar, scratch::SrVars> &vars;
+    util::NamedVector<SrPhi, scratch::SrPhis> &phis;
+    const util::NamedVector<SrPhiSlot, scratch::SrPhiOffsets> &phi_off;
+    const util::NamedVector<SrPhiIdx, scratch::SrPhiOfBlock> &phi_at;
+    util::NamedVector<IrValueId, scratch::SrLoadRepl> &repl;
+    util::NamedVector<SrVarIdx, scratch::SrPushed> pushed;
+
+    /// La definicion que alcanza a @p vi ahora mismo, o IR_NO_VALUE.
+    IrValueId current(SrVarIdx vi) const {
+        const std::vector<IrValueId> &d = vars[vi].defs;
+        return d.empty() ? IR_NO_VALUE : d.back();
+    }
+
+    /// Apila una definicion de @p vi, para deshacerla al salir del bloque.
+    void define(SrVarIdx vi, IrValueId value) {
+        vars[vi].defs.push_back(value);
+        pushed.push_back(vi);
+    }
+
+    /// Lo que pasa al entrar en @p b: sus phis, sus instrucciones en orden, y
+    /// los argumentos que reciben los phis de sus sucesores.
+    void enter(IrBlockId b) {
+        for (SrPhiSlot s = phi_off[b]; s < phi_off[b + 1]; s = SrPhiSlot(s + 1)) {
+            const SrPhi &ph = phis[phi_at[s]];
+            if (objs[vars[ph.var].obj].reason == nullptr)
+                define(ph.var, ph.value);
+        }
+        for (const IrInstr &in : fn.blocks[b].instrs) {
+            const SrObjIdx seed = stack_mode
+                                      ? SR_NO_OBJ
+                                      : sr_seed_of(in, index, promos, false);
+            if (seed != SR_NO_OBJ) {
+                /* La reserva GC define todos los campos: su valor de
+                 * construccion.  La de pila no define ninguno. */
+                if (objs[seed].reason == nullptr)
+                    for (SrVarIdx vi : objs[seed].vars)
+                        define(vi, vars[vi].init);
                 continue;
             }
-            uint32_t off;
-            bool ld, st;
-            IrValueId sv;
-            if (!classify(in, off, ld, st, sv)) continue;
-            if (ld) {
-                IrValueId rv = cur(off);
-                if (rv == IR_NO_VALUE) {
-                    rename_ok = false;
-                    rfail = "load sin def alcanzante";
-                    return;
-                }
-                if (in.dst != IR_NO_VALUE) load_repl[in.dst] = rv;
-            } else if (st) {
-                stack[off].push_back(sv);
-                pushed.push_back(off);
+            const SrAccess a = sr_classify_access(in, index);
+            if (a.obj == SR_NO_OBJ) continue;
+            SrObjState &o = objs[a.obj];
+            if (o.reason != nullptr) continue;
+            if (!a.is_load) {
+                define(a.var, a.stored);
+                continue;
             }
-        }
-
-        /* (c) rellenar operandos de los phis planeados de los sucesores. */
-        for (IrBlockId s : dom.succs[b]) {
-            for (uint32_t off : offsets) {
-                auto it = phi_value.find(pkey(off, s));
-                if (it == phi_value.end()) continue;
-                IrValueId rv = cur(off);
-                if (rv == IR_NO_VALUE) {
-                    rename_ok = false;
-                    rfail = "phi operand sin def";
-                    return;
-                }
-                phi_args_plan[it->second].push_back(IrPhiArg{rv, b});
+            const IrValueId rv = current(a.var);
+            if (rv == IR_NO_VALUE) {
+                o.reason = "VXA141";
+                continue;
             }
+            if (in.dst != IR_NO_VALUE && in.dst < repl.size()) repl[in.dst] = rv;
         }
+        for (IrBlockId s : dom.succs[b])
+            for (SrPhiSlot k = phi_off[s]; k < phi_off[s + 1];
+                 k = SrPhiSlot(k + 1)) {
+                SrPhi &ph = phis[phi_at[k]];
+                SrObjState &o = objs[vars[ph.var].obj];
+                if (o.reason != nullptr) continue;
+                const IrValueId rv = current(ph.var);
+                if (rv == IR_NO_VALUE) {
+                    o.reason = "VXA142";
+                    continue;
+                }
+                ph.args.push_back(IrPhiArg{rv, b});
+            }
+    }
 
-        /* (d) recursion en hijos del dom-tree. */
-        for (IrBlockId c : dom.dom_children[b])
-            rename(c, depth + 1);
+    /// Deshace lo apilado desde @p mark: se sale del bloque.
+    void leave(SrPushedPos mark) {
+        while (pushed.size() > mark) {
+            vars[pushed.back()].defs.pop_back();
+            pushed.pop_back();
+        }
+    }
+};
 
-        /* (e) pop. */
-        for (auto it = pushed.rbegin(); it != pushed.rend(); ++it)
-            stack[*it].pop_back();
-    };
-    rename(IrBlockId(0), IrBlockId(0));
-    if (!rename_ok) {
-        reason = rfail ? rfail : "rename fallo";
+/// Una instruccion que ya no hace nada y se puede quitar.
+static bool sr_is_empty_nop(const IrInstr &in) {
+    return in.op == IrOp::NOP && in.operands.empty() && in.dst == IR_NO_VALUE;
+}
+
+/**
+ * @brief Promueve a registros los campos de todos los objetos de @p promos.
+ *
+ * @param fn         Funcion.
+ * @param graph      Su grafo (dominadores y bucles), calculado una vez.
+ * @param promos     Los objetos; cada uno sale con su @c reason.
+ * @param stack_mode true si son structs de pila (ALLOCA), no objetos GC.
+ * @return true si se promovio alguno.
+ */
+bool sr_mem2reg_batch(IrFunction &fn, const SrFnGraph &graph,
+                      std::vector<SrPromotion> &promos, bool stack_mode) {
+    const size_t N = fn.blocks.size();
+    const size_t K = promos.size();
+    if (K == 0) return false;
+    if (N == 0) {
+        for (SrPromotion &p : promos)
+            p.reason = "VXA133";
         return false;
     }
+    const SrDom &dom = graph.dom;
+    const size_t nv0 = fn.values.size();
 
-    /* ====================================================================
-     * 5) APLICAR el plan (todas las precondiciones validadas).
-     * ==================================================================== */
-    /* (a) Reescribir loads -> MOV del valor reemplazo (copy_prop lo limpia). */
-    for (auto &bb : fn.blocks) {
-        for (auto &in : bb.instrs) {
-            if ((in.op == IrOp::LOAD) && in.dst != IR_NO_VALUE) {
-                auto it = load_repl.find(in.dst);
-                if (it == load_repl.end()) continue;
-                /* Confirmar que es un load de un campo del objeto. */
-                uint32_t off;
-                bool ld, st;
-                IrValueId sv;
-                if (!classify(in, off, ld, st, sv) || !ld) continue;
-                in.op = IrOp::MOV;
-                in.operands.clear();
-                in.operands.push_back(it->second);
-                in.func_name.clear();
-                if (in.dst < fn.values.size())
-                    fn.values[in.dst].is_const = false;
-                /* De que memoria era se PASA al valor adelantado, no se borra.
-                 * Ver  sr_forward_mem_marks: fue asi como el indice 0 de un
-                 * buffer salia a basura y el 1 bien. */
-                sr_forward_mem_marks(fn, in.dst, it->second);
-            }
+    /* 0) Una variable por cada (objeto, desplazamiento) distinto, y por cada
+     * direccion la variable a la que apunta.  Los desplazamientos de un objeto
+     * se ordenan y se buscan por mitades: campos por log(campos), no campos
+     * por accesos. */
+    util::NamedVector<SrObjState, scratch::SrObjects> objs(K);
+    util::NamedVector<SrVar, scratch::SrVars> vars;
+    SrAddrIndex index;
+    index.obj_of.assign(nv0, SR_NO_OBJ);
+    index.var_of.assign(nv0, SR_NO_VAR);
+    util::NamedVector<SrFieldOffset, scratch::SrOffsets> offs; // reutilizada
+    for (size_t k = 0; k < K; ++k) {
+        const SrPromotion &p = promos[k];
+        offs.clear();
+        offs.push_back(SrFieldOffset(0)); // `load obj` es el campo cero
+        for (const SrFieldAddr &fa : p.field_addrs)
+            offs.push_back(fa.offset);
+        std::sort(offs.begin(), offs.end());
+        offs.erase(std::unique(offs.begin(), offs.end()), offs.end());
+        const SrVarIdx first = SrVarIdx(vars.size());
+        for (SrFieldOffset off : offs)
+            vars.push_back(SrVar{SrObjIdx(k), off});
+        objs[k].first_var = first;
+        objs[k].end_var = SrVarIdx(vars.size());
+        if (p.obj < nv0) {
+            index.obj_of[p.obj] = SrObjIdx(k);
+            index.var_of[p.obj] = first; // el desplazamiento cero va primero
         }
+        for (const SrFieldAddr &fa : p.field_addrs)
+            if (fa.addr < nv0) {
+                const auto it =
+                    std::lower_bound(offs.begin(), offs.end(), fa.offset);
+                index.obj_of[fa.addr] = SrObjIdx(k);
+                index.var_of[fa.addr] =
+                    SrVarIdx(first + static_cast<uint32_t>(it - offs.begin()));
+            }
     }
 
-    /* (b) Insertar los PHIs al frente de sus bloques con sus operandos. */
-    for (const auto &kv : phi_dst_off) {
-        IrValueId phidst = kv.first;
-        uint32_t off = kv.second;
-        /* Localizar el bloque (clave inversa: buscar en phi_value). */
-        IrBlockId blk = dom.UNDEF;
-        for (IrBlockId b = IrBlockId(0); b < N; ++b) {
-            auto it = phi_value.find(pkey(off, b));
-            if (it != phi_value.end() && it->second == phidst) {
-                blk = b;
-                break;
+    /* 1) UNA pasada: campos accedidos, su tipo, bloques que los escriben y
+     * donde esta la reserva de cada objeto. */
+    for (size_t bi = 0; bi < N; ++bi) {
+        for (const IrInstr &in : fn.blocks[bi].instrs) {
+            const SrObjIdx seed = sr_seed_of(in, index, promos, stack_mode);
+            if (seed != SR_NO_OBJ) objs[seed].seed_block = IrBlockId(bi);
+            const SrAccess a = sr_classify_access(in, index);
+            if (a.obj == SR_NO_OBJ) continue;
+            SrObjState &o = objs[a.obj];
+            if (o.reason != nullptr) continue;
+            /* Tipo del campo: el que se lee, o el del valor que se escribe. */
+            const IrType t = a.is_load ? in.type
+                             : a.stored < fn.values.size()
+                                 ? fn.values[a.stored].type
+                                 : IrType::I64;
+            if (!type_is_integer(t)) {
+                o.reason = "VXA134";
+                continue;
             }
-        }
-        if (blk >= N) continue;
-        IrInstr phi;
-        phi.op = IrOp::PHI;
-        phi.type = field_type[off];
-        phi.dst = phidst;
-        auto pit = phi_args_plan.find(phidst);
-        if (pit != phi_args_plan.end()) phi.phi_args = pit->second;
-        fn.blocks[blk].instrs.insert(fn.blocks[blk].instrs.begin(),
-                                     std::move(phi));
-    }
-
-    /* (c) Eliminar TODOS los stores a campos del objeto (NOP).  Tras mem2reg
-     * ningun store es necesario (el valor fluye por SSA).  Se re-localizan por
-     * contenido (no por indice) porque (b) inserto phis al frente. */
-    for (auto &bb : fn.blocks) {
-        for (auto &in : bb.instrs) {
-            uint32_t off;
-            bool ld, st;
-            IrValueId sv;
-            if (in.op == IrOp::STORE && classify(in, off, ld, st, sv) && st) {
-                in.op = IrOp::NOP;
-                in.operands.clear();
-                in.dst = IR_NO_VALUE;
-                in.func_name.clear();
+            SrVar &v = vars[a.var];
+            if (!v.accessed) {
+                v.accessed = true;
+                v.type = t;
+            } else if (v.type != t) {
+                o.reason = "VXA135";
+                continue;
             }
+            if (!a.is_load) v.store_blocks.push_back(IrBlockId(bi));
         }
     }
+    /* Los campos que se tocan de verdad; los demas no necesitan ni phis ni
+     * valor de construccion. */
+    for (size_t k = 0; k < K; ++k)
+        for (SrVarIdx vi = objs[k].first_var; vi < objs[k].end_var;
+             vi = SrVarIdx(vi + 1))
+            if (vars[vi].accessed) objs[k].vars.push_back(vi);
 
-    /* (d) GC-mode: insertar init_instrs antes del call + NOPear el call.
-     *     stack_mode: NOPear el ALLOCA (dst==obj), sin init_instrs. */
-    if (stack_mode) {
-        for (auto &bb : fn.blocks) {
-            for (auto &in : bb.instrs) {
-                if (in.op == IrOp::ALLOCA && in.dst == obj) {
-                    in.op = IrOp::NOP;
-                    in.operands.clear();
-                    in.dst = IR_NO_VALUE;
-                    in.func_name.clear();
-                    goto done_call;
-                }
-            }
+    /* 2) Por objeto: que tenga campos, que el modelo los cubra, que su reserva
+     * sea alcanzable, y el valor de construccion de cada campo. */
+    for (size_t k = 0; k < K; ++k) {
+        SrObjState &o = objs[k];
+        if (o.reason != nullptr) continue;
+        if (o.vars.empty()) {
+            o.reason = "VXA136";
+            continue;
         }
-    } else
-        for (auto &bb : fn.blocks) {
-            for (size_t ii = 0; ii < bb.instrs.size(); ++ii) {
-                IrInstr &in = bb.instrs[ii];
-                if (in.op == IrOp::CALL && in.dst == obj &&
-                    is_new_helper_name(in.func_name, nullptr)) {
-                    /* Insertar init_instrs justo antes. */
-                    if (!init_instrs.empty()) {
-                        bb.instrs.insert(bb.instrs.begin() + ii,
-                                         init_instrs.begin(),
-                                         init_instrs.end());
-                        ii += init_instrs.size();
+        if (!stack_mode) {
+            for (SrVarIdx vi : o.vars) {
+                const SrFieldInit *fi = promos[k].model->find(vars[vi].offset);
+                if (!fi) {
+                    /* Campo de usuario no inicializado: vale cero.  Pero la
+                     * CABECERA (class_ptr...) no es cero: la pone NEWOBJ. */
+                    if (vars[vi].offset < SR_OBJ_HEADER_SIZE) {
+                        o.reason = "VXA128";
+                        break;
                     }
-                    IrInstr &call = bb.instrs[ii];
-                    call.op = IrOp::NOP;
-                    call.operands.clear();
-                    call.dst = IR_NO_VALUE;
-                    call.func_name.clear();
-                    goto done_call;
+                    continue;
+                }
+                if (fi->field_type != vars[vi].type) {
+                    o.reason = "VXA137";
+                    break;
+                }
+            }
+            if (o.reason != nullptr) continue;
+        }
+        if (o.seed_block >= N || !dom.reachable[o.seed_block]) {
+            o.reason = "VXA138";
+            continue;
+        }
+        if (!stack_mode)
+            o.reason = sr_materialize_inits(fn, promos[k], o, vars);
+    }
+
+    /* 3) Phis: frontera de dominancia iterada de cada variable.  Las marcas
+     * llevan la variable en curso, asi que no hay que limpiarlas entre una y
+     * la siguiente. */
+    static const bool force = util::flag_on(util::FlagId::EscapeMem2RegForce);
+    util::NamedVector<SrPhi, scratch::SrPhis> phis;
+    util::NamedVector<SrVarIdx, scratch::SrIdfMark> on_work(N, SR_NO_VAR);
+    util::NamedVector<SrVarIdx, scratch::SrPhiMark> has_phi(N, SR_NO_VAR);
+    util::NamedVector<IrBlockId, scratch::SrIdfWork> work;
+    for (SrVarIdx vi = SrVarIdx(0); vi < vars.size(); vi = SrVarIdx(vi + 1)) {
+        SrObjState &o = objs[vars[vi].obj];
+        if (o.reason != nullptr || !vars[vi].accessed) continue;
+        work.clear();
+        /* En un objeto GC la reserva define todos los campos. */
+        if (!stack_mode) {
+            work.push_back(o.seed_block);
+            on_work[o.seed_block] = vi;
+        }
+        for (IrBlockId b : vars[vi].store_blocks)
+            if (on_work[b] != vi) {
+                work.push_back(b);
+                on_work[b] = vi;
+            }
+        for (size_t wp = 0; wp < work.size() && o.reason == nullptr; ++wp) {
+            const IrBlockId b = work[wp];
+            for (IrBlockId f : dom.df[b]) {
+                if (has_phi[f] == vi || !dom.reachable[f]) continue;
+                /* Solo en bloques DOMINADOS por la reserva: ahi el objeto
+                 * existe en cada predecesor.  Un merge que no lo esta no puede
+                 * leer el campo (seria SSA invalido): su phi estaria muerto. */
+                if (!dom.dominates(o.seed_block, f)) continue;
+                /* MODELO DE COSTE: un merge DENTRO de un bucle que no es su
+                 * cabecera es una escritura condicional en el bucle, y medido
+                 * eso empeora el interprete.  Salvo que se fuerce. */
+                if (!force && graph.in_loop[f] == SR_INSIDE_LOOP &&
+                    graph.loop_header[f] == SR_NOT_LOOP_HEADER) {
+                    o.reason = "VXA143";
+                    break;
+                }
+                has_phi[f] = vi;
+                phis.push_back(SrPhi{
+                    vi, f, sr_new_value(fn, vars[vi].type, "%m2rphi"), {}});
+                if (on_work[f] != vi) {
+                    work.push_back(f);
+                    on_work[f] = vi;
                 }
             }
         }
-done_call:;
-
-    /* (e) NOPear las field-addr (add obj, K) -- ahora muertas. */
-    for (auto &bb : fn.blocks) {
-        for (auto &in : bb.instrs) {
-            if (in.op == IrOp::ADD && in.dst != IR_NO_VALUE &&
-                fieldaddr_off.count(in.dst)) {
-                in.op = IrOp::NOP;
-                in.operands.clear();
-                in.dst = IR_NO_VALUE;
-                in.func_name.clear();
-            }
+    }
+    /* Los phis de cada bloque, contiguos. */
+    util::NamedVector<SrPhiSlot, scratch::SrPhiOffsets> phi_off(N + 1,
+                                                                SrPhiSlot(0));
+    for (const SrPhi &ph : phis)
+        phi_off[ph.block + 1] = SrPhiSlot(phi_off[ph.block + 1] + 1);
+    for (size_t b = 0; b < N; ++b)
+        phi_off[b + 1] = SrPhiSlot(phi_off[b + 1] + phi_off[b]);
+    util::NamedVector<SrPhiIdx, scratch::SrPhiOfBlock> phi_at(phis.size());
+    {
+        util::NamedVector<SrPhiSlot, scratch::SrPhiOffsets> next(
+            phi_off.begin(), phi_off.end() - 1);
+        for (SrPhiIdx i = SrPhiIdx(0); i < phis.size(); i = SrPhiIdx(i + 1)) {
+            const IrBlockId b = phis[i].block;
+            phi_at[next[b]] = i;
+            next[b] = SrPhiSlot(next[b] + 1);
         }
     }
 
-    /* (f) compactar NOPs sin dst/operandos. */
-    for (auto &bb : fn.blocks) {
-        auto &is = bb.instrs;
-        is.erase(std::remove_if(is.begin(), is.end(),
-                                [](const IrInstr &i) {
-                                    return i.op == IrOp::NOP &&
-                                           i.operands.empty() &&
-                                           i.dst == IR_NO_VALUE;
-                                }),
-                 is.end());
+    /* 4) El renombrado: UN recorrido del arbol de dominadores, iterativo --
+     * una funcion con mucho codigo inlinado tiene un arbol casi en cadena --. */
+    util::NamedVector<IrValueId, scratch::SrLoadRepl> repl(nv0, IR_NO_VALUE);
+    SrRenamer ren{fn,   dom,  index,   promos, stack_mode, objs, vars,
+                  phis, phi_off, phi_at, repl,  {}};
+    util::NamedVector<SrRenameStep, scratch::SrRenameWalk> walk;
+    ren.enter(IrBlockId(0));
+    walk.push_back(SrRenameStep{IrBlockId(0), SrChildPos(0), SrPushedPos(0)});
+    while (!walk.empty()) {
+        SrRenameStep &top = walk.back();
+        const std::vector<IrBlockId> &kids = dom.dom_children[top.block];
+        if (top.next_child < kids.size()) {
+            const IrBlockId c = kids[top.next_child];
+            top.next_child = SrChildPos(top.next_child + 1);
+            const SrPushedPos mark = SrPushedPos(ren.pushed.size());
+            ren.enter(c);
+            /* `top` ya no se usa: apilar puede mover el vector. */
+            walk.push_back(SrRenameStep{c, SrChildPos(0), mark});
+        } else {
+            ren.leave(top.pushed_mark);
+            walk.pop_back();
+        }
+    }
+
+    bool any = false;
+    for (size_t k = 0; k < K; ++k) {
+        promos[k].reason = objs[k].reason;
+        if (objs[k].reason == nullptr) any = true;
+    }
+    if (!any) return false;
+
+    /* 5) Aplicar, reconstruyendo cada bloque UNA vez: sus phis al frente, y de
+     * cada objeto promovido fuera la reserva, las direcciones de campo y los
+     * stores; cada load pasa a ser una copia de lo que lo alcanza.  Un
+     * `std::vector` y no uno con nombre: se intercambia con el del bloque. */
+    std::vector<IrInstr> rebuilt;
+    for (size_t bi = 0; bi < N; ++bi) {
+        std::vector<IrInstr> &instrs = fn.blocks[bi].instrs;
+        rebuilt.clear();
+        rebuilt.reserve(instrs.size() + (phi_off[bi + 1] - phi_off[bi]));
+        for (SrPhiSlot s = phi_off[bi]; s < phi_off[bi + 1];
+             s = SrPhiSlot(s + 1)) {
+            SrPhi &ph = phis[phi_at[s]];
+            if (objs[vars[ph.var].obj].reason != nullptr) continue;
+            IrInstr phi;
+            phi.op = IrOp::PHI;
+            phi.type = vars[ph.var].type;
+            phi.dst = ph.value;
+            phi.phi_args = std::move(ph.args);
+            rebuilt.push_back(std::move(phi));
+        }
+        for (IrInstr &in : instrs) {
+            const SrObjIdx seed = sr_seed_of(in, index, promos, stack_mode);
+            if (seed != SR_NO_OBJ && objs[seed].reason == nullptr) {
+                /* GC: el valor de construccion ocupa el sitio de la reserva. */
+                for (IrInstr &init : objs[seed].init_instrs)
+                    rebuilt.push_back(std::move(init));
+                continue;
+            }
+            /* Una direccion de campo de un objeto promovido: ya no la usa
+             * nadie. */
+            if (in.op == IrOp::ADD && in.dst < nv0 &&
+                index.obj_of[in.dst] != SR_NO_OBJ &&
+                promos[index.obj_of[in.dst]].obj != in.dst &&
+                objs[index.obj_of[in.dst]].reason == nullptr)
+                continue;
+            const SrAccess a = sr_classify_access(in, index);
+            if (a.obj != SR_NO_OBJ && objs[a.obj].reason == nullptr) {
+                if (!a.is_load) continue; // el valor fluye por SSA
+                if (in.dst != IR_NO_VALUE && in.dst < nv0 &&
+                    repl[in.dst] != IR_NO_VALUE) {
+                    in.op = IrOp::MOV;
+                    in.operands.clear();
+                    in.operands.push_back(repl[in.dst]);
+                    in.func_name.clear();
+                    fn.values[in.dst].is_const = false;
+                    /* De que memoria era se PASA al valor adelantado, no se
+                     * borra.  Ver sr_forward_mem_marks: fue asi como el indice
+                     * 0 de un buffer salia a basura y el 1 bien. */
+                    sr_forward_mem_marks(fn, in.dst, repl[in.dst]);
+                }
+            }
+            if (sr_is_empty_nop(in)) continue;
+            rebuilt.push_back(std::move(in));
+        }
+        instrs.swap(rebuilt);
     }
     return true;
 }
+
+
+
+
 } // namespace
 
 /**
@@ -4068,517 +4318,467 @@ static bool const_value_indexed(
  *
  * @return true si se transformo algun sitio.
  */
+/// Posicion de una instruccion dentro de su bloque.
+enum SrInstrPos : uint32_t {};
+/// Un sitio de reserva candidato a escalarizarse.
+enum SrSiteIdx : uint32_t {};
+/// Ningun sitio.
+static constexpr SrSiteIdx SR_NO_SITE = SrSiteIdx(0xFFFFFFFFu);
+
+/// Un acceso de un objeto GC a uno de sus campos.
+struct GcSiteAccess {
+    IrBlockId bi;
+    SrInstrPos ii;
+    SrFieldOffset offset;
+    bool is_load;
+};
+
+/// Una instruccion que sobra si el objeto se escalariza: una direccion de
+/// campo, o el `free` de un objeto nativo.
+struct GcSiteDead {
+    IrBlockId bi;
+    SrInstrPos ii;
+};
+
+/// Lo que el analisis de usos sabe de un objeto GC candidato.
+struct GcSite {
+    const GcAllocSite *alloc = nullptr; ///< su `__new_X`, del analisis de escape.
+    const SrCtorModel *model = nullptr; ///< el modelo de su ctor.
+    IrOperands args;                    ///< los argumentos del ctor.
+    /// El CODIGO del motivo por el que se descarta; nulo mientras valga.
+    const char *why = nullptr;
+    bool single_block = true;             ///< todos sus usos en su bloque.
+    bool has_writes = false;              ///< algun store a un campo.
+    std::vector<SrFieldAddr> field_addrs; ///< sus direcciones de campo.
+    std::vector<GcSiteAccess> accesses;   ///< sus loads y stores.
+    std::vector<GcSiteDead> dead;         ///< lo que sobra si se escalariza.
+};
+
+/// Los modelos de ctor ya construidos, validos o no, por clase.
+struct GcModelCache {
+    /// Un modelo y, si no vale, por que.
+    struct Entry {
+        SrCtorModel model;
+        const char *reason = nullptr;
+    };
+    const IrModule &mod;
+    /// Por el nombre INTERNADO de la clase: la clave es un puntero, y dos
+    /// sitios de la misma clase comparten la misma entrada sin comparar texto.
+    std::unordered_map<const std::string *, Entry> cache;
+
+    /**
+     * @brief El modelo del ctor de @p cls, construyendolo la primera vez.
+     * @param cls        Nombre de la clase.
+     * @param out_reason Recibe por que no vale, si no vale.
+     * @return El modelo, o nulo si la clase no tiene un ctor modelable.
+     */
+    const SrCtorModel *get(const std::string &cls, const char *&out_reason) {
+        const std::string *key = util::intern_name(cls);
+        auto it = cache.find(key);
+        if (it == cache.end()) {
+            Entry e;
+            sr_build_ctor_model(mod, cls, e.model, &e.reason);
+            it = cache.emplace(key, std::move(e)).first;
+        }
+        out_reason = it->second.reason;
+        return it->second.model.valid ? &it->second.model : nullptr;
+    }
+};
+
+/**
+ * @brief Cuenta por que un objeto GC no se escalarizo, si se pidio.
+ *
+ * El motivo entra como CODIGO y el texto se saca aqui: quien lo lee es una
+ * persona, y lo lee en su idioma.  Mientras no se pida no se arma ninguna
+ * cadena.
+ */
+[[gnu::cold]] static void gc_report_site(const IrFunction &fn,
+                                         const GcAllocSite &s,
+                                         const char *why) {
+    static const bool dbg = util::flag_on(util::FlagId::EscapeDebug);
+    if (!dbg) return;
+    const std::string msg = vx::diag::format(
+        "VXA119", {fn.name, s.class_name,
+                   std::to_string(static_cast<unsigned>(s.dst)),
+                   vx::diag::format(why, {})});
+    std::fprintf(stderr, "%s\n", msg.c_str());
+}
+
+/// Descarta un objeto con @p why, si no estaba descartado ya.
+static void gc_site_reject(GcSite &site, const char *why) {
+    if (site.why == nullptr) site.why = why;
+}
+
+/// Si el operando @p j de @p ops ya aparecio antes en la misma lista.  Un
+/// objeto que una instruccion nombra dos veces se mira una sola.
+static bool sr_seen_earlier(const IrOperands &ops, size_t j) {
+    for (size_t i = 0; i < j; ++i)
+        if (ops[i] == ops[j]) return true;
+    return false;
+}
+
+/// Si antes del operando @p j ya hubo otra direccion de campo del MISMO
+/// objeto: de cada objeto se mira la primera, como hacia el recorrido por
+/// objeto.
+static bool
+sr_site_seen_earlier(const IrOperands &ops, size_t j,
+                     const util::NamedVector<SrSiteIdx, scratch::FieldSiteOf>
+                         &fa_site) {
+    for (size_t i = 0; i < j; ++i)
+        if (ops[i] < fa_site.size() && fa_site[ops[i]] == fa_site[ops[j]])
+            return true;
+    return false;
+}
+
+/**
+ * @brief Clasifica un uso DIRECTO de un objeto GC candidato.
+ *
+ * Solo vale como direccion de campo (`add obj, K`), como direccion de un load
+ * o de un store, o como argumento de su `free`.  Cualquier otra cosa lo
+ * descarta.
+ */
+static void gc_classify_obj_use(
+    const IrFunction &fn, const IrInstr &in, IrValueId obj, IrBlockId bi,
+    SrInstrPos ii, SrSiteIdx s, GcSite &site,
+    const util::NamedVector<uint64_t, scratch::ConstOfValue> &const_of,
+    const util::NamedVector<char, scratch::IsConstDef> &is_const_def,
+    util::NamedVector<SrSiteIdx, scratch::FieldSiteOf> &fa_site,
+    util::NamedVector<SrFieldOffset, scratch::FieldOffsetOf> &fa_off) {
+    if (site.why != nullptr) return;
+    const bool here = bi == site.alloc->block_idx;
+    if (in.op == IrOp::ADD && in.operands.size() == 2 &&
+        in.dst != IR_NO_VALUE) {
+        if (in.operands[0] == obj && in.operands[1] == obj) {
+            site.why = "VXA123";
+            return;
+        }
+        const IrValueId other =
+            (in.operands[0] == obj) ? in.operands[1] : in.operands[0];
+        uint64_t k = 0;
+        if (!const_value_indexed(fn, const_of, is_const_def, other, k)) {
+            site.why = "VXA124";
+            return;
+        }
+        if (in.dst < fa_site.size()) {
+            fa_site[in.dst] = s;
+            fa_off[in.dst] = SrFieldOffset(k);
+        }
+        site.field_addrs.push_back(SrFieldAddr{in.dst, SrFieldOffset(k)});
+        site.dead.push_back(GcSiteDead{bi, ii});
+        if (!here) site.single_block = false;
+    } else if (in.op == IrOp::LOAD && in.operands[0] == obj) {
+        site.accesses.push_back(GcSiteAccess{bi, ii, SrFieldOffset(0), true});
+        if (!here) site.single_block = false;
+    } else if (in.op == IrOp::STORE && in.operands.size() >= 2 &&
+               in.operands[1] == obj && in.operands[0] != obj) {
+        site.has_writes = true;
+        site.accesses.push_back(GcSiteAccess{bi, ii, SrFieldOffset(0), false});
+        if (!here) site.single_block = false;
+    } else if (in.op == IrOp::RAW_FREE && in.operands[0] == obj) {
+        /* free(obj) (native_poo): si se escalariza, el objeto deja de
+         * existir y el free sobra.  El modelo ya descarta clases con dtor,
+         * asi que su unico efecto es soltar la reserva. */
+        site.dead.push_back(GcSiteDead{bi, ii});
+    } else {
+        site.why = "VXA125";
+    }
+}
+
+/// Anula una instruccion; la compactacion del final la quita.
+static void sr_nop(IrInstr &in) {
+    in.op = IrOp::NOP;
+    in.operands.clear();
+    in.dst = IR_NO_VALUE;
+    in.func_name.clear();
+}
+
+/// Anula lo que sobra de un objeto escalarizado: sus direcciones de campo,
+/// su `free` y su `__new_X`.
+static void gc_drop_object(IrFunction &fn, const GcSite &site) {
+    for (const GcSiteDead &d : site.dead)
+        sr_nop(fn.blocks[d.bi].instrs[d.ii]);
+    sr_nop(fn.blocks[site.alloc->block_idx].instrs[site.alloc->ins_idx]);
+}
+
+/**
+ * @brief Un load de campo SIN escritura previa: el valor que le da el ctor.
+ *
+ * Con @p apply falso solo comprueba, sobre una COPIA, que se puede.
+ *
+ * @return nulo si se pudo; si no, el motivo.
+ */
+static const char *gc_rewrite_from_ctor(IrFunction &fn, const GcSite &site,
+                                        IrInstr &ld, SrFieldOffset off,
+                                        bool apply) {
+    const SrFieldInit *fi = site.model->find(off);
+    if (fi == nullptr) {
+        /* La CABECERA (class_ptr...) no vale cero: la pone NEWOBJ, y leerla es
+         * identidad o reflexion.  Un campo de usuario sin inicializar si. */
+        if (off < SR_OBJ_HEADER_SIZE) return "VXA128";
+        return sr_rewrite_load_zero(ld, fn, apply) ? nullptr : "VXA129";
+    }
+    return sr_rewrite_load(ld, *fi, site.args, fn, apply) ? nullptr : "VXA130";
+}
+
+/**
+ * @brief Caso A: un objeto que NUNCA se escribe.  Cada load pasa a ser el
+ *        valor de construccion de su campo, en cualquier bloque.
+ * @return nulo si se escalarizo; si no, el motivo.
+ */
+static const char *gc_scalarize_read_only(IrFunction &fn, const GcSite &site) {
+    for (const GcSiteAccess &a : site.accesses) {
+        IrInstr probe = fn.blocks[a.bi].instrs[a.ii]; // validar sin tocar
+        if (const char *why =
+                gc_rewrite_from_ctor(fn, site, probe, a.offset, false))
+            return why;
+    }
+    for (const GcSiteAccess &a : site.accesses)
+        gc_rewrite_from_ctor(fn, site, fn.blocks[a.bi].instrs[a.ii], a.offset,
+                             true);
+    gc_drop_object(fn, site);
+    return nullptr;
+}
+
+/// Orden de los accesos de un objeto dentro de su bloque.
+static bool gc_access_before(const GcSiteAccess &a, const GcSiteAccess &b) {
+    return a.ii < b.ii;
+}
+
+/**
+ * @brief Caso B.1: un objeto que se escribe, con todos sus usos en el bloque
+ *        de su `__new_X`.  Se recorren SUS accesos en orden -- no el bloque
+ *        entero -- adelantando a cada load el ultimo store del campo.
+ * @return nulo si se escalarizo; si no, el motivo.
+ */
+static const char *gc_scalarize_single_block(IrFunction &fn, GcSite &site) {
+    std::sort(site.accesses.begin(), site.accesses.end(), gc_access_before);
+    std::vector<IrInstr> &blk = fn.blocks[site.alloc->block_idx].instrs;
+    /* Primero validar todo; luego aplicar.  `last` lleva, por campo, el
+     * ultimo valor escrito. */
+    std::unordered_map<SrFieldOffset, IrValueId> last;
+    for (const GcSiteAccess &a : site.accesses) {
+        const IrInstr &in = blk[a.ii];
+        if (!a.is_load) {
+            last[a.offset] = in.operands[0];
+            continue;
+        }
+        /* Solo enteros: adelantar un flotante o un puntero por MOV podria
+         * mezclar bancos de registros. */
+        if (!type_is_integer(in.type)) return "VXA134";
+        const auto it = last.find(a.offset);
+        if (it != last.end()) {
+            const IrValueId v = it->second;
+            if (v == IR_NO_VALUE || v >= fn.values.size() ||
+                fn.values[v].type != in.type)
+                return "VXA131";
+            continue;
+        }
+        IrInstr probe = in; // validar sin tocar
+        if (const char *why =
+                gc_rewrite_from_ctor(fn, site, probe, a.offset, false))
+            return why;
+    }
+    last.clear();
+    for (const GcSiteAccess &a : site.accesses) {
+        IrInstr &in = blk[a.ii];
+        if (!a.is_load) {
+            last[a.offset] = in.operands[0];
+            sr_nop(in);
+            continue;
+        }
+        const auto it = last.find(a.offset);
+        if (it == last.end()) {
+            gc_rewrite_from_ctor(fn, site, in, a.offset, true);
+            continue;
+        }
+        in.op = IrOp::MOV;
+        in.operands.clear();
+        in.operands.push_back(it->second);
+        in.func_name.clear();
+        if (in.dst != IR_NO_VALUE && in.dst < fn.values.size())
+            fn.values[in.dst].is_const = false;
+        sr_forward_mem_marks(fn, in.dst, it->second);
+    }
+    gc_drop_object(fn, site);
+    return nullptr;
+}
+
 static bool scalar_replace_gc_impl(IrFunction &fn, const IrModule &mod) {
     if (fn.is_native || fn.values.empty()) return false;
 
-    auto sites = analyze_gc_escape(fn, mod);
+    const std::vector<GcAllocSite> allocs = analyze_gc_escape(fn, mod);
+    if (allocs.empty()) return false;
+
+    /* Los candidatos: que no escapen, con un ctor modelable y un `__new_X`
+     * donde el analisis de escape dice. */
+    GcModelCache models{mod, {}};
+    std::vector<GcSite> sites;
+    for (const GcAllocSite &a : allocs) {
+        if (a.escapes) continue;
+        const char *mreason = nullptr;
+        const SrCtorModel *model = models.get(a.class_name, mreason);
+        if (!model) {
+            gc_report_site(fn, a, mreason);
+            continue;
+        }
+        if (a.block_idx >= fn.blocks.size()) continue;
+        const IrBlock &seed_blk = fn.blocks[a.block_idx];
+        if (a.ins_idx >= seed_blk.instrs.size()) continue;
+        const IrInstr &call_ins = seed_blk.instrs[a.ins_idx];
+        if (call_ins.op != IrOp::CALL || call_ins.dst != a.dst) continue;
+        if (call_ins.operands.size() != model->num_new_args) continue;
+        GcSite s;
+        s.alloc = &a;
+        s.model = model;
+        s.args = call_ins.operands;
+        sites.push_back(std::move(s));
+    }
     if (sites.empty()) return false;
 
-    static const bool dbg = util::flag_on(util::FlagId::EscapeDebug);
-    /* El motivo entra como CODIGO y el texto se saca aqui: quien lo lee es una
-     * persona, y lo lee en su idioma.  Mientras no se pida el informe no se
-     * arma ninguna cadena. */
-    auto diag = [&](const GcAllocSite &s, const char *why) {
-        if (!dbg) return;
-        const std::string msg = vx::diag::format(
-            "VXA119", {fn.name, s.class_name,
-                       std::to_string(static_cast<unsigned>(s.dst)),
-                       vx::diag::format(why, {})});
-        std::fprintf(stderr, "%s\n", msg.c_str());
-    };
-
-    /* Cache de modelos de ctor por clase (validos e invalidos) + razon. */
-    struct CachedModel {
-        SrCtorModel m;
-        const char *reason = nullptr;
-    };
-    std::unordered_map<std::string, CachedModel> model_cache;
-    auto get_model = [&](const std::string &cls,
-                         const char *&out_reason) -> const SrCtorModel * {
-        auto it = model_cache.find(cls);
-        if (it == model_cache.end()) {
-            CachedModel cm;
-            sr_build_ctor_model(mod, cls, cm.m, &cm.reason);
-            it = model_cache.emplace(cls, std::move(cm)).first;
-        }
-        out_reason = it->second.reason;
-        return it->second.m.valid ? &it->second.m : nullptr;
-    };
-
-    bool changed = false;
-
-    /* El indice, FUERA del bucle por sitio: la busqueda estaba dentro, asi que
-     * recorria la funcion entera una vez por cada consulta de cada sitio. */
+    /* El indice de constantes, UNA vez por funcion.  @see build_const_index */
     util::NamedVector<uint64_t, scratch::ConstOfValue> const_of;
     util::NamedVector<char, scratch::IsConstDef> is_const_def;
     build_const_index(fn, const_of, is_const_def);
 
-    for (const auto &site : sites) {
-        if (site.escapes) continue;
-        const IrValueId obj = site.dst;
+    /* --- Los usos de TODOS los objetos, en DOS recorridos ---
+     *
+     * Antes cada sitio recorria la funcion entera, dos veces: sitios por
+     * instrucciones.  Es el mismo cambio que ya tenia la escalarizacion de
+     * structs de pila: se recorre la funcion y cada instruccion actualiza el
+     * sitio al que toca.  Lo que se comprueba y lo que se rechaza es lo mismo;
+     * solo cambia el orden de los bucles. */
+    util::NamedVector<SrSiteIdx, scratch::SiteOfValue> site_of(
+        fn.values.size(), SR_NO_SITE);
+    for (size_t si = 0; si < sites.size(); ++si)
+        if (sites[si].alloc->dst < site_of.size())
+            site_of[sites[si].alloc->dst] = SrSiteIdx(si);
+    util::NamedVector<SrSiteIdx, scratch::FieldSiteOf> fa_site(
+        fn.values.size(), SR_NO_SITE);
+    util::NamedVector<SrFieldOffset, scratch::FieldOffsetOf> fa_off(
+        fn.values.size(), SrFieldOffset(0));
 
-        const char *mreason = nullptr;
-        const SrCtorModel *model = get_model(site.class_name, mreason);
-        if (!model) {
-            diag(site, mreason);
-            continue;
-        }
-
-        /* La instr del CALL seed (para leer sus args + NOPearla luego). */
-        if (site.block_idx >= fn.blocks.size()) continue;
-        auto &seed_blk = fn.blocks[site.block_idx];
-        if (site.ins_idx >= seed_blk.instrs.size()) continue;
-        IrInstr &call_ins = seed_blk.instrs[site.ins_idx];
-        if (call_ins.op != IrOp::CALL || call_ins.dst != obj) continue;
-        const IrOperands args = call_ins.operands;        /* copia */
-        if (args.size() != model->num_new_args) continue; /* arity mismatch */
-
-        /* --- Recolectar TODOS los usos de obj.  Deben ser solo
-         * `add.ptr obj, Kconst` (direccion de campo) o `load obj` (offset 0).
-         * Cada field-addr solo puede usarse en LOADs.  Si algo no encaja ->
-         * abortar este sitio (no transformar). --- */
-        struct LoadRef {
-            size_t bi;
-            size_t ii;
-            uint32_t off;
-        };
-        struct StoreRef {
-            size_t ii;
-            uint32_t off;
-        };
-        std::vector<LoadRef> loads; /* loads a reescribir */
-        std::vector<std::pair<size_t, size_t>> dead_addr; /* add.ptr a NOPear */
-        std::vector<std::pair<size_t, size_t>>
-            dead_free; /* raw_free(obj) a NOPear (native_poo) */
-        std::unordered_map<IrValueId, uint32_t>
-            fieldaddr_off; /* addr_vid -> off */
-        bool ok = true;
-        bool single_block = true; /* todos los usos en el bloque del call */
-        bool has_writes = false;  /* algun STORE a un campo del objeto */
-        const char *use_reason = "VXA125";
-
-        /* Pasada A: localizar field-addrs derivadas de obj + loads/stores
-         * directos (offset 0).  Trackea single_block + has_writes. */
-        for (size_t bi = 0; bi < fn.blocks.size() && ok; ++bi) {
-            const auto &b = fn.blocks[bi];
-            for (size_t ii = 0; ii < b.instrs.size() && ok; ++ii) {
-                const auto &in = b.instrs[ii];
-                /* obj usado en phi_args o func_ptr -> uso no modelable como
-                 * field-access (p.ej. `x = phi(a, b)`).  El escape analysis lo
-                 * considera no-escapante pero el transform no sabe materializar
-                 * el campo a traves de un merge -> abortar (necesitaria SROA
-                 * con PHI de los valores de campo). */
-                bool bad_use = false;
-                for (const auto &pa : in.phi_args)
-                    if (pa.value == obj) {
-                        bad_use = true;
-                        break;
-                    }
-                if (in.func_ptr == obj) bad_use = true;
-                if (bad_use) {
-                    ok = false;
-                    use_reason = "VXA122";
-                    break;
-                }
-                bool uses_obj = false;
-                for (auto v : in.operands)
-                    if (v == obj) {
-                        uses_obj = true;
-                        break;
-                    }
-                if (!uses_obj) continue;
-
-                if (in.op == IrOp::ADD && in.operands.size() == 2 &&
-                    in.dst != IR_NO_VALUE) {
-                    /* `add obj, Kconst` o `add Kconst, obj`. */
-                    if (in.operands[0] == obj && in.operands[1] == obj) {
-                        ok = false;
-                        use_reason = "VXA123";
-                        break;
-                    }
-                    IrValueId other = (in.operands[0] == obj) ? in.operands[1]
-                                                              : in.operands[0];
-                    uint64_t k;
-                    if (!const_value_indexed(fn, const_of, is_const_def, other,
-                                             k)) {
-                        ok = false;
-                        use_reason = "VXA124";
-                        break;
-                    }
-                    fieldaddr_off[in.dst] = static_cast<uint32_t>(k);
-                    dead_addr.push_back({bi, ii});
-                    if (bi != site.block_idx) single_block = false;
-                } else if (in.op == IrOp::LOAD && !in.operands.empty() &&
-                           in.operands[0] == obj) {
-                    loads.push_back({bi, ii, 0}); /* load directo -> offset 0 */
-                    if (bi != site.block_idx) single_block = false;
-                } else if (in.op == IrOp::STORE && in.operands.size() >= 2 &&
-                           in.operands[1] == obj && in.operands[0] != obj) {
-                    has_writes = true; /* store directo -> offset 0 */
-                    if (bi != site.block_idx) single_block = false;
-                } else if (in.op == IrOp::RAW_FREE && !in.operands.empty() &&
-                           in.operands[0] == obj) {
-                    /* free(obj) (native_poo): si escalarizamos, el objeto
-                     * deja de existir -> el free es dead.  Lo recolectamos
-                     * para NOPearlo en el transform; NO marca uso no-soportado.
-                     * El modelo de ctor ya descarta clases con dtor, asi que
-                     * aqui el unico efecto del free es liberar el calloc. */
-                    dead_free.push_back({bi, ii});
-                } else {
-                    ok = false;
-                    use_reason = "VXA125";
-                    break;
-                }
+    /* Pasada A: direcciones de campo (`add obj, K`) y accesos directos. */
+    for (size_t bi = 0; bi < fn.blocks.size(); ++bi) {
+        const IrBlock &b = fn.blocks[bi];
+        for (size_t ii = 0; ii < b.instrs.size(); ++ii) {
+            const IrInstr &in = b.instrs[ii];
+            /* El objeto en phi_args o func_ptr no es un acceso a campo: el
+             * transform no sabe llevar el campo a traves de una union. */
+            for (const IrPhiArg &pa : in.phi_args)
+                if (pa.value < site_of.size() && site_of[pa.value] != SR_NO_SITE)
+                    gc_site_reject(sites[site_of[pa.value]], "VXA122");
+            if (in.func_ptr < site_of.size() &&
+                site_of[in.func_ptr] != SR_NO_SITE)
+                gc_site_reject(sites[site_of[in.func_ptr]], "VXA122");
+            for (size_t j = 0; j < in.operands.size(); ++j) {
+                const IrValueId obj = in.operands[j];
+                if (obj >= site_of.size() || site_of[obj] == SR_NO_SITE)
+                    continue;
+                if (sr_seen_earlier(in.operands, j)) continue; // una vez
+                const SrSiteIdx s = site_of[obj];
+                gc_classify_obj_use(fn, in, obj, IrBlockId(bi),
+                                    SrInstrPos(ii), s, sites[s], const_of,
+                                    is_const_def, fa_site, fa_off);
             }
         }
-        if (!ok) {
-            diag(site, use_reason);
-            continue;
-        }
+    }
 
-        /* Pasada B: cada field-addr solo puede usarse en LOAD o STORE-addr.
-         * Recolecta loads + marca has_writes; trackea single_block. */
-        for (size_t bi = 0; bi < fn.blocks.size() && ok; ++bi) {
-            const auto &b = fn.blocks[bi];
-            for (size_t ii = 0; ii < b.instrs.size() && ok; ++ii) {
-                const auto &in = b.instrs[ii];
-                /* field-addr usada en phi_args/func_ptr -> no soportado. */
-                for (const auto &pa : in.phi_args)
-                    if (fieldaddr_off.count(pa.value)) {
-                        ok = false;
-                        break;
-                    }
-                if (in.func_ptr != IR_NO_VALUE &&
-                    fieldaddr_off.count(in.func_ptr))
-                    ok = false;
-                if (!ok) {
-                    use_reason = "VXA126";
-                    break;
-                }
-                /* Es field-addr operando de esta instr? */
-                bool touches_fa = false;
-                IrValueId fav = IR_NO_VALUE;
-                uint32_t foff = 0;
-                for (auto v : in.operands) {
-                    auto it = fieldaddr_off.find(v);
-                    if (it != fieldaddr_off.end()) {
-                        touches_fa = true;
-                        fav = v;
-                        foff = it->second;
-                        break;
-                    }
-                }
-                if (!touches_fa) continue;
-
-                if (in.op == IrOp::LOAD && !in.operands.empty() &&
-                    in.operands[0] == fav) {
-                    loads.push_back({bi, ii, foff});
-                    if (bi != site.block_idx) single_block = false;
+    /* Pasada B: cada direccion de campo, solo en un LOAD o como direccion de
+     * un STORE. */
+    for (size_t bi = 0; bi < fn.blocks.size(); ++bi) {
+        const IrBlock &b = fn.blocks[bi];
+        for (size_t ii = 0; ii < b.instrs.size(); ++ii) {
+            const IrInstr &in = b.instrs[ii];
+            for (const IrPhiArg &pa : in.phi_args)
+                if (pa.value < fa_site.size() && fa_site[pa.value] != SR_NO_SITE)
+                    gc_site_reject(sites[fa_site[pa.value]], "VXA126");
+            if (in.func_ptr < fa_site.size() &&
+                fa_site[in.func_ptr] != SR_NO_SITE)
+                gc_site_reject(sites[fa_site[in.func_ptr]], "VXA126");
+            for (size_t j = 0; j < in.operands.size(); ++j) {
+                const IrValueId fav = in.operands[j];
+                if (fav >= fa_site.size() || fa_site[fav] == SR_NO_SITE)
+                    continue;
+                /* La PRIMERA direccion de campo de cada sitio en la
+                 * instruccion, como antes. */
+                if (sr_site_seen_earlier(in.operands, j, fa_site)) continue;
+                GcSite &site = sites[fa_site[fav]];
+                if (site.why != nullptr) continue;
+                GcSiteAccess acc{IrBlockId(bi), SrInstrPos(ii), fa_off[fav],
+                                 true};
+                if (in.op == IrOp::LOAD && in.operands[0] == fav) {
+                    site.accesses.push_back(acc);
                 } else if (in.op == IrOp::STORE && in.operands.size() >= 2 &&
                            in.operands[1] == fav && in.operands[0] != fav) {
-                    /* field-write: la field-addr es la DIRECCION (operand 1),
-                     * no el valor.  Si la field-addr fuera el VALOR -> escape.
-                     */
-                    has_writes = true;
-                    if (bi != site.block_idx) single_block = false;
+                    acc.is_load = false;
+                    site.accesses.push_back(acc);
+                    site.has_writes = true;
                 } else {
-                    ok = false;
-                    use_reason = "VXA127";
-                }
-            }
-        }
-        if (!ok) {
-            diag(site, use_reason);
-            continue;
-        }
-
-        /* ====================================================================
-         * Caso A: SIN escrituras -> path read-only (cross-block OK).
-         * Reemplaza cada load por el valor de construccion del campo. */
-        if (!has_writes) {
-            struct PendingRewrite {
-                size_t bi;
-                size_t ii;
-                const SrFieldInit *fi;
-            };
-            std::vector<PendingRewrite> pending;
-            for (const auto &lr : loads) {
-                const SrFieldInit *fi = model->find(lr.off);
-                IrInstr &probe = fn.blocks[lr.bi].instrs[lr.ii];
-                if (!fi) {
-                    /* Read de la cabecera del objeto (class_ptr offset 0,
-                     * etc.): NO es default-0 (lo pone NEWOBJ).  Tratar como
-                     * antes: bail (protege identidad/reflexion -- getClass lee
-                     * offset 0). */
-                    if (lr.off < SR_OBJ_HEADER_SIZE) {
-                        ok = false;
-                        use_reason = "VXA128";
-                        break;
-                    }
-                    /* Campo de usuario no inicializado por el ctor -> default-0
-                     * (el objeto GC se zero-inicializa al alocar). */
-                    if (!sr_rewrite_load_zero(probe, fn, /*apply=*/false)) {
-                        ok = false;
-                        use_reason = "VXA129";
-                        break;
-                    }
-                    pending.push_back({lr.bi, lr.ii, nullptr});
+                    site.why = "VXA127";
                     continue;
                 }
-                if (!sr_rewrite_load(probe, *fi, args, fn, /*apply=*/false)) {
-                    ok = false;
-                    use_reason = "VXA130";
-                    break;
-                }
-                pending.push_back({lr.bi, lr.ii, fi});
+                if (bi != site.alloc->block_idx) site.single_block = false;
             }
-            if (!ok) {
-                diag(site, use_reason);
-                continue;
-            }
-
-            for (const auto &pr : pending) {
-                IrInstr &ld = fn.blocks[pr.bi].instrs[pr.ii];
-                if (pr.fi)
-                    sr_rewrite_load(ld, *pr.fi, args, fn, /*apply=*/true);
-                else
-                    sr_rewrite_load_zero(ld, fn, /*apply=*/true);
-            }
-            for (const auto &da : dead_addr) {
-                IrInstr &ai = fn.blocks[da.first].instrs[da.second];
-                ai.op = IrOp::NOP;
-                ai.operands.clear();
-                ai.dst = IR_NO_VALUE;
-                ai.func_name.clear();
-            }
-            for (const auto &df : dead_free) {
-                IrInstr &fi = fn.blocks[df.first].instrs[df.second];
-                fi.op = IrOp::NOP;
-                fi.operands.clear();
-                fi.dst = IR_NO_VALUE;
-                fi.func_name.clear();
-            }
-            call_ins.op = IrOp::NOP;
-            call_ins.operands.clear();
-            call_ins.dst = IR_NO_VALUE;
-            call_ins.func_name.clear();
-            changed = true;
-            continue;
-        }
-
-        /* ====================================================================
-         * Caso B: CON escrituras.
-         *
-         * B.1 single-block -> field versioning LINEAL: un walk lineal hace
-         *     store-to-load forwarding, elimina los stores y borra el alloc.
-         *
-         * B.2 cross-block / loop -> SROA/mem2reg: promueve los campos a SSA con
-         *     insercion de PHI (Cytron) + renaming.
-         *
-         *     Default-on con COST-MODEL: el propio @c sr_mem2reg_object baila
-         * si promover añadiria un if-merge PHI DENTRO de un loop (= escritura
-         *     condicional de campo en el loop), que pessimiza el interp (16
-         *     registros VM -> copies + presion).  Los casos que SI promueve son
-         *     win (acumuladores incondicionales en loop: +14..41% interp;
-         * cross- block fuera de loops: coste unico + elimina el alloc).
-         *     VESTA_NO_ESCAPE_MEM2REG=1 lo desactiva entero;
-         *     VESTA_ESCAPE_MEM2REG_FORCE=1 ignora el cost-model. */
-        if (!single_block) {
-            static const bool mem2reg_off =
-                util::flag_on(util::FlagId::NoEscapeMem2Reg);
-            if (!mem2reg_off) {
-                const char *mr = nullptr;
-                if (sr_mem2reg_object(fn, model, site.block_idx, site.ins_idx,
-                                      obj, args, fieldaddr_off, mr)) {
-                    changed = true;
-                    continue;
-                }
-                diag(site, mr);
-            } else {
-                diag(site, "VXA132");
-            }
-            continue;
-        }
-        {
-            auto &blkv = fn.blocks[site.block_idx].instrs;
-            /* DRY-RUN: simular current[offset] en orden de bloque + validar. */
-            struct LdPlan {
-                size_t ii;
-                bool from_store;
-                IrValueId stored;
-                const SrFieldInit *fi;
-                bool zero_init;
-            };
-            std::vector<LdPlan> ld_plan;
-            std::vector<size_t> store_iis;
-            std::unordered_map<uint32_t, IrValueId>
-                sim; /* offset -> ultimo valor escrito */
-            const char *vreason = "VXA132";
-            bool vok = true;
-
-            for (size_t ii = 0; ii < blkv.size() && vok; ++ii) {
-                const auto &in = blkv[ii];
-                uint32_t off = 0;
-                bool is_ld = false, is_st = false;
-                IrValueId sval = IR_NO_VALUE;
-                if (in.op == IrOp::LOAD && !in.operands.empty()) {
-                    IrValueId addr = in.operands[0];
-                    if (addr == obj) {
-                        off = 0;
-                        is_ld = true;
-                    } else {
-                        auto it = fieldaddr_off.find(addr);
-                        if (it != fieldaddr_off.end()) {
-                            off = it->second;
-                            is_ld = true;
-                        }
-                    }
-                } else if (in.op == IrOp::STORE && in.operands.size() >= 2) {
-                    IrValueId addr = in.operands[1];
-                    if (addr == obj) {
-                        off = 0;
-                        is_st = true;
-                        sval = in.operands[0];
-                    } else {
-                        auto it = fieldaddr_off.find(addr);
-                        if (it != fieldaddr_off.end()) {
-                            off = it->second;
-                            is_st = true;
-                            sval = in.operands[0];
-                        }
-                    }
-                }
-                if (is_ld) {
-                    /* Solo enteros: el forwarding via MOV de un valor float/
-                     * ptr/handle podria mezclar bancos GP/ZMM en codegen.
-                     * Consistente con el path read-only (int-only). */
-                    if (!type_is_integer(in.type)) {
-                        vok = false;
-                        vreason = "VXA134";
-                        break;
-                    }
-                    auto sit = sim.find(off);
-                    if (sit != sim.end()) {
-                        /* forward del ultimo store: el tipo del valor debe
-                         * coincidir con el tipo leido. */
-                        IrValueId v = sit->second;
-                        if (v == IR_NO_VALUE || v >= fn.values.size() ||
-                            fn.values[v].type != in.type) {
-                            vok = false;
-                            vreason = "VXA131";
-                            break;
-                        }
-                        ld_plan.push_back({ii, true, v, nullptr, false});
-                    } else {
-                        /* primer load del campo: valor de construccion. */
-                        const SrFieldInit *fi = model->find(off);
-                        if (!fi) {
-                            /* read de cabecera (class_ptr offset 0, etc.) NO es
-                             * default-0 -> bail (protege identidad/reflexion).
-                             */
-                            if (off < SR_OBJ_HEADER_SIZE) {
-                                vok = false;
-                                vreason = "VXA128";
-                                break;
-                            }
-                            /* campo de usuario no inicializado -> default-0
-                             * (el objeto GC se zero-inicializa al alocar). */
-                            IrInstr probe =
-                                blkv[ii]; /* copia: apply=false no muta */
-                            if (!sr_rewrite_load_zero(probe, fn,
-                                                      /*apply=*/false)) {
-                                vok = false;
-                                vreason = "VXA129";
-                                break;
-                            }
-                            ld_plan.push_back(
-                                {ii, false, IR_NO_VALUE, nullptr, true});
-                        } else {
-                            IrInstr probe =
-                                blkv[ii]; /* copia: apply=false no muta */
-                            if (!sr_rewrite_load(probe, *fi, args, fn,
-                                                 /*apply=*/false)) {
-                                vok = false;
-                                vreason = "VXA130";
-                                break;
-                            }
-                            ld_plan.push_back(
-                                {ii, false, IR_NO_VALUE, fi, false});
-                        }
-                    }
-                } else if (is_st) {
-                    sim[off] = sval;
-                    store_iis.push_back(ii);
-                }
-            }
-            if (!vok) {
-                diag(site, vreason);
-                continue;
-            }
-
-            /* APLICAR: reescribir loads, NOPear stores + field-addrs + call. */
-            for (const auto &lp : ld_plan) {
-                IrInstr &ld = blkv[lp.ii];
-                if (lp.from_store) {
-                    ld.op = IrOp::MOV;
-                    ld.operands.clear();
-                    ld.operands.push_back(lp.stored);
-                    ld.func_name.clear();
-                    if (ld.dst != IR_NO_VALUE && ld.dst < fn.values.size())
-                        fn.values[ld.dst].is_const = false;
-                    sr_forward_mem_marks(fn, ld.dst, lp.stored);
-                } else if (lp.zero_init) {
-                    sr_rewrite_load_zero(ld, fn, /*apply=*/true);
-                } else {
-                    sr_rewrite_load(ld, *lp.fi, args, fn, /*apply=*/true);
-                }
-            }
-            for (size_t sii : store_iis) {
-                IrInstr &st = blkv[sii];
-                st.op = IrOp::NOP;
-                st.operands.clear();
-                st.dst = IR_NO_VALUE;
-                st.func_name.clear();
-            }
-            for (const auto &da : dead_addr) {
-                IrInstr &ai = fn.blocks[da.first].instrs[da.second];
-                ai.op = IrOp::NOP;
-                ai.operands.clear();
-                ai.dst = IR_NO_VALUE;
-                ai.func_name.clear();
-            }
-            for (const auto &df : dead_free) {
-                IrInstr &fi = fn.blocks[df.first].instrs[df.second];
-                fi.op = IrOp::NOP;
-                fi.operands.clear();
-                fi.dst = IR_NO_VALUE;
-                fi.func_name.clear();
-            }
-            call_ins.op = IrOp::NOP;
-            call_ins.operands.clear();
-            call_ins.dst = IR_NO_VALUE;
-            call_ins.func_name.clear();
-            changed = true;
         }
     }
 
-    /* Compactar NOPs introducidos (mismo patron que promote_local_raw_alloc).
-     */
-    if (changed) {
-        for (auto &blk : fn.blocks) {
-            auto &is = blk.instrs;
-            is.erase(std::remove_if(is.begin(), is.end(),
-                                    [](const IrInstr &i) {
-                                        return i.op == IrOp::NOP &&
-                                               i.operands.empty() &&
-                                               i.dst == IR_NO_VALUE;
-                                    }),
-                     is.end());
+    /* Cada sitio, en el orden del analisis de escape.  Lo que se resuelve con
+     * lo que ya hay -- sin escrituras, o todo en un bloque -- se aplica aqui
+     * mismo: anula y reescribe EN SU SITIO, sin mover nada.  Lo que cruza
+     * bloques se promueve al final, todos a la vez. */
+    bool changed = false;
+    std::vector<SrPromotion> promos;
+    std::vector<const GcSite *> promo_sites; // de quien es cada promocion
+    static const bool mem2reg_off =
+        util::flag_on(util::FlagId::NoEscapeMem2Reg);
+    for (GcSite &site : sites) {
+        if (site.why != nullptr) {
+            gc_report_site(fn, *site.alloc, site.why);
+            continue;
         }
+        const char *why = nullptr;
+        if (!site.has_writes) {
+            why = gc_scalarize_read_only(fn, site);
+        } else if (site.single_block) {
+            why = gc_scalarize_single_block(fn, site);
+        } else if (mem2reg_off) {
+            why = "VXA132";
+        } else {
+            SrPromotion p;
+            p.obj = site.alloc->dst;
+            p.model = site.model;
+            p.args = site.args;
+            p.field_addrs = std::move(site.field_addrs);
+            promos.push_back(std::move(p));
+            promo_sites.push_back(&site);
+            continue;
+        }
+        if (why != nullptr)
+            gc_report_site(fn, *site.alloc, why);
+        else
+            changed = true;
+    }
+    if (!promos.empty()) {
+        /* El grafo, UNA vez: lo de arriba anula instrucciones pero nunca un
+         * terminador, asi que los bloques y sus aristas siguen siendo los
+         * mismos. */
+        const SrFnGraph graph = sr_fn_graph(fn);
+        if (sr_mem2reg_batch(fn, graph, promos, /*stack_mode=*/false))
+            changed = true;
+        for (size_t k = 0; k < promos.size(); ++k)
+            if (promos[k].reason != nullptr)
+                gc_report_site(fn, *promo_sites[k]->alloc, promos[k].reason);
     }
 
+    /* Quitar lo anulado. */
+    if (changed)
+        for (IrBlock &blk : fn.blocks)
+            blk.instrs.erase(std::remove_if(blk.instrs.begin(),
+                                            blk.instrs.end(), sr_is_empty_nop),
+                             blk.instrs.end());
     return changed;
 }
+
 
 PassResult ir_pass_scalar_replace_gc(IrFunction &fn, const IrModule &mod) {
     return PassResult::of(fn, scalar_replace_gc_impl(fn, mod));
@@ -4604,12 +4804,46 @@ PassResult ir_pass_scalar_replace_gc(IrFunction &fn, const IrModule &mod) {
 //
 //  Coste natural: nivel IR (la info -- offsets constantes + no-captura -- solo
 //  existe aqui; el codegen maquina ya no sabe que el struct no escapa).
-//  Reusa toda la maquina de sr_mem2reg_object (stack_mode=true).
+//  Reusa toda la maquina de sr_mem2reg_batch (stack_mode=true).
 // =========================================================================
 /* El cuerpo devuelve un `bool` y NO es la puerta publica: la de fuera envuelve
  * este resultado en @c PassResult , que es lo que obliga a avanzar la version.
  * Partirlo asi evita tocar cada `return` del cuerpo -- son muchos -- sin perder
  * la garantia, que vive en la firma que ve quien llama. */
+/// Lo que el analisis de usos sabe de un struct de pila.
+struct StackSite {
+    IrValueId base;                       ///< el ALLOCA.
+    /// El CODIGO del motivo por el que se descarta; nulo mientras valga.  Un
+    /// analisis que renuncia tiene que decir por que, y lo lee una persona:
+    /// sale del catalogo en su idioma.
+    const char *why = nullptr;
+    bool has_writes = false;              ///< algun store a un campo.
+    std::vector<SrFieldAddr> field_addrs; ///< sus direcciones de campo.
+};
+
+/// Descarta un sitio con @p why, si no estaba descartado ya: el primer motivo
+/// es el que se cuenta.
+static void sr_site_reject(StackSite &site, const char *why) {
+    if (site.why == nullptr) site.why = why;
+}
+
+/**
+ * @brief Cuenta por que un struct de pila no se escalarizo, si se pidio.
+ * @param fn   Funcion.
+ * @param base El ALLOCA.
+ * @param why  Codigo del motivo en el catalogo.
+ */
+[[gnu::cold]] static void sr_report_stack_site(const IrFunction &fn,
+                                               IrValueId base,
+                                               const char *why) {
+    static const bool dbg = util::flag_on(util::FlagId::EscapeDebug);
+    if (!dbg) return;
+    const std::string msg = vx::diag::format(
+        "VXA094", {fn.name, std::to_string(static_cast<unsigned>(base)),
+                   vx::diag::format(why, {})});
+    std::fprintf(stderr, "%s\n", msg.c_str());
+}
+
 static bool sroa_stack_structs_impl(IrFunction &fn) {
     if (fn.is_native || fn.values.empty()) return false;
     static const bool sroa_off = util::flag_on(util::FlagId::NoSroaStack);
@@ -4629,28 +4863,16 @@ static bool sroa_stack_structs_impl(IrFunction &fn) {
                 in.op == IrOp::RETHROW)
                 return false;
 
-    static const bool dbg = util::flag_on(util::FlagId::EscapeDebug);
-    bool changed = false;
-
-    // Recolectar ALLOCAs candidatos (dst valido, no ya host_alloca -- esos van
-    // a host-stack por pasar a CALLN y el whitelist los descartaria igual).
-    struct AllocSite {
-        size_t bi, ii;
-        IrValueId base;
-    };
-    std::vector<AllocSite> sites;
-    for (size_t bi = 0; bi < fn.blocks.size(); ++bi) {
-        const auto &b = fn.blocks[bi];
-        for (size_t ii = 0; ii < b.instrs.size(); ++ii) {
-            const auto &in = b.instrs[ii];
+    // Recolectar ALLOCAs candidatos.
+    std::vector<StackSite> sites;
+    for (const auto &b : fn.blocks)
+        for (const auto &in : b.instrs)
             // NO filtramos host_alloca: en AOT el auto-promote marca las
             // ALLOCAs locales como host-stack, y son justamente las que
             // queremos escalarizar.  Si el ALLOCA escapa de verdad (p.ej. a
             // CALLN), el whitelist de usos baila mas abajo.
             if (in.op == IrOp::ALLOCA && in.dst != IR_NO_VALUE)
-                sites.push_back({bi, ii, in.dst});
-        }
-    }
+                sites.push_back(StackSite{in.dst});
     if (sites.empty()) return false;
 
     /* El indice de constantes, UNA vez por funcion.  @see build_const_index */
@@ -4675,29 +4897,14 @@ static bool sroa_stack_structs_impl(IrFunction &fn) {
      * Las tablas van por identificador de valor en vectores planos y no en
      * tablas hash: son del tamano de la funcion y se consultan una vez por
      * operando, que es el camino caliente de este pase. */
-    constexpr int32_t kNoSite = -1;
-    util::NamedVector<int32_t, scratch::SiteOfValue> site_of(fn.values.size(),
-                                                             kNoSite);
+    util::NamedVector<SrSiteIdx, scratch::SiteOfValue> site_of(
+        fn.values.size(), SR_NO_SITE);
     for (size_t si = 0; si < sites.size(); ++si)
         if (sites[si].base < site_of.size())
-            site_of[sites[si].base] = static_cast<int32_t>(si);
-
-    std::vector<char> ok(sites.size(), 1);
-    std::vector<char> has_writes(sites.size(), 0);
-    /* El CODIGO del motivo, no su texto: un analisis que renuncia tiene que
-     * decir por que -- si calla, parece que funciona --, y ese "por que" lo lee
-     * una persona, asi que sale del catalogo en su idioma.  Guardar el codigo y
-     * no la frase deja esto en un puntero por sitio. */
-    std::vector<const char *> why(sites.size(), "VXA087");
-    /* Que sitio posee cada field-addr, y con que desplazamiento. */
-    util::NamedVector<int32_t, scratch::FieldSiteOf> fa_site(fn.values.size(),
-                                                             kNoSite);
-    util::NamedVector<uint32_t, scratch::FieldOffsetOf> fa_off(fn.values.size(),
-                                                               0);
-    /* Y la lista por sitio, para poder armar su mapa sin recorrer la funcion
-     * otra vez al final. */
-    std::vector<std::vector<std::pair<IrValueId, uint32_t>>> fa_by_site(
-        sites.size());
+            site_of[sites[si].base] = SrSiteIdx(si);
+    /* Que sitio posee cada direccion de campo, y con que desplazamiento. */
+    util::NamedVector<SrSiteIdx, scratch::FieldSiteOf> fa_site(
+        fn.values.size(), SR_NO_SITE);
 
     // Pasada A: field-addrs + load/store directos sobre cada base.
     for (const auto &b : fn.blocks) {
@@ -4706,25 +4913,17 @@ static bool sroa_stack_structs_impl(IrFunction &fn) {
              * no sabe modelar.  Se mira por VALOR, asi que una instruccion que
              * toque varias bases las descarta todas -- igual que antes, cuando
              * cada sitio hacia su propia pasada. */
-            for (const auto &pa : in.phi_args) {
-                if (pa.value >= site_of.size()) continue;
-                const int32_t s = site_of[pa.value];
-                if (s != kNoSite && ok[s]) {
-                    ok[s] = 0;
-                    why[s] = "VXA088";
-                }
-            }
-            if (in.func_ptr != IR_NO_VALUE && in.func_ptr < site_of.size()) {
-                const int32_t s = site_of[in.func_ptr];
-                if (s != kNoSite && ok[s]) {
-                    ok[s] = 0;
-                    why[s] = "VXA089";
-                }
-            }
+            for (const auto &pa : in.phi_args)
+                if (pa.value < site_of.size() && site_of[pa.value] != SR_NO_SITE)
+                    sr_site_reject(sites[site_of[pa.value]], "VXA088");
+            if (in.func_ptr != IR_NO_VALUE && in.func_ptr < site_of.size() &&
+                site_of[in.func_ptr] != SR_NO_SITE)
+                sr_site_reject(sites[site_of[in.func_ptr]], "VXA089");
             for (IrValueId v : in.operands) {
-                if (v >= site_of.size()) continue;
-                const int32_t s = site_of[v];
-                if (s == kNoSite || !ok[s]) continue;
+                if (v >= site_of.size() || site_of[v] == SR_NO_SITE) continue;
+                const SrSiteIdx s = site_of[v];
+                StackSite &site = sites[s];
+                if (site.why != nullptr) continue;
                 const IrValueId base = v;
                 if (in.op == IrOp::ADD && in.operands.size() == 2 &&
                     in.dst != IR_NO_VALUE && in.operands[0] != in.operands[1]) {
@@ -4734,25 +4933,20 @@ static bool sroa_stack_structs_impl(IrFunction &fn) {
                     uint64_t k = 0;
                     if (!const_value_indexed(fn, const_of, is_const_def, other,
                                              k)) {
-                        ok[s] = 0;
-                        why[s] = "VXA090";
+                        site.why = "VXA090";
                         continue;
                     }
-                    if (in.dst < fa_site.size()) {
-                        fa_site[in.dst] = s;
-                        fa_off[in.dst] = static_cast<uint32_t>(k);
-                    }
-                    fa_by_site[s].emplace_back(in.dst,
-                                               static_cast<uint32_t>(k));
+                    if (in.dst < fa_site.size()) fa_site[in.dst] = s;
+                    site.field_addrs.push_back(
+                        SrFieldAddr{in.dst, SrFieldOffset(k)});
                 } else if (in.op == IrOp::LOAD && !in.operands.empty() &&
                            in.operands[0] == base) {
                     // load directo (offset 0) -- ok.
                 } else if (in.op == IrOp::STORE && in.operands.size() >= 2 &&
                            in.operands[1] == base && in.operands[0] != base) {
-                    has_writes[s] = 1; // store directo (offset 0)
+                    site.has_writes = true; // store directo (offset 0)
                 } else {
-                    ok[s] = 0;
-                    why[s] = "VXA091";
+                    site.why = "VXA091";
                 }
             }
         }
@@ -4761,75 +4955,52 @@ static bool sroa_stack_structs_impl(IrFunction &fn) {
     // Pasada B: cada field-addr solo en LOAD o STORE-addr.
     for (const auto &b : fn.blocks) {
         for (const auto &in : b.instrs) {
-            for (const auto &pa : in.phi_args) {
-                if (pa.value >= fa_site.size()) continue;
-                const int32_t s = fa_site[pa.value];
-                if (s != kNoSite && ok[s]) {
-                    ok[s] = 0;
-                    why[s] = "VXA092";
-                }
-            }
-            if (in.func_ptr != IR_NO_VALUE && in.func_ptr < fa_site.size()) {
-                const int32_t s = fa_site[in.func_ptr];
-                if (s != kNoSite && ok[s]) {
-                    ok[s] = 0;
-                    why[s] = "VXA092";
-                }
-            }
+            for (const auto &pa : in.phi_args)
+                if (pa.value < fa_site.size() && fa_site[pa.value] != SR_NO_SITE)
+                    sr_site_reject(sites[fa_site[pa.value]], "VXA092");
+            if (in.func_ptr != IR_NO_VALUE && in.func_ptr < fa_site.size() &&
+                fa_site[in.func_ptr] != SR_NO_SITE)
+                sr_site_reject(sites[fa_site[in.func_ptr]], "VXA092");
             for (IrValueId v : in.operands) {
-                if (v >= fa_site.size()) continue;
-                const int32_t s = fa_site[v];
-                if (s == kNoSite || !ok[s]) continue;
+                if (v >= fa_site.size() || fa_site[v] == SR_NO_SITE) continue;
+                StackSite &site = sites[fa_site[v]];
+                if (site.why != nullptr) continue;
                 const IrValueId fav = v;
                 if (in.op == IrOp::LOAD && !in.operands.empty() &&
                     in.operands[0] == fav) {
                     // ok
                 } else if (in.op == IrOp::STORE && in.operands.size() >= 2 &&
                            in.operands[1] == fav && in.operands[0] != fav) {
-                    has_writes[s] = 1;
+                    site.has_writes = true;
                 } else {
-                    ok[s] = 0;
-                    why[s] = "VXA093";
+                    site.why = "VXA093";
                 }
             }
         }
     }
 
-    for (size_t si = 0; si < sites.size(); ++si) {
-        const auto &site = sites[si];
-        const IrValueId base = site.base;
-        if (!ok[si]) {
-            if (dbg) {
-                const std::string motivo = vx::diag::format(why[si], {});
-                const std::string msg = vx::diag::format(
-                    "VXA094",
-                    {fn.name, std::to_string((unsigned)base), motivo});
-                std::fprintf(stderr, "%s\n", msg.c_str());
-            }
+    /* Los que se pueden promover, TODOS a la vez: ver @ref sr_mem2reg_batch.
+     * Sin escrituras no hay nada que ganar: o es un struct leido sin
+     * inicializar, o un escalar que ya cubre la promocion de reservas. */
+    std::vector<SrPromotion> promos;
+    for (StackSite &site : sites) {
+        if (site.why != nullptr) {
+            sr_report_stack_site(fn, site.base, site.why);
             continue;
         }
-        // Sin escrituras => struct de pila leido sin inicializar (undef) O
-        // escalar que promote_local_allocas ya cubre -> nada que ganar.
-        if (!has_writes[si]) continue;
-
-        std::unordered_map<IrValueId, uint32_t> fieldaddr_off;
-        fieldaddr_off.reserve(fa_by_site[si].size() * 2 + 1);
-        for (const auto &fa : fa_by_site[si])
-            fieldaddr_off.emplace(fa.first, fa.second);
-        const char *mr = nullptr;
-        // args vacio (stack_mode ignora el modelo/args); model = nullptr.
-        if (sr_mem2reg_object(fn, /*model=*/nullptr, site.bi, site.ii, base,
-                              /*args=*/{}, fieldaddr_off, mr,
-                              /*stack_mode=*/true)) {
-            changed = true;
-        } else if (dbg) {
-            // El mismo envoltorio que el resto de motivos de este pase.
-            const std::string msg = vx::diag::format(
-                "VXA094", {fn.name, std::to_string((unsigned)base),
-                           vx::diag::format(mr, {})});
-            std::fprintf(stderr, "%s\n", msg.c_str());
-        }
+        if (!site.has_writes) continue;
+        SrPromotion p;
+        p.obj = site.base;
+        p.field_addrs = std::move(site.field_addrs);
+        promos.push_back(std::move(p));
     }
+    if (promos.empty()) return false;
+    /* El grafo, UNA vez para todos: promover no cambia bloques ni aristas. */
+    const SrFnGraph graph = sr_fn_graph(fn);
+    const bool changed =
+        sr_mem2reg_batch(fn, graph, promos, /*stack_mode=*/true);
+    for (const SrPromotion &p : promos)
+        if (p.reason != nullptr) sr_report_stack_site(fn, p.obj, p.reason);
     return changed;
 }
 
@@ -9083,6 +9254,294 @@ static bool const_fold_impl(IrFunction &fn) {
 //
 // Ahorro: en codigo generado por frontend Vesta se ven STOREs de zero seguidos
 // de STOREs reales (init list, alloca cleared, etc).  ~10-15% reduccion.
+/**
+ * @brief Lo que el trato preciso del asm necesita en el DSE, pedido UNA vez.
+ *
+ * Perezoso: una funcion sin asm no lo pide nunca.  Si quien llama ya trae los
+ * tres hechos cacheados se usan tal cual; si no, se calculan aqui y se
+ * guardan dentro, porque los punteros que se exponen tienen que seguir
+ * valiendo mientras dure el pase.
+ */
+struct DseAsmFacts {
+    const IrFunction &fn;
+    const HechosDeAsmParaDse *given;   ///< Los de fuera, si llegaron.
+    const analysis::IrFacts &ir_facts; ///< Estructura de la funcion al entrar.
+    analysis::LoopsOracle loops;       ///< A quien preguntar por los bucles.
+
+    bool ready = false;
+    analysis::AsmBindingFacts own_bindings;
+    /* Compartido y no por valor: copiar un `RangeFacts` copia el estado de
+     * entrada de CADA bloque, y aqui se pide una vez por funcion con asm.  Es
+     * la misma copia que costo 16 s de una compilacion de 26. */
+    std::shared_ptr<const analysis::RangeFacts> own_ranges;
+    /* Los que se usan de verdad: los de fuera si llegaron, los de aqui si hubo
+     * que calcularlos.  Sin copiar: son grandes. */
+    const analysis::AsmBindingFacts *bindings = nullptr;
+    const analysis::IrFacts *structure = nullptr;
+    const analysis::RangeFacts *ranges = nullptr;
+
+    DseAsmFacts(const IrFunction &f, const HechosDeAsmParaDse *g,
+                const analysis::IrFacts &facts, analysis::LoopsOracle l)
+        : fn(f), given(g), ir_facts(facts), loops(l) {}
+
+    /// Deja los tres hechos y las clases listos; la segunda vez no hace nada.
+    void ensure() {
+        if (ready) return;
+        ready = true;
+        if (given != nullptr && given->ligaduras != nullptr &&
+            given->estructura != nullptr && given->rangos != nullptr) {
+            /* Ya los tiene quien llama, cacheados: no se toca nada. */
+            bindings = given->ligaduras;
+            structure = given->estructura;
+            ranges = given->rangos;
+        } else {
+            PassTimer crono__("  dse:facts (built here)");
+            own_bindings = analysis::compute_asm_bindings(fn);
+            /* La estructura de ARRIBA, no una nueva: `ir_facts` ya describe
+             * esta funcion al entrar al pase, que es justo lo que hace falta,
+             * y esto corre antes de tocar nada. */
+            const analysis::RangeRequester mark(
+                analysis::RangeAsker::OptimizerAsm);
+            own_ranges = analysis::compute_ranges_ptr(
+                fn, ir_facts, analysis::RangeOptions{}, nullptr, nullptr, loops);
+            bindings = &own_bindings;
+            structure = &ir_facts;
+            ranges = own_ranges.get();
+        }
+    }
+};
+
+/// De que memoria es la raiz de una direccion que el DSE sabe seguir.
+enum class DseRootKind : uint8_t { NONE = 0, STACK = 1, HEAP = 2, GLOBAL = 3 };
+
+/// Una direccion conocida: su raiz (ALLOCA, reserva o global) y el offset.
+struct DseAddrInfo {
+    IrValueId root = IR_NO_VALUE; ///< raiz (ALLOCA o allocador)
+    int64_t off = 0;              ///< offset constante desde la raiz
+};
+
+/* Clave canonica de direccion: (raiz, offset const).  Dos punteros con la
+ * misma clave son la MISMA direccion aunque sean IrValueId distintos (copias
+ * via MOV/BITCAST). */
+using DseAddrKey = std::pair<IrValueId, int64_t>;
+
+/* STORE pendiente de veredicto: aun no se ha demostrado que sea dead ni se ha
+ * leido.  @c covered es una mascara de 1 bit por byte escrito por stores
+ * POSTERIORES: cuando cubre el rango entero, este store es dead (nadie puede
+ * observar sus bytes).  Esto recupera el DSE del zero-init ancho que luego se
+ * sobreescribe por campos estrechos, pero SOLO cuando la cobertura es
+ * COMPLETA: los bytes no cubiertos siguen siendo observables. */
+struct DsePendingStore {
+    SrInstrPos idx;   ///< posicion de la instruccion STORE en el bloque
+    IrValueId root;   ///< raiz de la direccion
+    int64_t off;      ///< offset desde la raiz
+    int64_t size;     ///< bytes escritos
+    uint64_t covered; ///< bitmask de bytes ya sobreescritos (bit i = off+i)
+};
+
+/// Bytes accedidos por un LOAD/STORE: delega en la UNICA verdad compartida.
+static inline int64_t dse_access_bytes(IrType t) {
+    return static_cast<int64_t>(type_access_bytes(t));
+}
+
+/**
+ * @brief Si una CALL/TAILCALL va a un callee TOTALMENTE PURO.
+ *
+ * Entonces NO es barrera de memoria: es conocimiento INTERPROCEDURAL del
+ * modelo de efectos, que el DSE por si solo no puede saber.
+ */
+static bool dse_is_pure_call(const IrInstr &ins,
+                             const std::unordered_set<std::string> *pure_callees) {
+    if (!g_dse_pure_calls || !pure_callees) return false;
+    if (ins.op != IrOp::CALL && ins.op != IrOp::TAILCALL) return false;
+    return !ins.func_name.empty() && pure_callees->count(ins.func_name) > 0;
+}
+
+/**
+ * @brief Lo que el DSE lleva de UN bloque, y las tres operaciones sobre ello.
+ */
+struct DseBlockState {
+    bool &changed; ///< El veredicto del pase: algo se marco muerto.
+    /// STOREs vivos del bloque, pendientes de veredicto.
+    std::vector<DsePendingStore> pending;
+    /* STORE-TO-LOAD FORWARDING: clave -> (valor guardado, tipo) del ultimo
+     * STORE.  Un LOAD de la misma direccion y el MISMO tipo se sustituye por
+     * el valor. */
+    std::map<DseAddrKey, std::pair<IrValueId, IrType>> last_store_val;
+    /* Load-to-load CSE: claves cuyo valor lo registro un LOAD (no un STORE).
+     * Solo vale mientras NADIE escriba memoria, asi que CUALQUIER store las
+     * invalida (conservador y sound). */
+    std::set<DseAddrKey> load_recorded;
+    /// Instrucciones del bloque marcadas como muertas.
+    std::vector<bool> dead;
+
+    /* Invalida el forwarding de toda direccion del MISMO root cuyo rango de
+     * bytes se solape con [off, off+size) sin ser la clave exacta (esa la
+     * sobreescribe el propio store).  Roots distintos NUNCA aliasan.  Se asume
+     * el ancho maximo (8 B) de la entrada trackeada: conservador. */
+    void kill_val_overlapping(const DseAddrKey &k, int64_t size) {
+        PassTimer crono__("  dse:kill_val_overlapping");
+        for (auto it = last_store_val.begin(); it != last_store_val.end();) {
+            bool ov = it->first.first == k.first && it->first != k &&
+                      it->first.second < k.second + size &&
+                      k.second < it->first.second + 8;
+            if (ov)
+                it = last_store_val.erase(it);
+            else
+                ++it;
+        }
+    }
+
+    /* Un STORE posterior [off, off+size) marca como cubiertos esos bytes en
+     * los stores pendientes del mismo root; el que quede TOTALMENTE cubierto
+     * es dead.  Si el rango excede 64 B no se modela la mascara (se descarta
+     * el pendiente: conservador, no se mata). */
+    void note_write(IrValueId root, int64_t off, int64_t size) {
+        PassTimer crono__("  dse:note_write");
+        for (auto it = pending.begin(); it != pending.end();) {
+            if (it->root != root || it->off >= off + size ||
+                off >= it->off + it->size) {
+                ++it;
+                continue;
+            }
+            if (it->size > 64) {
+                /* no modelable -> olvidar (no matar) */
+                it = pending.erase(it);
+                continue;
+            }
+            const int64_t lo = std::max(it->off, off);
+            const int64_t hi = std::min(it->off + it->size, off + size);
+            for (int64_t b = lo; b < hi; ++b)
+                it->covered |= (1ull << (b - it->off));
+            const uint64_t full =
+                (it->size >= 64) ? ~0ull : ((1ull << it->size) - 1ull);
+            if ((it->covered & full) == full) {
+                dead[it->idx] = true; /* sobreescrito por completo */
+                changed = true;
+                it = pending.erase(it);
+            } else
+                ++it;
+        }
+    }
+
+    /* Un LOAD de [off, off+size) LEE los stores pendientes que solapa: dejan
+     * de ser candidatos a dead. */
+    void note_read(IrValueId root, int64_t off, int64_t size) {
+        PassTimer crono__("  dse:note_read");
+        for (auto it = pending.begin(); it != pending.end();) {
+            if (it->root == root && it->off < off + size &&
+                off < it->off + it->size)
+                it = pending.erase(it);
+            else
+                ++it;
+        }
+    }
+};
+
+/**
+ * @brief Un bloque `asm` visto por el DSE: por lo que TOCA, no como barrera.
+ */
+struct DseAsmSite {
+    DseBlockState &st;
+    DseAsmFacts &asm_facts;
+    /// Analisis de cada bloque de asm, memorizado por su nombre.
+    std::unordered_map<std::string, vx::AsmBlockEffects> &block_effects;
+    const std::unordered_map<IrValueId, DseAddrInfo> &addr_of;
+
+    /**
+     * @brief Trata el bloque por lo que toca.
+     *
+     * @return true si se pudo; false = no se sabe lo suficiente y quien llama
+     *         debe seguir tratandolo como barrera total.
+     */
+    bool apply(const IrInstr &ins) const {
+        PassTimer crono__("  dse:asm");
+        asm_facts.ensure();
+        /* Con las clases de operando: esto pregunta QUE memoria toca el
+         * bloque, que no se puede responder sin saber cuantos bytes mide cada
+         * `$N`. */
+        auto it_ef = block_effects.find(ins.func_name);
+        if (it_ef == block_effects.end())
+            it_ef = block_effects
+                        .emplace(ins.func_name,
+                                 vx::asm_analyze_block(
+                                     ins.func_name, vx::asm_arch_actual(),
+                                     asm_facts.bindings->operand_classes))
+                        .first;
+        const vx::AsmBlockEffects &e = it_ef->second;
+        if (!e.known() || e.is_call || e.has_atomic) return false;
+        if (e.accesos_incompletos) return false;
+
+        /* PRIMERO lo que no depende de los accesos: el bloque lee el VALOR de
+         * cada variable ligada.  Sus huecos son los operandos. */
+        for (IrValueId op : ins.operands) {
+            if (op == IR_NO_VALUE) return false;
+            auto ai = addr_of.find(op);
+            if (ai == addr_of.end()) return false; // hueco no localizable
+            st.note_read(ai->second.root, ai->second.off, 8);
+        }
+
+        /* El bloque puede CAMBIAR el valor de una variable ligada sin tocar
+         * memoria (`inc rax` sobre un `register("rax") u64 v`).  Lo que hubiera
+         * guardado en su hueco deja de valer: sin esto, leer la variable
+         * despues del bloque devolvia el valor de ANTES (41 en vez de 42).  De
+         * que valor habla cada operando lo responde UN solo sitio (ver
+         * @ref analysis::compute_asm_bindings). */
+        const analysis::AsmBindingFacts &lig = *asm_facts.bindings;
+        /* Y los rangos, que cierran la extension de un acceso cuando la
+         * determina un operando en vez de una constante. */
+        const analysis::RangeFacts &rangos_dse = *asm_facts.ranges;
+        for (const std::string &w : e.escritos) {
+            /* Si dos variables comparten registro no se sabe a cual escribio:
+             * dejan de valer LAS DOS.  Invalidar de mas es correcto (solo
+             * impide reusar un valor). */
+            for (const analysis::LigaduraAsm &l : lig.candidatas(w)) {
+                auto ai = addr_of.find(l.hueco);
+                if (ai == addr_of.end()) return false;
+                st.last_store_val.erase({ai->second.root, ai->second.off});
+            }
+        }
+
+        /* Y la memoria que toca A TRAVES de ellos: del registro base al hueco,
+         * del hueco a lo que contiene, y de ahi a la direccion que el DSE ya
+         * sabe seguir. */
+        for (const vx::AsmBlockEffects::Acceso &a : e.accesos) {
+            /* Con varias candidatas el acceso va por UNA de ellas, y como no se
+             * sabe cual, se tratan todas. */
+            const auto cands = lig.candidatas(a.base);
+            if (cands.empty()) return false;
+            /* Cuanto toca de verdad.  Un `movdqa` escribe DIECISEIS: con un 8
+             * fijo los ocho de arriba no se invalidaban.  Sin cota se usa un
+             * ancho grande a proposito: pasarse solo cuesta una optimizacion. */
+            const analysis::ExtensionResuelta ext =
+                a.valida && !a.desde_memoria.hay
+                    ? analysis::resolver_extension(lig, rangos_dse, a.extension)
+                    : analysis::ExtensionResuelta{};
+            if (!ext.acotada) return false;
+            const int32_t ancho = (int32_t)ext.bytes();
+            for (const analysis::LigaduraAsm &l : cands) {
+                if (l.valor == IR_NO_VALUE) return false;
+                auto ai = addr_of.find(l.valor);
+                if (ai == addr_of.end()) return false; // no seguible
+                const int64_t off = ai->second.off + ext.desde;
+                // Leer lo apuntado, y si escribe, invalidar el reenvio de esa
+                // direccion con la extension que de verdad tiene.
+                st.note_read(ai->second.root, off, ancho);
+                if (a.escribe) {
+                    const DseAddrKey k{ai->second.root, off};
+                    st.kill_val_overlapping(k, ancho);
+                    /* Y la clave EXACTA tambien: @c kill_val_overlapping se la
+                     * salta porque quien la llama es un STORE que la
+                     * sobrescribe; aqui el asm escribio por su cuenta y dejarla
+                     * viva reusaba el valor ANTERIOR (0 en vez de 42). */
+                    st.last_store_val.erase(k);
+                }
+            }
+        }
+        return true;
+    }
+};
+
 static bool dse_impl(IrFunction &fn, const analysis::PointsTo *pt,
                      const std::unordered_set<std::string> *pure_callees,
                      const HechosDeAsmParaDse *hechos_asm,
@@ -9104,15 +9563,6 @@ static bool dse_impl(IrFunction &fn, const analysis::PointsTo *pt,
         facts = &own_facts;
     }
     const analysis::IrFacts &ir_facts = *facts;
-
-    // ¿Es esta CALL/TAILCALL a un callee TOTALMENTE PURO?  Entonces NO es
-    // barrera de memoria (conocimiento INTERPROCEDURAL del modelo de efectos:
-    // el DSE por si solo no puede saber que hace el callee).
-    auto is_pure_call = [&](const IrInstr &ins) -> bool {
-        if (!g_dse_pure_calls || !pure_callees) return false;
-        if (ins.op != IrOp::CALL && ins.op != IrOp::TAILCALL) return false;
-        return !ins.func_name.empty() && pure_callees->count(ins.func_name) > 0;
-    };
 
     // Alias-safety del store-to-load forwarding.
     //
@@ -9141,14 +9591,9 @@ static bool dse_impl(IrFunction &fn, const analysis::PointsTo *pt,
     // parametro, PHI, calculo con offset variable) puede aliasar cualquier
     // direccion local -> barrera que invalida todo el forwarding.  Sin esto,
     // `(*p).x = v` (p cargado que en runtime == &s) no invalidaba `s.x`.
-    enum class RootKind : uint8_t { NONE = 0, STACK = 1, HEAP = 2, GLOBAL = 3 };
-    struct AddrInfo {
-        IrValueId root = IR_NO_VALUE; ///< raiz (ALLOCA o allocador)
-        int64_t off = 0;              ///< offset constante desde la raiz
-    };
-    std::unordered_map<IrValueId, AddrInfo>
+    std::unordered_map<IrValueId, DseAddrInfo>
         addr_of; // solo direcciones conocidas
-    std::unordered_map<IrValueId, RootKind> root_kind;
+    std::unordered_map<IrValueId, DseRootKind> root_kind;
 
     if (g_dse_unified) {
         //   resolucion desde el RESOLVEDOR COMPARTIDO.  El DSE NO
@@ -9170,11 +9615,11 @@ static bool dse_impl(IrFunction &fn, const analysis::PointsTo *pt,
              v < static_cast<IrValueId>(upt.loc.size()); ++v) {
             const analysis::PointsToEntry &e = upt.loc[v];
             if (!e.off_exact) continue; // whole-root/inexact -> barrera
-            RootKind k = RootKind::NONE;
+            DseRootKind k = DseRootKind::NONE;
             if (e.kind == MK::Stack)
-                k = RootKind::STACK;
+                k = DseRootKind::STACK;
             else if (e.kind == MK::Heap)
-                k = RootKind::HEAP;
+                k = DseRootKind::HEAP;
             /* Y la memoria GLOBAL del propio programa, que es conocimiento como
              * cualquier otro: `contador` es una direccion concreta, y dos
              * globales distintos no se pisan.  Estaba fuera, asi que todo
@@ -9192,29 +9637,29 @@ static bool dse_impl(IrFunction &fn, const analysis::PointsTo *pt,
              * tambien.  Lo unico que cambia es que dos globales distintos
              * dejan de bloquearse entre si. */
             else if (e.kind == MK::Global && e.root_is_symbol)
-                k = RootKind::GLOBAL;
+                k = DseRootKind::GLOBAL;
             else
                 continue; // ArgDerived/Unknown/global sin simbolo -> barrera
             /* `PointsToEntry::root` guarda un value-id O un indice de
              * parametro, asi que la conversion se escribe: aqui sabemos que es
              * lo primero porque el `kind` ya lo ha decidido arriba. */
             const IrValueId raiz = static_cast<IrValueId>(e.root);
-            addr_of[v] = AddrInfo{raiz, e.off};
+            addr_of[v] = DseAddrInfo{raiz, e.off};
             root_kind[raiz] = k; // la raiz misma se resuelve a off 0 exacto
         }
     } else {
         for (auto &bb : fn.blocks)
             for (auto &ins : bb.instrs) {
                 if (ins.dst == IR_NO_VALUE) continue;
-                RootKind k = RootKind::NONE;
+                DseRootKind k = DseRootKind::NONE;
                 if (ins.op == IrOp::ALLOCA)
-                    k = RootKind::STACK;
+                    k = DseRootKind::STACK;
                 else if (ins.op == IrOp::RAW_ALLOC ||
                          ins.op == IrOp::GC_ALLOC || ins.op == IrOp::NEWOBJ ||
                          ins.op == IrOp::NEWOBJS)
-                    k = RootKind::HEAP;
-                if (k == RootKind::NONE) continue;
-                addr_of[ins.dst] = AddrInfo{ins.dst, 0};
+                    k = DseRootKind::HEAP;
+                if (k == DseRootKind::NONE) continue;
+                addr_of[ins.dst] = DseAddrInfo{ins.dst, 0};
                 root_kind[ins.dst] = k;
             }
         // Fix-point: propagar (raiz, offset) por las cadenas derivadas.
@@ -9238,7 +9683,7 @@ static bool dse_impl(IrFunction &fn, const analysis::PointsTo *pt,
                                ins.operands.size() == 2) {
                         uint64_t off;
                         if (!get_const(fn, ins.operands[1], off)) continue;
-                        AddrInfo a = base->second;
+                        DseAddrInfo a = base->second;
                         a.off += static_cast<int64_t>(off);
                         addr_of[ins.dst] = a;
                         grew = true;
@@ -9247,307 +9692,57 @@ static bool dse_impl(IrFunction &fn, const analysis::PointsTo *pt,
         }
     }
 
-    /* Tamano en bytes accedido por un LOAD/STORE segun su IrType.  Se usa
-     * para decidir SOLAPAMIENTO entre dos accesos al mismo root con offsets
-     * constantes distintos. */
-    // Bytes accedidos: delega en la UNICA verdad compartida.
-    auto access_bytes = [](IrType t) -> int64_t {
-        return static_cast<int64_t>(type_access_bytes(t));
-    };
-
-    /* Clave canonica de direccion: (raiz, offset const).  Dos punteros con
-     * la misma clave son la MISMA direccion aunque sean IrValueId distintos
-     * (copias via MOV/BITCAST). */
-    using AddrKey = std::pair<IrValueId, int64_t>;
-
-    /* STORE pendiente de veredicto: aun no se ha demostrado que sea dead ni
-     * se ha leido.  @c covered es una mascara de 1 bit por byte escrito por
-     * stores POSTERIORES: cuando cubre el rango entero, este store es dead
-     * (nadie puede observar sus bytes).  Esto recupera el DSE del zero-init
-     * ancho que luego se sobreescribe por campos estrechos (`{i32 x; i32 y}`
-     * inicializado a 0 y luego x=..., y=...), pero SOLO cuando la cobertura
-     * es COMPLETA -- a diferencia del codigo anterior, que mataba el store
-     * ancho en cuanto veia UNO estrecho a la misma direccion (incorrecto:
-     * los bytes no cubiertos seguian siendo observables). */
-    struct PendingStore {
-        size_t idx;       ///< indice de la instruccion STORE en el bloque
-        IrValueId root;   ///< raiz de la direccion
-        int64_t off;      ///< offset desde la raiz
-        int64_t size;     ///< bytes escritos
-        uint64_t covered; ///< bitmask de bytes ya sobreescritos (bit i = off+i)
-    };
+    /* Los hechos que el trato preciso del asm necesita se calculan UNA vez por
+     * pase, no una por bloque.  Estaban DENTRO del helper de abajo, que se
+     * llama por CADA instruccion de asm, y cada llamada rehacia las ligaduras
+     * (dos veces), la estructura de la funcion y un punto fijo de rangos
+     * COMPLETO: n_asm x O(funcion).  En un programa lleno de asm eso son
+     * segundos -- y es el mismo error que el ASA existe para quitar, un
+     * consumidor construyendo su base de hechos en el sitio.
+     *
+     * Y FUERA del bucle de bloques.  Estuvo dentro, con lo que "una vez por
+     * pase" era una vez por BLOQUE: preguntar si la funcion tiene asm la
+     * recorre entera, y hacerlo por bloque era bloques por instrucciones --
+     * 5,5 s de 23 medidos con VTune en el `main` de 205.000 instrucciones de un
+     * fuente generado, sin un solo bloque de asm --.  En la rama de repuesto
+     * era peor: un punto fijo de rangos completo por cada bloque.
+     *
+     * Describen la funcion al ENTRAR al pase, y es lo correcto: marcar un store
+     * como muerto no cambia ni de que valor habla cada operando del asm ni los
+     * rangos de nadie.
+     *
+     * Perezosos: un programa sin un solo bloque de asm no paga nada. */
+    DseAsmFacts asm_facts(fn, hechos_asm, ir_facts, loops);
+    /* AQUI, antes de tocar nada, si la funcion tiene asm.
+     *
+     * Los hechos tienen que describir la funcion al ENTRAR -- es lo que promete
+     * el comentario de arriba y de lo que depende que valgan --, y la rama de
+     * repuesto los calculaba al TOPARSE con el primer asm, o sea con stores ya
+     * borrados: describian una funcion a medio modificar.  Quien llama desde el
+     * optimizador siempre los da hechos, asi que no se notaba; cualquier otro
+     * que use los valores por defecto caia en la version tardia.
+     *
+     * Sigue sin costar nada en una funcion SIN asm, que es lo que se queria:
+     * ahi no se pide ninguno de los tres analisis. */
+    if (analysis::effects::funcion_tiene_asm(fn)) asm_facts.ensure();
+    /* Y el analisis de CADA bloque de asm, memorizado por su nombre.  El texto
+     * del bloque y las clases son los mismos toda la pasada, asi que volver a
+     * analizarlo por cada instruccion que lo menciona es rehacer un trabajo
+     * cuyo resultado ya se tiene. */
+    std::unordered_map<std::string, vx::AsmBlockEffects> asm_block_effects;
 
     for (auto &bb : fn.blocks) {
-        // STOREs vivos del bloque, pendientes de veredicto de DSE.
-        std::vector<PendingStore> pending;
-        //  D.7.opt: STORE-TO-LOAD FORWARDING.
-        // Mapa paralelo: addr_key -> (stored_value_vid, store_type) del
-        // ultimo STORE.  Cuando un LOAD lee de esa misma direccion CON EL
-        // MISMO tipo, podemos reemplazar el LOAD por MOV del valor
-        // almacenado (ahorra la lectura de memoria + cualquier conversion).
-        std::map<AddrKey, std::pair<IrValueId, IrType>> last_store_val;
-        // Load-to-load CSE (g_load_cse): claves cuyo valor lo registro un LOAD
-        // (no un STORE).  Un valor cargado solo vale mientras NADIE escriba
-        // memoria -- un STORE puede aliasar via roots imprecisos (reborrow) que
-        // la invalidacion por-clave del DSE no cubre.  Por eso se invalidan en
-        // CUALQUIER store (conservador y sound; el store->load exacto no se
-        // toca).
-        std::set<AddrKey> load_recorded;
-        // Set de indices marcados como dead
-        std::vector<bool> dead(bb.instrs.size(), false);
-
-        /* Invalida el forwarding de toda direccion del MISMO root cuyo rango
-         * de bytes se solape con [off, off+size) sin ser la clave exacta (esa
-         * la sobreescribe el propio store).  Roots distintos (alloca vs
-         * alloca, alloca vs heap, malloc vs malloc) NUNCA aliasan -> intactos.
-         * Se asume el ancho maximo (8 B) de la entrada trackeada: conservador.
-         */
-        auto kill_val_overlapping = [&](const AddrKey &k, int64_t size) {
-            PassTimer crono__("  dse:kill_val_overlapping");
-            for (auto it = last_store_val.begin();
-                 it != last_store_val.end();) {
-                bool ov = it->first.first == k.first && it->first != k &&
-                          it->first.second < k.second + size &&
-                          k.second < it->first.second + 8;
-                if (ov)
-                    it = last_store_val.erase(it);
-                else
-                    ++it;
-            }
-        };
-
-        /* Un STORE posterior [off, off+size) marca como cubiertos esos bytes
-         * en los stores pendientes del mismo root; el que quede TOTALMENTE
-         * cubierto es dead.  Si el rango excede 64 B no se modela la mascara
-         * (se descarta el pendiente: conservador, no se mata). */
-        auto note_write = [&](IrValueId root, int64_t off, int64_t size) {
-            PassTimer crono__("  dse:note_write");
-            for (auto it = pending.begin(); it != pending.end();) {
-                if (it->root != root || it->off >= off + size ||
-                    off >= it->off + it->size) {
-                    ++it;
-                    continue;
-                }
-                if (it->size > 64) {
-                    /* no modelable -> olvidar (no matar) */
-                    it = pending.erase(it);
-                    continue;
-                }
-                const int64_t lo = std::max(it->off, off);
-                const int64_t hi = std::min(it->off + it->size, off + size);
-                for (int64_t b = lo; b < hi; ++b)
-                    it->covered |= (1ull << (b - it->off));
-                const uint64_t full =
-                    (it->size >= 64) ? ~0ull : ((1ull << it->size) - 1ull);
-                if ((it->covered & full) == full) {
-                    dead[it->idx] = true; /* sobreescrito por completo */
-                    changed = true;
-                    it = pending.erase(it);
-                } else
-                    ++it;
-            }
-        };
-
-        /* Un LOAD de [off, off+size) LEE los stores pendientes que solapa ->
-         * dejan de ser candidatos a dead. */
-        auto note_read = [&](IrValueId root, int64_t off, int64_t size) {
-            PassTimer crono__("  dse:note_read");
-            for (auto it = pending.begin(); it != pending.end();) {
-                if (it->root == root && it->off < off + size &&
-                    off < it->off + it->size)
-                    it = pending.erase(it);
-                else
-                    ++it;
-            }
-        };
-
-        /**
-         * @brief Trata un bloque `asm` por lo que TOCA, en vez de como barrera.
-         *
-         * @return true si se pudo; false = no se sabe lo suficiente y el caller
-         *         debe seguir tratandolo como barrera total.
-         */
-        /* Los hechos que el trato preciso del asm necesita se calculan UNA vez
-         * por pase, no una por bloque.  Estaban DENTRO del helper de abajo, que
-         * se llama por CADA instruccion de asm, y cada llamada rehacia las
-         * ligaduras (dos veces), la estructura de la funcion y un punto fijo de
-         * rangos COMPLETO: n_asm x O(funcion).  En un programa lleno de asm eso
-         * son segundos -- y es el mismo error que el ASA existe para quitar, un
-         * consumidor construyendo su base de hechos en el sitio.
-         *
-         * Describen la funcion al ENTRAR al pase, y es lo correcto: marcar un
-         * store como muerto no cambia ni de que valor habla cada operando del
-         * asm ni los rangos de nadie.
-         *
-         * Perezosos: un programa sin un solo bloque de asm no paga nada. */
-        bool hechos_asm_listos = false;
-        analysis::AsmBindingFacts lig_asm_fn;
-        /* Compartido y no por valor: copiar un `RangeFacts` copia el estado de
-         * entrada de CADA bloque, y aqui se pide una vez por funcion con asm.
-         * Es la misma copia que costo 16 s de una compilacion de 26. */
-        std::shared_ptr<const analysis::RangeFacts> rangos_fn;
-        /* Las clases de operando en la forma que pide el analizador de bloques.
-         * Salen enteras de las ligaduras, que no cambian durante el pase, y
-         * armarlas cuesta una copia de DOS cadenas por ligadura: hacerlo por
-         * cada instruccion de asm era pagar esa copia n_asm veces. */
-        std::vector<std::pair<std::string, std::string>> clases_asm_fn;
-        /* Punteros a los que se usan de verdad: los de fuera si llegaron, los
-         * de aqui si hubo que calcularlos.  Sin copiar: son grandes. */
-        const analysis::AsmBindingFacts *lig_usar = nullptr;
-        const analysis::IrFacts *hechos_usar = nullptr;
-        const analysis::RangeFacts *rangos_usar = nullptr;
-        auto asegurar_hechos_asm = [&]() {
-            if (hechos_asm_listos) return;
-            hechos_asm_listos = true;
-            if (hechos_asm != nullptr && hechos_asm->ligaduras != nullptr &&
-                hechos_asm->estructura != nullptr &&
-                hechos_asm->rangos != nullptr) {
-                /* Ya los tiene quien llama, cacheados: no se toca nada. */
-                lig_usar = hechos_asm->ligaduras;
-                hechos_usar = hechos_asm->estructura;
-                rangos_usar = hechos_asm->rangos;
-            } else {
-                PassTimer crono__("  dse:facts (built here)");
-                lig_asm_fn = analysis::compute_asm_bindings(fn);
-                /* Los de ARRIBA, no unos nuevos: `ir_facts` ya describe esta
-                 * funcion al entrar al pase -- que es justo lo que este bloque
-                 * necesita -- y este lambda corre antes de tocar nada.  Eran
-                 * los MISMOS hechos calculados dos veces dentro de la misma
-                 * llamada. */
-                const analysis::RangeRequester mark(
-                    analysis::RangeAsker::OptimizerAsm);
-                rangos_fn = analysis::compute_ranges_ptr(
-                    fn, ir_facts, analysis::RangeOptions{}, nullptr, nullptr,
-                    loops);
-                lig_usar = &lig_asm_fn;
-                hechos_usar = &ir_facts;
-                rangos_usar = rangos_fn.get();
-            }
-            clases_asm_fn.reserve(lig_usar->ligaduras.size());
-            for (const analysis::LigaduraAsm &l : lig_usar->ligaduras)
-                clases_asm_fn.emplace_back(l.marcador, l.clase);
-        };
-        /* AQUI, antes de tocar nada, si la funcion tiene asm.
-         *
-         * Los hechos tienen que describir la funcion al ENTRAR -- es lo que
-         * promete el comentario de arriba y de lo que depende que valgan --, y
-         * la rama de repuesto los calculaba al TOPARSE con el primer asm, o
-         * sea con stores ya borrados: describian una funcion a medio
-         * modificar.  Quien llama desde el optimizador siempre los da hechos,
-         * asi que no se notaba; cualquier otro que use los valores por defecto
-         * caia en la version tardia.
-         *
-         * Sigue sin costar nada en una funcion SIN asm, que es lo que se
-         * queria: ahi no se pide ninguno de los tres analisis. */
-        if (analysis::effects::funcion_tiene_asm(fn)) asegurar_hechos_asm();
-        /* Y el analisis de CADA bloque, memorizado por su nombre.  El texto del
-         * bloque y las clases son los mismos toda la pasada, asi que volver a
-         * analizarlo por cada instruccion que lo menciona es rehacer un trabajo
-         * cuyo resultado ya se tiene. */
-        std::unordered_map<std::string, vx::AsmBlockEffects> efectos_de_bloque;
-
-        auto dse_asm_preciso = [&](const IrInstr &ins) -> bool {
-            PassTimer crono__("  dse:asm");
-            asegurar_hechos_asm();
-            /* Con las clases de operando: esto pregunta QUE memoria toca el
-             * bloque, que es exactamente lo que no se puede responder sin
-             * saber cuantos bytes mide cada `$N`. */
-            auto it_ef = efectos_de_bloque.find(ins.func_name);
-            if (it_ef == efectos_de_bloque.end())
-                it_ef = efectos_de_bloque
-                            .emplace(ins.func_name,
-                                     vx::asm_analyze_block(
-                                         ins.func_name, vx::asm_arch_actual(),
-                                         clases_asm_fn))
-                            .first;
-            const vx::AsmBlockEffects &e = it_ef->second;
-            if (!e.known() || e.is_call || e.has_atomic) return false;
-            if (e.accesos_incompletos) return false;
-
-            /* PRIMERO lo que no depende de los accesos: el bloque lee el VALOR
-             * de cada variable ligada.  Sus huecos son los operandos. */
-            for (IrValueId op : ins.operands) {
-                if (op == IR_NO_VALUE) return false;
-                auto ai = addr_of.find(op);
-                if (ai == addr_of.end()) return false; // hueco no localizable
-                note_read(ai->second.root, ai->second.off, 8);
-            }
-
-            /* Y el bloque puede CAMBIAR el valor de una variable ligada sin
-             * tocar memoria (`inc rax` sobre un `register("rax") u64 v`).  Lo
-             * que hubiera guardado en su hueco deja de valer, asi que no se
-             * puede seguir reusando: sin esto, leer la variable despues del
-             * bloque devolvia el valor de ANTES (41 en vez de 42). */
-            /* De que valor habla cada operando lo responde UN solo sitio (ver
-             * @ref analysis::compute_asm_bindings); este recorrido estaba
-             * copiado aqui y en el modelo de efectos. */
-            const analysis::AsmBindingFacts &lig = *lig_usar;
-            /* Y los rangos, que son los que cierran la extension de un acceso
-             * cuando la determina un operando en vez de una constante. */
-            const analysis::IrFacts &hechos_dse = *hechos_usar;
-            const analysis::RangeFacts &rangos_dse = *rangos_usar;
-            for (const std::string &w : e.escritos) {
-                /* Si dos variables comparten registro no se sabe a cual de las
-                 * dos escribio -- asi que dejan de valer LAS DOS.  Invalidar de
-                 * mas es correcto (solo impide reusar un valor); rendirse y
-                 * tratar el bloque como barrera total tira ademas todo lo que
-                 * si se sabia de lo demas que toca. */
-                for (const analysis::LigaduraAsm &l : lig.candidatas(w)) {
-                    auto ai = addr_of.find(l.hueco);
-                    if (ai == addr_of.end()) return false;
-                    last_store_val.erase({ai->second.root, ai->second.off});
-                }
-            }
-
-            /* Y ahora la memoria que toca A TRAVES de ellos: del registro base
-             * al hueco, del hueco a lo que contiene, y de ahi a la direccion
-             * que el DSE ya sabe seguir. */
-            for (const vx::AsmBlockEffects::Acceso &a : e.accesos) {
-                /* Con varias candidatas el acceso va por UNA de ellas, y como
-                 * no se sabe cual, se tratan todas: se da por leido lo que
-                 * apunta cada una y, si escribe, se invalida el reenvio de
-                 * todas.  Es la misma logica de siempre aplicada a un conjunto
-                 * en vez de a un valor. */
-                const auto cands = lig.candidatas(a.base);
-                if (cands.empty()) return false;
-                /* Cuanto toca de verdad.  Aqui habia un 8 fijo, y no era una
-                 * imprecision: un `movdqa` escribe DIECISEIS, asi que los ocho
-                 * de arriba no se invalidaban y la siguiente lectura reusaba un
-                 * valor que el bloque ya habia pisado.  Cuando no se puede
-                 * acotar se usa un ancho grande a proposito -- pasarse invalida
-                 * de mas, que solo cuesta una optimizacion. */
-                const analysis::ExtensionResuelta ext =
-                    a.valida && !a.desde_memoria.hay
-                        ? analysis::resolver_extension(lig, rangos_dse,
-                                                       a.extension)
-                        : analysis::ExtensionResuelta{};
-                if (!ext.acotada) return false;
-                const int32_t ancho = (int32_t)ext.bytes();
-                for (const analysis::LigaduraAsm &l : cands) {
-                    if (l.valor == IR_NO_VALUE) return false;
-                    auto ai = addr_of.find(l.valor);
-                    if (ai == addr_of.end()) return false; // no seguible
-                    const int64_t off = ai->second.off + ext.desde;
-                    // Leer lo apuntado, y si escribe, invalidar el reenvio de
-                    // esa direccion, con la extension que de verdad tiene.
-                    note_read(ai->second.root, off, ancho);
-                    if (a.escribe) {
-                        const AddrKey k{ai->second.root, off};
-                        kill_val_overlapping(k, ancho);
-                        /* Y la clave EXACTA tambien.  @c kill_val_overlapping
-                         * se la salta a proposito porque quien lo llama es un
-                         * STORE, que la sobrescribe acto seguido con el valor
-                         * nuevo; aqui no hay tal cosa -- el asm escribio por su
-                         * cuenta y no sabemos que dejo --, asi que dejarla viva
-                         * hace que la siguiente lectura reuse el valor
-                         * ANTERIOR. Costo: el programa devolvia 0 en vez de 42.
-                         */
-                        last_store_val.erase(k);
-                    }
-                }
-            }
-            return true;
-        };
+        /* Lo que el DSE lleva de ESTE bloque, y sus tres operaciones: ver
+         * @ref DseBlockState.  Los nombres de siempre, como referencias, para
+         * que el recorrido de abajo se lea igual. */
+        DseBlockState st{changed};
+        st.dead.assign(bb.instrs.size(), false);
+        std::vector<DsePendingStore> &pending = st.pending;
+        std::map<DseAddrKey, std::pair<IrValueId, IrType>> &last_store_val =
+            st.last_store_val;
+        std::set<DseAddrKey> &load_recorded = st.load_recorded;
+        std::vector<bool> &dead = st.dead;
+        const DseAsmSite asm_site{st, asm_facts, asm_block_effects, addr_of};
 
         for (size_t i = 0; i < bb.instrs.size(); ++i) {
             auto &ins = bb.instrs[i];
@@ -9613,25 +9808,26 @@ static bool dse_impl(IrFunction &fn, const analysis::PointsTo *pt,
                 // entrada registrada por LOAD via roots imprecisos (reborrow)
                 // -> invalidar TODAS las load-recorded (conservador, sound).
                 if (g_load_cse && !load_recorded.empty()) {
-                    for (const AddrKey &k : load_recorded)
+                    for (const DseAddrKey &k : load_recorded)
                         last_store_val.erase(k);
                     load_recorded.clear();
                 }
-                if (root_kind[ai->second.root] == RootKind::HEAP) {
+                if (root_kind[ai->second.root] == DseRootKind::HEAP) {
                     // Puntero de HEAP: no aliasa ningun slot de STACK, y las
                     // direcciones de heap no se trackean -> ni invalida ni
                     // registra (test 82: `p[i]=v` no toca el slot de p).
                     break;
                 }
-                const AddrKey key{ai->second.root, ai->second.off};
-                const int64_t sz = access_bytes(ins.type);
+                const DseAddrKey key{ai->second.root, ai->second.off};
+                const int64_t sz = dse_access_bytes(ins.type);
                 // Acumula cobertura sobre los stores pendientes que solapa
                 // (mata solo los que quedan cubiertos POR COMPLETO) e
                 // invalida el forwarding de las direcciones solapadas.
-                note_write(ai->second.root, ai->second.off, sz);
-                kill_val_overlapping(key, sz);
-                pending.push_back(
-                    PendingStore{i, ai->second.root, ai->second.off, sz, 0ull});
+                st.note_write(ai->second.root, ai->second.off, sz);
+                st.kill_val_overlapping(key, sz);
+                pending.push_back(DsePendingStore{
+                    static_cast<SrInstrPos>(i), ai->second.root,
+                    ai->second.off, sz, 0ull});
                 if (val != IR_NO_VALUE) {
                     last_store_val[key] = {val, ins.type};
                 } else {
@@ -9652,11 +9848,11 @@ static bool dse_impl(IrFunction &fn, const analysis::PointsTo *pt,
                     pending.clear();
                     break;
                 }
-                const AddrKey lkey{ai->second.root, ai->second.off};
+                const DseAddrKey lkey{ai->second.root, ai->second.off};
                 // Un load LEE los stores pendientes que solapa -> dejan de
                 // ser candidatos a dead.
-                note_read(ai->second.root, ai->second.off,
-                          access_bytes(ins.type));
+                st.note_read(ai->second.root, ai->second.off,
+                             dse_access_bytes(ins.type));
                 auto it = last_store_val.find(lkey);
                 if (it != last_store_val.end() &&
                     it->second.second == ins.type) {
@@ -9722,7 +9918,7 @@ static bool dse_impl(IrFunction &fn, const analysis::PointsTo *pt,
             // otra CALL cae al grupo de barrera de abajo.
             case IrOp::CALL:
             case IrOp::TAILCALL:
-                if (is_pure_call(ins)) break; // no barrera
+                if (dse_is_pure_call(ins, pure_callees)) break; // no barrera
                 pending.clear();
                 last_store_val.clear();
                 break;
@@ -9784,7 +9980,7 @@ static bool dse_impl(IrFunction &fn, const analysis::PointsTo *pt,
             case IrOp::RAW_ASM:
             case IrOp::INLINE_ASM:
             case IrOp::ASM_MICRO:
-                if (asm_dse_activo() && dse_asm_preciso(ins))
+                if (asm_dse_activo() && asm_site.apply(ins))
                     break; // tratado con precision: no es barrera
                 pending.clear();
                 last_store_val.clear();
@@ -12627,13 +12823,6 @@ static void reorder_blocks_rpo(IrFunction &fn) {
 
 // Recomputa preds/succs de TODA la funcion desde los terminadores (robusto
 // tras cirugia de CFG; evita bugs de mantenimiento manual).
-/* Las aristas las rehace la propia funcion (@c IrFunction::recompute_edges):
- * son informacion derivada del terminador y tenerlas escritas dos veces es
- * tener dos respuestas a la misma pregunta en cuanto una se quede atras. */
-static void recompute_preds_succs(IrFunction &fn) {
-    fn.recompute_edges();
-}
-
 // Inlinea el callee MULTI-bloque en caller.blocks[bi].instrs[ii] (un CALL).
 static void inline_one_multiblock(IrFunction &caller, size_t bi, size_t ii,
                                   const IrFunction &callee) {
@@ -12824,7 +13013,19 @@ static void inline_one_multiblock(IrFunction &caller, size_t bi, size_t ii,
         }
     }
 
-    recompute_preds_succs(caller);
+    /* Los SUCESORES de lo que se ha tocado, y nada mas: el bloque partido, las
+     * copias del llamado y el de fusion.  Aqui se rehacian las aristas de la
+     * funcion ENTERA tras cada llamada aplanada, y el inliner aplana muchas
+     * seguidas sobre el mismo llamante: recorrerlo entero en cada una era
+     * cuadratico en cuanto el llamante tenia muchas llamadas.
+     *
+     * Los PREDECESORES se quedan atrasados a proposito, y los rehace UNA vez
+     * quien llama a esta funcion, cuando termina con el llamante.  Aqui dentro
+     * solo se leen los sucesores del bloque que se parte. */
+    caller.recompute_succs_of(static_cast<IrBlockId>(bi));
+    for (IrBlockId c : copy_ids)
+        caller.recompute_succs_of(c);
+    caller.recompute_succs_of(mergeb);
 }
 
 /* `is_inlineable_mb` vivia AQUI y recorria el cuerpo entero de CADA funcion
@@ -12873,34 +13074,131 @@ static bool inline_multiblock_impl(IrModule &mod, size_t threshold) {
                 !tiene_variante_por_motor(mod.functions[i].name);
     }
 
+    /* Que llamados pueden DESBOCARSE: los que estan en un ciclo de llamadas.
+     * Inlinar uno de ellos vuelve a traer una llamada a si mismo, y sin tope
+     * se aplanaria sin fin.  El resto -- un grafo sin ciclos -- termina solo.
+     *
+     * Antes el tope era para TODO llamado, 128 por llamante y por vuelta, y eso
+     * era la mitad de un cuadratico: un llamante con N llamadas necesitaba N/128
+     * vueltas del punto fijo, y cada vuelta reoptimiza el modulo entero.  Un
+     * `main` que llama a dos mil funciones distintas no se puede desbocar, y
+     * sin embargo pagaba el tope como si pudiera. */
+    const size_t nfn = mod.functions.size();
+    /* El grafo de llamadas en PLANO: las llamadas de la funcion `i` son
+     * `call_to[call_off[i] .. call_off[i+1])`.  Una lista por funcion serian
+     * miles de reservas diminutas, una por funcion y por pasada. */
+    util::NamedVector<util::SccEdge, scratch::InlineCallOffsets> call_off(
+        nfn + 1, util::SccEdge(0));
+    util::NamedVector<util::SccNode, scratch::InlineCallTargets> call_to;
+    for (size_t i = 0; i < nfn; ++i) {
+        call_off[i] = util::SccEdge(call_to.size());
+        for (const IrBlock &b : mod.functions[i].blocks)
+            for (const IrInstr &in : b.instrs) {
+                if (in.op != IrOp::CALL) continue;
+                auto it = name_to_idx.find(in.func_name);
+                if (it != name_to_idx.end())
+                    call_to.push_back(util::SccNode(it->second));
+            }
+    }
+    call_off[nfn] = util::SccEdge(call_to.size());
+    util::NamedVector<util::SccComp, scratch::InlineCallComp> comp(
+        nfn, util::SCC_NO_COMP);
+    const size_t ncomp =
+        util::tarjan_scc(call_off.data(), call_to.data(), nfn, comp.data());
+    /* Cuantas funciones tiene cada componente: con mas de una, es un ciclo. */
+    util::NamedVector<uint32_t, scratch::InlineCompSize> comp_size(ncomp, 0);
+    for (util::SccComp c : comp)
+        ++comp_size[c];
+    util::NamedVector<InlineRecursion, scratch::InlineRecursive> recursion(
+        nfn, INLINE_NOT_RECURSIVE);
+    for (size_t i = 0; i < nfn; ++i) {
+        if (comp_size[comp[i]] > 1) recursion[i] = INLINE_RECURSIVE;
+        for (uint32_t e = call_off[i]; e < call_off[i + 1]; ++e)
+            if (call_to[e] == i) // se llama a si misma
+                recursion[i] = INLINE_RECURSIVE;
+    }
+
+    /* Tope por PAREJA llamante-llamado, y solo para los recursivos: cuantas
+     * veces se ha aplanado ese llamado DENTRO de este llamante.  El numero es
+     * el de antes; lo que cambia es sobre que se cuenta. */
+    constexpr uint32_t kRecursiveInlineCap = 128;
+    util::NamedVector<uint32_t, scratch::InlineTimes> times_inlined(nfn, 0);
+    /* Cuales volver a cero al cambiar de llamante, sin recorrer las nfn. */
+    util::NamedVector<util::SccNode, scratch::InlineTouched> touched;
+    util::NamedVector<InlineCallPos, scratch::InlinePositions> positions;
+
     bool any = false;
-    for (size_t fi = 0; fi < mod.functions.size(); ++fi) {
+    for (size_t fi = 0; fi < nfn; ++fi) {
         IrFunction &caller = mod.functions[fi];
         if (caller.is_native) continue;
         bool changed = false;
-        int cap = 128; // backstop anti-runaway
-        bool found = true;
-        while (found && cap-- > 0) {
-            found = false;
-            for (size_t bi = 0; bi < caller.blocks.size() && !found; ++bi)
-                for (size_t ii = 0; ii < caller.blocks[bi].instrs.size();
-                     ++ii) {
-                    const IrInstr &in = caller.blocks[bi].instrs[ii];
-                    if (in.op != IrOp::CALL) continue;
-                    auto it = name_to_idx.find(in.func_name);
-                    if (it == name_to_idx.end() || it->second == fi ||
-                        !ok[it->second])
-                        continue;
-                    const IrFunction &callee = mod.functions[it->second];
-                    if (callee.params.size() != in.operands.size()) continue;
-                    inline_one_multiblock(caller, bi, ii, callee);
-                    found = true;
-                    changed = true;
-                    any = true;
-                    break;
+        /* UN barrido por el llamante, lineal en lo que acaba midiendo.
+         *
+         * Antes se inlinaba una llamada y se volvia a escanear DESDE EL
+         * PRINCIPIO: con muchas llamadas eso es llamadas x tamano.  Ahora cada
+         * bloque se mira una vez, y los que el inlinado anyade -- las copias
+         * del llamado y el de fusion -- van al final de la lista, asi que el
+         * mismo barrido los visita: se conserva que lo que traiga el llamado
+         * tambien se inline.
+         *
+         * Y dentro del bloque, de la ULTIMA llamada a la primera.  Partir un
+         * bloque mueve su cola a uno nuevo; de delante hacia atras, cada
+         * llamada movia la cola restante entera -- N + (N-1) + ... --, y un
+         * `main` con sus llamadas en linea recta era cuadratico solo con eso.
+         * De detras hacia delante cada instruccion se mueve una vez, y las
+         * posiciones de las anteriores no cambian. */
+        for (size_t bi = 0; bi < caller.blocks.size(); ++bi) {
+            positions.clear();
+            const std::vector<IrInstr> &instrs = caller.blocks[bi].instrs;
+            for (size_t ii = 0; ii < instrs.size(); ++ii) {
+                const IrInstr &in = instrs[ii];
+                if (in.op != IrOp::CALL) continue;
+                auto it = name_to_idx.find(in.func_name);
+                if (it == name_to_idx.end() || it->second == fi ||
+                    !ok[it->second])
+                    continue;
+                if (mod.functions[it->second].params.size() !=
+                    in.operands.size())
+                    continue;
+                positions.push_back(InlineCallPos(ii));
+            }
+            for (size_t k = positions.size(); k-- > 0;) {
+                const size_t ii = positions[k];
+                const size_t ci =
+                    name_to_idx
+                        .find(caller.blocks[bi].instrs[ii].func_name)
+                        ->second;
+                if (recursion[ci] == INLINE_RECURSIVE) {
+                    if (times_inlined[ci] >= kRecursiveInlineCap) continue;
+                    if (times_inlined[ci]++ == 0)
+                        touched.push_back(util::SccNode(ci));
                 }
+                inline_one_multiblock(caller, bi, ii, mod.functions[ci]);
+                changed = true;
+                any = true;
+                /* Lo que el inlinado haya METIDO delante de las llamadas que
+                 * quedan: las reservas de pila del llamado se izan al principio
+                 * del bloque de entrada, y si este bloque es ese, las
+                 * posiciones pendientes se corren.  Se mide en vez de
+                 * suponerlo: tras partir, el bloque es lo de antes de la
+                 * llamada mas el salto a la copia. */
+                const size_t now = caller.blocks[bi].instrs.size();
+                const size_t shift = (now > ii + 1) ? now - (ii + 1) : 0;
+                if (shift != 0)
+                    for (size_t j = 0; j < k; ++j)
+                        positions[j] = InlineCallPos(positions[j] + shift);
+            }
         }
-        if (changed) reorder_blocks_rpo(caller);
+        for (util::SccNode ci : touched)
+            times_inlined[ci] = 0;
+        touched.clear();
+        if (changed) {
+            /* Las aristas, UNA vez y enteras: durante el barrido solo se
+             * mantuvieron los sucesores de lo tocado, y el reordenado de abajo
+             * necesita tambien los predecesores. */
+            caller.recompute_edges();
+            reorder_blocks_rpo(caller);
+        }
     }
     return any;
 }
@@ -14824,6 +15122,24 @@ enum class LocalPassSlot : uint8_t {
     LoadNarrow,
     ElideUnwrap,
     CarryIdiom,
+    /* Estos seis corrian sobre TODAS las funciones en CADA vuelta, cambiara o
+     * no la funcion, y eso hacia el optimizador CUADRATICO: las vueltas del
+     * punto fijo crecen con el modulo -- los hechos interprocedurales se
+     * difunden un salto por vuelta --, y cada vuelta pagaba el modulo entero.
+     * Medido: con 4.000 funciones el DSE se llamaba 144.816 veces, 36 por
+     * funcion, y con 1.000 eran 13,6 por funcion.
+     *
+     * Se pueden saltar por la misma razon que los de arriba: todo lo que leen
+     * es de SU funcion -- el puntos-a, los hechos y los bucles se guardan por
+     * nombre y version y se construyen solo de ella -- o es constante durante
+     * el bucle -- `pure_callees` y las declaraciones de nativas se calculan una
+     * vez antes de empezar --.  Sobre la misma version dirian lo mismo. */
+    Simplify,
+    NarrowCmp,
+    ValueFactsConsumers,
+    Reassoc,
+    Licm,
+    Dse,
     Count
 };
 
@@ -15395,11 +15711,11 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline,
          * que funciones la cumplen: quien miraba por que una llamada seguia
          * siendo una barrera no tenia donde verlo.  Ahora es la misma fila para
          * los dos. */
-        for (const auto &kv : ms.fns) {
+        for (const analysis::effects::FunctionSummary &s : ms.fns) {
             for (const auto &c : analysis::effects::derive_contracts(
-                     kv.second, analysis::effects::ContractProfile::Default))
+                     s, analysis::effects::ContractProfile::Default))
                 if (c.name == "mem_free" && c.holds) {
-                    pure_callees.insert(kv.first);
+                    pure_callees.insert(s.symbol);
                     break;
                 }
         }
@@ -15697,10 +16013,10 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline,
 
                 // O1: copy + simplify + SR + reassoc + dead-alloc + DCE
                 APLICA_LOCAL(CopyProp, ir_pass_copy_prop(fn));
-                APLICA(ir_pass_simplify(
-                    fn)); /* algebraic + cast fold + phi simp */
-                APLICA(
-                    ir_pass_narrow_cmp(fn)); /* cmp(ext(x),K) -> cmp.<W>(x,K) */
+                /* algebraic + cast fold + phi simp */
+                APLICA_LOCAL(Simplify, ir_pass_simplify(fn));
+                /* cmp(ext(x),K) -> cmp.<W>(x,K) */
+                APLICA_LOCAL(NarrowCmp, ir_pass_narrow_cmp(fn));
                 // Contraccion FMA (fmul+fadd -> fma) DESPUES de simplify, que
                 // ya quito a*0/a*1/+0.  Gated por @fp(fast) (fn.fp_contract).
                 // Decision unica en el IR -> interp/JIT/AOT consistentes (1
@@ -15711,15 +16027,16 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline,
                  * strength reduction (MUL/DIV/MOD por 2^k -> shift/and,
                  * incluido el caso signed cuando el dividendo se prueba
                  * no-negativo). */
-                APLICA(ir_pass_valuefacts_consumers(fn));
+                APLICA_LOCAL(ValueFactsConsumers,
+                             ir_pass_valuefacts_consumers(fn));
                 /* Quitar la NORMALIZACION que sobra.  Va con los rangos que el
                  * gestor ya tiene -- los comparten este pase, los efectos y el
                  * ASA --, asi que no pide un analisis nuevo.  Y va ANTES del
                  * desenrollado a proposito: lo que estorba al desenrollador es
                  * que la normalizacion siga ahi cuando el decide. */
                 // APLICA(ir_pass_elide_narrow_norm(fn, ranges_of(fn)));
-                APLICA(ir_pass_reassoc(
-                    fn)); /* (x op c1) op c2 -> x op (c1 op c2) */
+                /* (x op c1) op c2 -> x op (c1 op c2) */
+                APLICA_LOCAL(Reassoc, ir_pass_reassoc(fn));
                 // LICM RECIBE la tabla points-to del AnalysisManager (no la
                 // construye).  Solo se pide si el LICM alias-aware esta activo
                 // (coste 0 en el default: el manager no computa nada).
@@ -15729,9 +16046,13 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline,
                         pt_invalidate(fn);
                         dirty = false;
                     }
-                    APLICA(ir_pass_licm(fn, &pt_of(fn), &pure_callees));
+                    APLICA_LOCAL(Licm,
+                                 ir_pass_licm(fn, &pt_of(fn), &pure_callees));
                 } else {
-                    APLICA(ir_pass_licm(fn)); /* LICM con dominators reales */
+                    /* LICM con dominators reales.  La MISMA ranura que la rama
+                     * de arriba: `g_licm_alias` no cambia en todo el proceso,
+                     * asi que en una ejecucion solo corre una de las dos. */
+                    APLICA_LOCAL(Licm, ir_pass_licm(fn));
                 }
                 APLICA_LOCAL(DeadAllocElim, ir_pass_dead_alloc_elim(fn));
                 /* Y detras, los huecos de PILA que nadie lee.  Va aqui y no
@@ -15803,15 +16124,19 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline,
                              * efectos, y construirlos dentro seria el mismo
                              * recorrido por tercera vez -- `pt_of` ya sale de
                              * ellos --. */
-                            APLICA(ir_pass_dse(fn, &pt_of(fn), &pure_callees,
-                                               &h__, &facts_of(fn),
-                                               loops_oracle));
+                            APLICA_LOCAL(Dse, ir_pass_dse(fn, &pt_of(fn),
+                                                          &pure_callees, &h__,
+                                                          &facts_of(fn),
+                                                          loops_oracle));
                         }
                     } else {
                         {
                             const HechosDeAsmParaDse h__ = hechos_asm_de(fn);
-                            APLICA(ir_pass_dse(fn, nullptr, &pure_callees, &h__,
-                                               &facts_of(fn)));
+                            /* La misma ranura que la rama de arriba:
+                             * `g_dse_unified` no cambia en todo el proceso. */
+                            APLICA_LOCAL(Dse, ir_pass_dse(fn, nullptr,
+                                                          &pure_callees, &h__,
+                                                          &facts_of(fn)));
                         }
                     }
                     // Global const CSE solamente (safer than full CSE).

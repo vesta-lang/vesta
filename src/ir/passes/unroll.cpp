@@ -109,11 +109,12 @@ void rebuild_cfg(IrFunction &fn) {
 // Ensambla los HECHOS de un bucle innermost en @p out.  Toda la logica de
 // analisis vive en analysis/facts; aqui solo se piden los hechos y se agregan.
 bool analyze_loop(const IrFunction &fn, const analysis::LoopFacts &lf,
+                  const analysis::LoopStructureIndex &loop_index,
                   const analysis::DefBlockVec &def_block, uint32_t L,
                   LoopInfo &out) {
     // 1) Estructura del CFG: reducible, 1 latch, 1 salida, header limpio,
     // LCSSA.
-    out.st = analysis::detect_loop_structure(fn, lf, L);
+    out.st = analysis::detect_loop_structure(fn, lf, L, loop_index);
     if (!out.st.valid) return false;
     /* Y con el cuerpo PLANO, que es lo que aqui se clona.
      *
@@ -379,7 +380,10 @@ static bool unroll_impl(IrFunction &fn, int factor,
             has_child[p] = 1;
     }
 
-    // Recolectar los elegibles (ids estables; innermost disjuntos).
+    // Recolectar los elegibles (ids estables; innermost disjuntos).  Lo que la
+    // forma de los bucles necesita de la funcion, una vez para todos.
+    const analysis::LoopStructureIndex loop_index =
+        analysis::build_loop_structure_index(fn, lf);
     std::vector<LoopInfo> eligible;
     for (uint32_t L = 0; L < lf.loop_count; ++L) {
         if (has_child[L]) continue; // no innermost
@@ -396,7 +400,7 @@ static bool unroll_impl(IrFunction &fn, int factor,
         if (h != IR_NO_BLOCK && h < fn.blocks.size() && fn.blocks[h].no_unroll)
             continue;
         LoopInfo li;
-        if (analyze_loop(fn, lf, def_block, L, li))
+        if (analyze_loop(fn, lf, loop_index, def_block, L, li))
             eligible.push_back(std::move(li));
     }
     if (eligible.empty()) return false;
@@ -435,8 +439,19 @@ static bool unroll_impl(IrFunction &fn, int factor,
         }
     }
 
+    /* La presion de cada elegible, de TODOS a la vez: por bucle era recorrer
+     * la funcion entera cada vez.  Sobre la funcion ANTES de tocarla, que es
+     * la que ve cada decision: desenrollar uno solo repite usos que ya
+     * estaban, asi que no cambia que valores de otro se usan fuera. */
+    std::vector<const std::vector<IrBlockId> *> bodies;
+    bodies.reserve(eligible.size());
+    for (const LoopInfo &li : eligible)
+        bodies.push_back(&li.st.body);
+    const auto live_across = analysis::compute_live_across(fn, bodies);
+
     bool changed = false;
-    for (const LoopInfo &li : eligible) {
+    for (size_t e = 0; e < eligible.size(); ++e) {
+        const LoopInfo &li = eligible[e];
         int U;
         if (factor > 0) { // override manual (testing).
             U = factor;
@@ -444,7 +459,8 @@ static bool unroll_impl(IrFunction &fn, int factor,
             // Metricas NEUTRALES del cuerpo -> POLITICA (la inteligencia).  El
             // transformador no decide nada: solo clona U veces.
             analysis::LoopMetrics m =
-                analysis::compute_loop_metrics(fn, li.st.body);
+                analysis::compute_loop_metrics(fn, li.st.body,
+                                               live_across[e]);
             UnrollDecision d = choose_unroll_factor(m, li.trip.trip, target);
             if (want_stats) g_stats.account(d);
             /* La decision, DICHA.  Existia y solo salia como un total a

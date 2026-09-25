@@ -235,9 +235,9 @@ void say_non_escaping_params(Production &p) {
     const auto &escape_by_fn = p.base.escape(p.mod);
     for (const ir::IrFunction &fn : p.mod.functions) {
         if (!p.is_interesting(fn)) continue;
-        auto it = escape_by_fn.find(fn.name);
-        if (it == escape_by_fn.end()) continue;
-        const auto &escaping = it->second.escaping_params;
+        const EscapeInfo *esc = escape_by_fn.find(p.mod, fn);
+        if (esc == nullptr) continue; // sin cuerpo: no se afirma nada
+        const auto &escaping = esc->escaping_params;
         for (size_t i = 0; i < fn.params.size(); ++i) {
             const ir::IrValueId v = fn.params[i];
             if (v >= fn.values.size()) continue;
@@ -278,9 +278,9 @@ void say_non_escaping_params(Production &p) {
 
 void produce_param_contracts(Production &p) {
     say_non_escaping_params(p);
-    /* Quien llama a quien SALE de la pasada comun, no de una propia: recorrer
-     * el modulo aqui otra vez es exactamente lo que se vino a quitar. */
-    const auto &calls = p.walk.calls;
+    /* Quien llama a quien SALE de la pasada comun (`p.walk`), no de una
+     * propia: recorrer el modulo aqui otra vez es exactamente lo que se vino a
+     * quitar. */
     for (const ir::IrFunction &fn : p.mod.functions) {
         if (!p.is_interesting(fn)) continue;
         ++p.summary.looked_at;
@@ -423,8 +423,7 @@ void produce_param_contracts(Production &p) {
         s.function = p.store.intern(fn.name);
         /* Sus llamadas, del indice que se armo de una pasada.  Si no la llama
          * nadie, no hay nada que mirar y no se afirma nada. */
-        const auto it_sites = calls.find(fn.name);
-        if (it_sites == calls.end()) continue;
+        if (p.walk.calls_to(p.mod.pos_of(fn)).empty()) continue;
         /* UNA vez, fuera de los dos bucles.  Pedirlo por par seria una consulta
          * a la base -- con su comprobacion de cache y su recuento -- por cada
          * uno de los pares, y los pares son el cuadrado de los parametros. */
@@ -442,7 +441,7 @@ void produce_param_contracts(Production &p) {
                  * exclusividad prometida, asi que vive en la base y lo piden
                  * los dos: tenerlo aqui dentro serian dos productores del
                  * mismo hecho. */
-                const effects::ParamPairInfo pi = aliasing.of(fn.name, a, b);
+                const effects::ParamPairInfo pi = aliasing.of(fn, a, b);
                 /* Una LINEA y no un ancla al intermedio: la llamada que decide
                  * esta en OTRA funcion -- la que llama --, y un ancla se
                  * resuelve contra la funcion del sujeto, que aqui es la

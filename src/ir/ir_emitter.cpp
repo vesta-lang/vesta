@@ -35,6 +35,7 @@
  *   almacenamiento despues de calcularlo. Se usan r14 y r13 como scratches.
  */
 
+#include "util/crono_tramo.h" // cada paso del emisor, con VESTA_TIMES
 #include "util/env_flags.h"
 #include "util/os/thread_slot.h" // un contador por hilo, sin `thread_local`
 #include "ir/ir_emitter.h"
@@ -45,8 +46,13 @@
 #include "analysis/asa/aggregate_facts.h"
 #include <chrono>
 #include <iostream>
+#include <optional>
 #include "ir/ir_optimizer.h"
 #include "ctpe/fold.h"
+#include "codegen/rbank/function_snapshot.h" // hechos de la funcion, una vez
+#include "ir/linear_pos.h" // posiciones lineales con tipo propio
+#include "util/named_alloc.h"
+#include <array>
 #include "ir/liveness.h"
 #include "codegen/vm_allocate.h"
 #include "ir/regalloc.h"
@@ -101,6 +107,93 @@ static inline void emit_spill_access(VelSink &out, const Reg &reg,
 // =========================================================================
 //  Contexto interno de emision por funcion
 // =========================================================================
+
+namespace scratch {
+struct EmitUseCount;  ///< Valor -> cuantas veces se usa en la funcion.
+struct EmitSweepLive; ///< Intervalos en registro activos, por registro.
+} // namespace scratch
+
+/// Registros de proposito general que puede asignar el emisor de la VM.
+static constexpr int kEmitGpRegs = 16;
+
+/// Puesto de un intervalo en la lista de intervalos de la funcion.
+enum SweepOrder : uint32_t {};
+
+/// Cuantas veces se usa un valor en la funcion.
+enum ValueUseCount : uint32_t {};
+
+/// Un intervalo de vida en registro que el barrido tiene activo.
+struct SweepEntry {
+    IrValueId id;
+    LinearPos def;    ///< posicion en que nace.
+    LinearPos end;    ///< posicion en que deja de estar vivo.
+    SweepOrder order; ///< su puesto en la lista: desempata igual que antes.
+};
+
+/**
+ * @brief Que valores estan en cada registro en una posicion, barriendo.
+ *
+ * Antes cada pregunta -- "que registros hay que salvar en esta llamada",
+ * "este registro guarda un objeto del recolector" -- recorria TODOS los
+ * intervalos de la funcion: llamadas por valores.  Con el `main` que deja el
+ * inliner eran millones de comparaciones por nada.
+ *
+ * Aqui los intervalos -- ordenados por nacimiento -- entran una vez en la
+ * lista del registro que ocupan, y salen una vez, cuando la posicion
+ * consultada los ha dejado atras.  La emision va en orden de bloque y de
+ * instruccion, asi que las posiciones que se preguntan no bajan; si alguna vez
+ * bajaran, el barrido vuelve a empezar: da lo mismo, solo cuesta mas.
+ */
+struct LiveRegSweep {
+    const LivenessResult *live = nullptr;
+    const codegen::RegAlloc *alloc = nullptr;
+    size_t next = 0;   ///< siguiente intervalo por entrar.
+    LinearPos pos;     ///< ultima posicion consultada.
+    std::array<util::NamedVector<SweepEntry, scratch::EmitSweepLive>,
+               kEmitGpRegs>
+        active;
+
+    /// Vuelve al principio de la funcion.
+    void reset() {
+        next = 0;
+        pos = LinearPos();
+        for (auto &a : active)
+            a.clear();
+    }
+
+    /// Deja activos los intervalos que han nacido en @p p o antes.
+    void advance(LinearPos p) {
+        if (p < pos) reset();
+        pos = p;
+        const std::vector<LiveInterval> &ivs = live->intervals;
+        while (next < ivs.size() && LinearPos(ivs[next].def) <= p) {
+            const LiveInterval &iv = ivs[next];
+            if (alloc->in_reg(iv.id)) {
+                const int r = alloc->reg_of(iv.id);
+                if (r >= 0 && r < kEmitGpRegs)
+                    active[r].push_back(SweepEntry{
+                        iv.id, LinearPos(iv.def), LinearPos(iv.end),
+                        static_cast<SweepOrder>(next)});
+            }
+            ++next;
+        }
+    }
+
+    /// Los intervalos vivos en el registro @p r en la posicion del ultimo
+    /// @ref advance: nacidos en ella o antes, y que siguen vivos despues.
+    const util::NamedVector<SweepEntry, scratch::EmitSweepLive> &at(int r) {
+        auto &a = active[r];
+        for (size_t i = 0; i < a.size();) {
+            if (a[i].end <= pos) { // ya muerto: fuera, para siempre
+                a[i] = a.back();
+                a.pop_back();
+            } else {
+                ++i;
+            }
+        }
+        return a;
+    }
+};
 
 struct EmitCtx {
     const IrFunction &fn;           // funcion SSA a emitir
@@ -206,13 +299,41 @@ struct EmitCtx {
     // nombre base para etiquetas de esta funcion
     std::string fn_lbl;
 
+    /// Cuantas veces se usa cada valor en la funcion: operandos, puntero de
+    /// funcion y argumentos de phi.  Lo pregunta la fusion comparacion+salto
+    /// por cada comparacion, y contarlo alli era recorrer la funcion entera
+    /// por comparacion.
+    util::NamedVector<ValueUseCount, scratch::EmitUseCount> use_count;
+
+    /// Que hay en cada registro en cada llamada.  `mutable`: preguntar no
+    /// cambia lo que se emite, solo avanza el barrido.
+    mutable LiveRegSweep sweep;
+
     EmitCtx(const IrFunction &fn_, const codegen::RegAlloc &alloc_,
             const LivenessResult &liveness_, VelSink &out_, bool comments_,
             bool emit_debug_, bool has_frame_, bool emit_stackmaps_ = false)
         : fn(fn_), alloc(alloc_), liveness(liveness_), out(out_),
           comments(comments_), emit_debug(emit_debug_),
           emit_stackmaps(emit_stackmaps_), label_seq(0), has_frame(has_frame_),
-          fn_lbl(sanitize(fn_.name)) {}
+          fn_lbl(sanitize(fn_.name)) {
+        sweep.live = &liveness_;
+        sweep.alloc = &alloc_;
+        use_count.assign(fn_.values.size(), ValueUseCount(0));
+        for (const IrBlock &b : fn_.blocks)
+            for (const IrInstr &in : b.instrs) {
+                for (IrValueId op : in.operands)
+                    count_use(op);
+                count_use(in.func_ptr);
+                for (const IrPhiArg &pa : in.phi_args)
+                    count_use(pa.value);
+            }
+    }
+
+    /// Anota un uso de @p v; lo que no es un valor de la funcion no cuenta.
+    void count_use(IrValueId v) {
+        if (v < use_count.size())
+            use_count[v] = ValueUseCount(use_count[v] + 1);
+    }
 
     // Convierte un nombre arbitrario a un identificador .vel valido
     static std::string sanitize(const std::string &s) {
@@ -701,29 +822,24 @@ live_regs_through_call(const EmitCtx &ctx, uint32_t call_pos, IrValueId dst) {
     }
     std::vector<int> regs;
     regs.reserve(8);
-    for (const auto &iv : ctx.liveness.intervals) {
-        if (iv.id == dst) continue; // dst nace en el call
-        // Vivo a traves del call si fue definido ANTES o EN call_pos y
-        // se usa DESPUES.  Antes era `def < call_pos`, lo que excluia
-        // los parametros (que tienen def=0) cuando el primer CALL
-        // estaba en posicion 0 -> bug grave en ctors que llaman a otra
-        // funcion como primera operacion (e.g. `this.inner = new Inner(x)`):
-        // los params (this, x) no se preservaban y el codigo post-call
-        // los referenciaba con valores ya clobbeados por el parallel-move.
-        // Excluimos dst arriba, asi que valores definidos exactamente
-        // en call_pos (si existieran via PHI o similar) no entran al
-        // false positive: si vive despues, ya estaba en algun reg antes.
-        if (iv.def <= call_pos && call_pos < iv.end) {
-            if (!ctx.alloc.in_reg(iv.id))
-                continue; // valor spilled, no en registro
-            const int r = ctx.alloc.reg_of(iv.id);
-            if (r == dst_reg) continue; // comparte reg con dst -> pre-call dead
-            if (r >= 0 && r <= 12) regs.push_back(r);
-        }
+    // Vivo a traves del call si fue definido ANTES o EN call_pos y se usa
+    // DESPUES.  Antes era `def < call_pos`, lo que excluia los parametros (que
+    // tienen def=0) cuando el primer CALL estaba en posicion 0 -> bug grave en
+    // ctors que llaman a otra funcion como primera operacion (e.g.
+    // `this.inner = new Inner(x)`): los params (this, x) no se preservaban y
+    // el codigo post-call los referenciaba con valores ya clobbeados por el
+    // parallel-move.  Lo que esta en registro lo da el barrido, que ya deja
+    // fuera los valores derramados.
+    ctx.sweep.advance(LinearPos(call_pos));
+    for (int r = 0; r <= 12; ++r) {
+        if (r == dst_reg) continue; // comparte reg con dst -> pre-call dead
+        for (const SweepEntry &e : ctx.sweep.at(r))
+            if (e.id != dst) { // dst nace en el call
+                regs.push_back(r);
+                break;
+            }
     }
-    std::sort(regs.begin(), regs.end());
-    regs.erase(std::unique(regs.begin(), regs.end()), regs.end());
-    return regs;
+    return regs; // ascendentes y sin repetir por construccion
 }
 
 // true si el reg @p r contiene un IrValueId con is_gc_object EN call_pos.
@@ -744,22 +860,19 @@ live_regs_through_call(const EmitCtx &ctx, uint32_t call_pos, IrValueId dst) {
 // por la asignacion posterior).  Si NO hay ningun candidato gc, retorna
 // false (el reg contiene un value no-gc en este punto del programa).
 static bool reg_holds_gc_object(const EmitCtx &ctx, uint32_t call_pos, int r) {
-    bool found_any = false;
-    uint32_t best_def = 0;
-    bool best_is_gc = false;
-    for (const auto &iv : ctx.liveness.intervals) {
-        if (!(iv.def <= call_pos && call_pos < iv.end)) continue;
-        if (!ctx.alloc.in_reg(iv.id) || ctx.alloc.reg_of(iv.id) != r) continue;
-        if (static_cast<size_t>(iv.id) >= ctx.fn.values.size()) continue;
-        // Elegir el value mas recientemente definido (mayor iv.def) entre
-        // los candidatos asignados al mismo reg con range que cubre call_pos.
-        if (!found_any || iv.def > best_def) {
-            found_any = true;
-            best_def = iv.def;
-            best_is_gc = ctx.fn.values[iv.id].is_gc_object;
-        }
+    if (r < 0 || r >= kEmitGpRegs) return false;
+    const SweepEntry *best = nullptr;
+    ctx.sweep.advance(LinearPos(call_pos));
+    for (const SweepEntry &e : ctx.sweep.at(r)) {
+        if (static_cast<size_t>(e.id) >= ctx.fn.values.size()) continue;
+        // Elegir el value mas recientemente definido (mayor def) entre los
+        // candidatos asignados al mismo reg con range que cubre call_pos; a
+        // igualdad, el primero en la lista de intervalos, como antes.
+        if (best == nullptr || e.def > best->def ||
+            (e.def == best->def && e.order < best->order))
+            best = &e;
     }
-    return found_any && best_is_gc;
+    return best != nullptr && ctx.fn.values[best->id].is_gc_object;
 }
 
 // ------------------------------------------------------------------------
@@ -2247,7 +2360,7 @@ static void emit_phi_copies(EmitCtx &ctx, IrBlockId pred_id,
 
 // Devuelve true si ins es una CMP cuyo unico uso es la siguiente instruccion
 // BR_COND (para fusion cmp+branch).
-static bool can_fuse_cmp_brcond(const IrFunction &fn, const IrBlock &bb,
+static bool can_fuse_cmp_brcond(const EmitCtx &ctx, const IrBlock &bb,
                                 size_t cmp_idx, const IrInstr &br_cond_ins) {
     const IrInstr &cmp = bb.instrs[cmp_idx];
     if (cmp.dst == IR_NO_VALUE) return false;
@@ -2260,18 +2373,10 @@ static bool can_fuse_cmp_brcond(const IrFunction &fn, const IrBlock &bb,
     // `bool b = a < c; if (b) {...}; if (b) {...}` -> el mismo valor alimenta
     // un segundo BR_COND en otro bloque), el segundo uso leeria un registro sin
     // materializar -> bool constante/erroneo.  Contamos todos los usos del
-    // valor en la funcion; debe haber exactamente UNO (este BR_COND).
-    size_t uses = 0;
-    for (const auto &b : fn.blocks) {
-        for (const auto &in : b.instrs) {
-            for (IrValueId op : in.operands)
-                if (op == cmp.dst) uses = uses + 1;
-            if (in.func_ptr == cmp.dst) uses = uses + 1;
-            for (const auto &pa : in.phi_args)
-                if (pa.value == cmp.dst) uses = uses + 1;
-        }
-    }
-    return uses == 1;
+    // valor en la funcion; debe haber exactamente UNO (este BR_COND).  La
+    // cuenta se hizo una vez para toda la funcion al crear el contexto.
+    return cmp.dst < ctx.use_count.size() &&
+           ctx.use_count[cmp.dst] == ValueUseCount(1);
 }
 
 /* Las operaciones vectoriales trabajan sobre PUNTEROS, y la instruccion de
@@ -2844,7 +2949,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         if (idx + 1 < bb.instrs.size()) {
             const IrInstr &next = bb.instrs[idx + 1];
             if (next.op == IrOp::BR_COND &&
-                can_fuse_cmp_brcond(ctx.fn, bb, idx, next)) {
+                can_fuse_cmp_brcond(ctx, bb, idx, next)) {
                 // Fusion: emitir cmp + salto condicional ahora.
                 //
                 // BUG critico arreglado (2026-05-04): las copias PHI
@@ -7048,6 +7153,18 @@ static std::string emit_function(const IrFunction &fn, const EmitOptions &opts,
                                  VelSink &out, bool is_entry_point = false,
                                  const IrModule *mod = nullptr,
                                  std::vector<uint8_t> *value_regs = nullptr) {
+    /* Cada paso del emisor, cronometrado con `VESTA_TIMES`.  El emisor no tenia
+     * ni un tramo, y en una funcion de 205.000 instrucciones se llevaba 79 de
+     * 95 segundos sin que se pudiera decir en que: una parte del compilador que
+     * no se puede mirar no se puede arreglar.  Apagado no cuesta nada.
+     *
+     * Con `std::optional` donde el paso deja un resultado que tiene que vivir
+     * despues: el cronometro no se puede mover, y asi el tramo se cierra donde
+     * acaba el paso sin cambiar el tipo de lo que devuelve. */
+    static const bool times_on = util::flag_on(util::FlagId::Times);
+    util::CronoTramo span_fn("emit:function", times_on);
+    std::optional<util::CronoTramo> span;
+
     // Liveness + asignacion de registros.
     //
     // Coalescencia de congruencias de PHI: se computa la MISMA decision de
@@ -7057,9 +7174,18 @@ static std::string emit_function(const IrFunction &fn, const EmitOptions &opts,
     // no-op, el bytecode emitido tiene menos MOVs.  Se fuerza que cada param
     // sea el root de su clase para que la pre-asignacion de params encaje con
     // los valores canonicos.  Escape: VESTA_NO_IR_COALESCE=1 lo desactiva.
-    LivenessResult liveness = compute_liveness(fn);
+    //
+    // Los dos consumidores -- los intervalos y el coalescing -- piden los
+    // vivos por bloque al MISMO snapshot, asi que se calculan una vez; antes
+    // cada uno tenia su propio punto fijo y los dos eran cuadraticos.
+    codegen::rbank::FunctionSnapshot snap;
+    snap.fn = &fn;
+    span.emplace("emit:liveness", times_on);
+    const LivenessResult &liveness = snap.liveness();
+    span.reset();
     std::vector<IrValueId> coal_remap;
     {
+        util::CronoTramo span_coal("emit:phi_coalesce", times_on);
         static const bool coal_off = util::flag_on(util::FlagId::NoIrCoalesce);
         if (!coal_off && !fn.is_native) {
             /* El objetivo aqui es la VM, que no es ninguna ISA de la base de
@@ -7074,8 +7200,8 @@ static std::string emit_function(const IrFunction &fn, const EmitOptions &opts,
              * medida en que siempre pueda emitirlas, la restriccion sobra y la
              * respuesta seria `Preserving` -- pero eso CAMBIA el bytecode que
              * se emite, asi que se mide y se decide aparte, no de camino. */
-            coal_remap =
-                jit::ssa_phi_coalesce_remap(fn, jit::DstKind::Destructive);
+            coal_remap = jit::ssa_phi_coalesce_remap(
+                fn, jit::DstKind::Destructive, snap.block_liveness());
             if (!coal_remap.empty()) {
                 // Forzar que cada parametro sea el root de su propia clase:
                 // el allocator pre-asigna params por su IrValueId, asi que un
@@ -7101,8 +7227,10 @@ static std::string emit_function(const IrFunction &fn, const EmitOptions &opts,
      * La migracion se valido con una puerta que permitia correr los dos con el
      * MISMO binario: 590 programas del corpus, mismo resultado en todos.  La
      * puerta desaparece con el asignador que comparaba. */
+    span.emplace("emit:regalloc", times_on);
     codegen::RegAlloc alloc = codegen::vm_allocate(
         fn, liveness, coal_remap.empty() ? nullptr : &coal_remap);
+    span.reset();
 
     /* Donde acabo cada valor.  Es lo unico que el asignador sabe y nadie mas
      * puede reconstruir; se publica para poder decir, al explicar un fallo,
@@ -7152,6 +7280,7 @@ static std::string emit_function(const IrFunction &fn, const EmitOptions &opts,
     // un enter/leave (2 instrs) en funciones que antes eran hoja pero alocan
     // o retienen GC -- despreciable y solo en el camino GC.
     bool force_frame_gc = false;
+    span.emplace("emit:gc_frame_scan", times_on);
     if (opts.emit_stackmaps && alloc.num_spill_slots == 0 && !has_alloca) {
         // Posiciones lineales por bloque (para safepoint_gc_roots).
         for (const IrBlock &bb : fn.blocks) {
@@ -7192,11 +7321,15 @@ static std::string emit_function(const IrFunction &fn, const EmitOptions &opts,
         }
     }
 
+    span.reset();
+
     // Fase 3: asignar el banco ancho (ZMM) a los escalares float residentes.
     // Se computa ANTES de has_frame: si la funcion usa registros callee-saved
     // del banco, necesita frame para guardarlos en el prologo.
+    span.emplace("emit:zmm_alloc", times_on);
     std::unordered_map<IrValueId, int> zmm_map =
         compute_zmm_alloc(fn, liveness);
+    span.reset();
     std::vector<int> zmm_saved_regs;
     for (const auto &kv : zmm_map)
         zmm_saved_regs.push_back(kv.second);
@@ -7251,6 +7384,9 @@ static std::string emit_function(const IrFunction &fn, const EmitOptions &opts,
             out.directive(emmit::Directive::EXPORT, "__vx_free_entry");
         out.label("__vx_free_entry");
     }
+
+    /* El cuerpo: prologo, cada bloque y el epilogo. */
+    span.emplace("emit:body", times_on);
 
     // Etiqueta de funcion (exportada si corresponde)
     if (opts.export_all) {
@@ -7497,6 +7633,7 @@ static std::string emit_function(const IrFunction &fn, const EmitOptions &opts,
     // las demas funciones usan ret para retornar al llamador via callvm.
     out.emit(is_entry_point ? emmit::Mnemonic::HLT : emmit::Mnemonic::RET);
     out.blank();
+    span.reset();
 
     if (!(alloc.num_spill_slots == 0) && opts.emit_comments) {
         out << "    // INFO: " << alloc.num_spill_slots

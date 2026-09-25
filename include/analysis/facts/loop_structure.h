@@ -21,6 +21,7 @@
 
 #include "analysis/facts/loop_facts.h"
 #include "ir/ssa_ir.h"
+#include "util/named_alloc.h"
 
 #include <cstdint>
 #include <unordered_set>
@@ -137,16 +138,81 @@ struct LoopStructure {
     bool single_exit() const { return valid; }
 };
 
+namespace scratch {
+struct LoopMemberOffsets; ///< Bucle -> donde empiezan sus bloques.
+struct LoopMembers;       ///< Los bloques de cada bucle, anidados incluidos.
+struct LoopBodyOffsets;   ///< Bucle -> donde empieza su cuerpo.
+struct LoopBody;          ///< Los bloques del NIVEL de cada bucle.
+struct LoopPredOffsets;   ///< Bloque -> donde empiezan sus predecesores.
+struct LoopPreds;         ///< Los predecesores, sacados de los terminadores.
+struct LoopInnerCount;    ///< Bucle -> cuantos bucles tiene justo dentro.
+struct LoopEscapes;       ///< Bucle -> algun valor de su cuerpo se usa fuera.
+struct LoopDefBlock;      ///< Valor -> bloque que lo define.
+} // namespace scratch
+
+/// Posicion en una de las listas aplanadas del indice.
+enum LoopListSlot : uint32_t {};
+/// Cuantos bucles tiene uno justo dentro.
+enum LoopChildCount : uint32_t {};
+
+/// Si algun valor definido en el cuerpo de un bucle se usa fuera de el.
+enum LoopEscape : uint8_t {
+    LOOP_VALUES_STAY = 0,  ///< Todo lo del cuerpo se queda dentro.
+    LOOP_VALUE_ESCAPES = 1, ///< Algo del cuerpo se usa fuera.
+};
+
+/**
+ * @brief Lo que el reconocedor necesita de la FUNCION, calculado una vez para
+ *        todos sus bucles.
+ *
+ * Cada comprobacion recorria antes la funcion entera por bucle -- la
+ * pertenencia de cada bloque, el preheader, que ningun valor escape, cuantos
+ * bucles hay dentro --, y quien preguntaba lo hacia por cada bucle: bucles por
+ * tamano de la funcion.  Con el codigo que deja el inliner eso pasaba a ser el
+ * primer coste del compilador.  Aqui cada cosa se calcula en UN recorrido, y el
+ * reconocedor de un bucle solo mira lo suyo.
+ *
+ * Describe la funcion tal como esta al construirlo: quien la cambie tiene que
+ * construir otro.
+ */
+struct LoopStructureIndex {
+    /// Los bloques de cada bucle, anidados incluidos: [off[L], off[L+1]).
+    util::NamedVector<LoopListSlot, scratch::LoopMemberOffsets> member_off;
+    util::NamedVector<ir::IrBlockId, scratch::LoopMembers> members;
+    /// Los de su NIVEL, sin la cabecera, en orden de bloque.
+    util::NamedVector<LoopListSlot, scratch::LoopBodyOffsets> body_off;
+    util::NamedVector<ir::IrBlockId, scratch::LoopBody> body;
+    /// Predecesores de cada bloque segun los terminadores, sin repetir.  No
+    /// los de `IrBlock::preds`, que un pase previo pudo dejar obsoletos.
+    util::NamedVector<LoopListSlot, scratch::LoopPredOffsets> pred_off;
+    util::NamedVector<ir::IrBlockId, scratch::LoopPreds> preds;
+    /// Cuantos bucles tiene cada uno justo dentro.
+    util::NamedVector<LoopChildCount, scratch::LoopInnerCount> inner_count;
+    /// Si algun valor de su cuerpo se usa fuera.
+    util::NamedVector<LoopEscape, scratch::LoopEscapes> escapes;
+};
+
+/**
+ * @brief Construye el indice de @p fn, para todos sus bucles.
+ * @param fn funcion SSA.
+ * @param lf hechos de bucles de @p fn.
+ * @return El indice.
+ */
+LoopStructureIndex build_loop_structure_index(const ir::IrFunction &fn,
+                                              const analysis::LoopFacts &lf);
+
 /**
  * @brief Analiza la forma estructural del bucle @p loop_id (innermost).
  * @param fn      funcion SSA.
  * @param lf      hechos de bucles ya calculados.
  * @param loop_id id del bucle (innermost) en @p lf.
+ * @param index   lo de la funcion, de @ref build_loop_structure_index.
  * @return LoopStructure con @c valid=true si es un bucle contado simple.
  */
 LoopStructure detect_loop_structure(const ir::IrFunction &fn,
                                     const analysis::LoopFacts &lf,
-                                    uint32_t loop_id);
+                                    uint32_t loop_id,
+                                    const LoopStructureIndex &index);
 
 } // namespace analysis
 

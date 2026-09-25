@@ -154,6 +154,9 @@ BulkMemoryReport analyze_bulk_memory(const ir::IrFunction &fn) {
      * ya hizo `build_ir_facts` tres lineas mas arriba.  Se construia aqui a
      * mano por delante -- el mismo doble bucle, el mismo resultado. */
     const DefBlockVec &def_block = hechos.def_block;
+    /* La forma de los bucles necesita lo mismo de la funcion para todos: se
+     * calcula una vez. */
+    const LoopStructureIndex loop_index = build_loop_structure_index(fn, lf);
 
     for (uint32_t L = 0; L < lf.loop_count; ++L) {
         BulkMemoryFact f;
@@ -174,7 +177,7 @@ BulkMemoryReport analyze_bulk_memory(const ir::IrFunction &fn) {
             rendirse("bulk.has_inner_loop");
             continue;
         }
-        f.st = detect_loop_structure(fn, lf, L);
+        f.st = detect_loop_structure(fn, lf, L, loop_index);
         if (!f.st.valid) {
             /* El motivo lo da el reconocedor de forma, que tiene veinticuatro
              * codigos propios.  Repetirlo aqui con uno generico seria tirar lo

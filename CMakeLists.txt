@@ -1716,6 +1716,20 @@ else ()
     target_link_libraries(test_ir_type_info PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
 endif ()
 
+# Vivos por bloque sin punto fijo.  El oraculo es el punto fijo que sustituye,
+# copiado tal cual, comparado sobre miles de funciones al azar.
+add_executable(test_block_liveness tests/ir/test_block_liveness.cpp)
+target_include_directories(test_block_liveness PRIVATE ${VM_INCLUDES})
+target_link_libraries(test_block_liveness PRIVATE vx_lib vmcore sqlite3 capstone keystone aot_emit)
+if(VESTA_BUILD_PREPROCESSOR)
+    target_link_libraries(test_block_liveness PRIVATE vpp_lib)
+endif()
+if (WIN32)
+    target_link_libraries(test_block_liveness PRIVATE vesta_openssl ws2_32 synchronization)
+else ()
+    target_link_libraries(test_block_liveness PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
+endif ()
+
 add_executable(test_ir_serialize tests/ir/test_ir_serialize.cpp)
 target_include_directories(test_ir_serialize PRIVATE ${VM_INCLUDES})
 target_link_libraries(test_ir_serialize PRIVATE vx_lib vmcore sqlite3 capstone keystone aot_emit)

@@ -23,6 +23,7 @@
 #ifndef LIVENESS_H
 #define LIVENESS_H
 
+#include "ir/block_liveness.h"
 #include "ir/ssa_ir.h"
 #include <vector>
 #include <cstdint>
@@ -60,11 +61,23 @@ struct LivenessResult {
 };
 
 /**
- * @brief Calcula los intervalos de vida de todos los valores SSA de una
- * funcion.
+ * @brief Calcula los intervalos de vida a partir de los vivos por bloque.
  *
- * @param fn Funcion SSA a analizar.
+ * Los vivos por bloque NO se calculan aqui: los da @c compute_block_liveness,
+ * que es su unico productor.  Quien ya los tenga -- el snapshot de la funcion
+ * los guarda -- los pasa, y nadie los calcula dos veces.
+ *
+ * @param fn   Funcion SSA a analizar.
+ * @param live Vivos a la entrada y a la salida de cada bloque de @p fn.
  * @return Resultado con los intervalos de vida y mapas de posicion de bloques.
+ */
+LivenessResult compute_liveness(const IrFunction &fn,
+                                const BlockLiveness &live);
+
+/**
+ * @brief Atajo para quien no tiene los vivos por bloque a mano.
+ * @param fn Funcion SSA a analizar.
+ * @return Lo mismo que la forma de dos argumentos.
  */
 LivenessResult compute_liveness(const IrFunction &fn);
 

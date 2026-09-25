@@ -12,12 +12,15 @@
 
 #include "ir/liveness.h"
 #include <algorithm>
-#include <unordered_map>
-#include <unordered_set>
 
 namespace ir {
 
 LivenessResult compute_liveness(const IrFunction &fn) {
+    return compute_liveness(fn, compute_block_liveness(fn));
+}
+
+LivenessResult compute_liveness(const IrFunction &fn,
+                                const BlockLiveness &live) {
     LivenessResult result;
     const size_t nblocks = fn.blocks.size();
 
@@ -175,93 +178,20 @@ LivenessResult compute_liveness(const IrFunction &fn) {
         }
     }
 
-    // --- live-in / live-out por bloque (dataflow iterativo) ---
+    // --- Vivos a la salida de cada bloque ---
     //
-    // Sin este pase, los valores definidos antes de un loop y usados dentro
-    // del header se consideran "muertos" tras el ultimo uso lineal en el
-    // body, por lo que el regalloc reusa su registro y rompe la siguiente
-    // iteracion (bug observado con `i32* p = &x` dentro de un while).
+    // Sin esto, los valores definidos antes de un loop y usados dentro del
+    // header se consideran "muertos" tras el ultimo uso lineal en el body, por
+    // lo que el regalloc reusa su registro y rompe la siguiente iteracion (bug
+    // observado con `i32* p = &x` dentro de un while).
     //
-    // Algoritmo clasico de dataflow:
-    //   use[B] = valores que el bloque B usa antes de definirlos
-    //   def[B] = valores que B define
-    //   live_out[B] = U_{S in succs(B)}  live_in[S]  U  {phi.value que llegan a
-    //   S desde B} live_in[B]  = use[B] U (live_out[B] - def[B])
-    // Iteramos en orden inverso hasta fixed point (rapido en CFGs reducibles).
-    std::vector<std::unordered_set<IrValueId>> block_use(nblocks);
-    std::vector<std::unordered_set<IrValueId>> block_def(nblocks);
-    for (size_t b = 0; b < nblocks; ++b) {
-        const IrBlock &bb = fn.blocks[b];
-        for (const IrInstr &ins : bb.instrs) {
-            // Cada operando es un uso si todavia no fue definido en B.
-            for (IrValueId op : ins.operands) {
-                if (op == IR_NO_VALUE) continue;
-                if (!block_def[b].count(op)) block_use[b].insert(op);
-            }
-            // Mismo razonamiento que arriba para CALLCLOSURE en el
-            // dataflow de live-in/live-out por bloque: tratamos el
-            // func_ptr como uso si no fue definido en el bloque.
-            if ((ins.op == IrOp::CALLIND || ins.op == IrOp::CALLCLOSURE) &&
-                ins.func_ptr != IR_NO_VALUE) {
-                if (!block_def[b].count(ins.func_ptr))
-                    block_use[b].insert(ins.func_ptr);
-            }
-            // El destino se considera definido a partir de aqui.
-            if (ins.dst != IR_NO_VALUE) {
-                block_def[b].insert(ins.dst);
-            }
-            // phi_args se procesan como uses en el predecesor (mas abajo).
-        }
-    }
-
-    std::vector<std::unordered_set<IrValueId>> live_in(nblocks);
-    std::vector<std::unordered_set<IrValueId>> live_out(nblocks);
-    bool changed = true;
-    while (changed) {
-        changed = false;
-        // Recorrido en orden inverso ayuda a converger rapido en bucles.
-        for (int b = static_cast<int>(nblocks) - 1; b >= 0; --b) {
-            std::unordered_set<IrValueId> new_out;
-            // live_in de cada sucesor.
-            for (IrBlockId s : fn.blocks[b].succs) {
-                if (s >= static_cast<IrBlockId>(nblocks)) continue;
-                for (IrValueId v : live_in[s])
-                    new_out.insert(v);
-                // PHI args en el sucesor que vengan de este bloque b: el
-                // valor entregado se debe poder leer al salir de b, asi
-                // que esta vivo en live_out[b].
-                for (const IrInstr &ins_s : fn.blocks[s].instrs) {
-                    if (ins_s.op != IrOp::PHI) continue;
-                    for (const auto &pa : ins_s.phi_args) {
-                        if (pa.block == static_cast<IrBlockId>(b) &&
-                            pa.value != IR_NO_VALUE) {
-                            new_out.insert(pa.value);
-                        }
-                    }
-                }
-            }
-            // live_in[b] = use[b] U (new_out - def[b])
-            std::unordered_set<IrValueId> new_in = block_use[b];
-            for (IrValueId v : new_out) {
-                if (!block_def[b].count(v)) new_in.insert(v);
-            }
-            if (new_out != live_out[b]) {
-                live_out[b] = std::move(new_out);
-                changed = true;
-            }
-            if (new_in != live_in[b]) {
-                live_in[b] = std::move(new_in);
-                changed = true;
-            }
-        }
-    }
-
-    // Extender intervalos: cada valor vivo a la salida de un bloque debe
-    // mantener su registro al menos hasta el final de ese bloque (incluyendo
-    // back-edges hacia loop headers).
+    // Los da `compute_block_liveness`, su unico productor.  Aqui habia un
+    // punto fijo propio con un `unordered_set` por bloque, copiado entero en
+    // cada vuelta: 7,45 s de 99 medidos con VTune en el `main` de 205.000
+    // instrucciones de un fuente generado.
     for (size_t b = 0; b < nblocks; ++b) {
         const uint32_t end_pos = result.block_end[b];
-        for (IrValueId v : live_out[b]) {
+        for (IrValueId v : live.live_out(IrBlockId(b))) {
             if (v >= ivs.size()) continue;
             if (end_pos > ivs[v].end) ivs[v].end = end_pos;
         }

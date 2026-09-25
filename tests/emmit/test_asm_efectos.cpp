@@ -173,11 +173,11 @@ std::string describe(const vx::AsmBlockEffects &r) {
 
 /// Clases de los marcadores.  Sin ellas, un operando que el compilador nombro
 /// `$1` no tiene ancho y el analisis no puede acotar cuantos bytes toca.
-std::vector<std::pair<std::string, std::string>>
-operand_classes(const char *c1) {
+vx::AsmOperandClasses operand_classes(const char *c1) {
     /* `$0` es siempre un registro general: es el que lleva la DIRECCION en los
      * casos de memoria (`[$0]`), y una direccion no vive en el banco ancho. */
-    return {{"$0", "reg"}, {"$1", c1}, {"$2", c1}};
+    return {vx::asm_operand_class("$0", "reg"), vx::asm_operand_class("$1", c1),
+            vx::asm_operand_class("$2", c1)};
 }
 
 void check(const Case &c, const char *operand_class, const char *arch) {

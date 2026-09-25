@@ -546,8 +546,9 @@ static void test_ancho_por_clase() {
         CHECK(sin.align_reqs[0].base == "$0",
               "de donde sale la direccion SI se sabe: es el marcador $0");
     }
-    const vx::AsmInferResult con =
-        vx::asm_infer_clobbers(cuerpo, {}, {{"$0", "reg"}, {"$1", "xmm"}});
+    const vx::AsmInferResult con = vx::asm_infer_clobbers(
+        cuerpo, {},
+        {vx::asm_operand_class("$0", "reg"), vx::asm_operand_class("$1", "xmm")});
     CHECK(con.align_reqs.size() == 1, "la exigencia sigue estando");
     if (con.align_reqs.size() == 1)
         CHECK(con.align_reqs[0].bytes == 16,
@@ -555,13 +556,15 @@ static void test_ancho_por_clase() {
 
     // La variante ancha exige lo que mida SU operando, no un numero fijo.
     const vx::AsmInferResult ancha = vx::asm_infer_clobbers(
-        "vmovdqa [$0], $1\n", {}, {{"$0", "reg"}, {"$1", "ymm"}});
+        "vmovdqa [$0], $1\n", {},
+        {vx::asm_operand_class("$0", "reg"), vx::asm_operand_class("$1", "ymm")});
     CHECK(ancha.align_reqs.size() == 1 && ancha.align_reqs[0].bytes == 32,
           "vmovdqa con un operando de 256 bits exige 32");
 
     // Y la forma que NO exige nada no debe inventarse una exigencia.
     const vx::AsmInferResult libre = vx::asm_infer_clobbers(
-        "movdqu [$0], $1\n", {}, {{"$0", "reg"}, {"$1", "xmm"}});
+        "movdqu [$0], $1\n", {},
+        {vx::asm_operand_class("$0", "reg"), vx::asm_operand_class("$1", "xmm")});
     CHECK(libre.align_reqs.empty(),
           "movdqu no exige alineacion: una letra separa las dos familias");
 }

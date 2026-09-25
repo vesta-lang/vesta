@@ -293,6 +293,7 @@ struct Resolver {
     LoopsOracle loops_;
     LoopFacts lf_own_;
     const LoopFacts *lf_ = nullptr;
+    LoopStructureIndex loop_index_; ///< lo de la funcion, para cada bucle.
     /* Donde se define cada valor lo trae `facts`, que ya lo tenemos delante:
      * era el mismo doble bucle que hizo `build_ir_facts`, repetido aqui. */
     const DefBlockVec &def_block = facts.def_block;
@@ -311,6 +312,9 @@ struct Resolver {
         }
         shape_.assign(lf_->loop_count, LoopShape{});
         shape_ready_.assign(lf_->loop_count, 0);
+        /* Lo que la forma de los bucles necesita de la funcion, una vez para
+         * todos los que se pidan. */
+        loop_index_ = build_loop_structure_index(fn, *lf_);
     }
 
     /**
@@ -348,7 +352,7 @@ struct Resolver {
         if (shape_ready_[lid]) return shape_[lid];
         shape_ready_[lid] = 1;
         LoopShape &s = shape_[lid];
-        s.st = detect_loop_structure(fn, *lf_, lid);
+        s.st = detect_loop_structure(fn, *lf_, lid, loop_index_);
         if (!s.st.valid) return s;
         if (!detect_loop_iv(fn, def_block, s.st.header, s.st.preheader,
                             s.st.latch, s.iv))

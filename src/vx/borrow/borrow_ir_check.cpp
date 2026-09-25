@@ -94,7 +94,7 @@ check_exclusive_across_calls(const ir::IrModule &mod,
                 const bool pb = promises_exclusive(fn, b);
                 if (!pa && !pb) continue;
                 const analysis::effects::ParamPairInfo pi =
-                    aliasing.of(fn.name, a, b);
+                    aliasing.of(fn, a, b);
                 /* SOLO lo demostrado acusa.  Un `Unknown` es "no se pudo
                  * decidir", y tratarlo como violacion seria justo el error que
                  * el segundo invariante del ASA prohibe: no poder demostrar que
@@ -115,6 +115,48 @@ check_exclusive_across_calls(const ir::IrModule &mod,
         }
     }
     return out;
+}
+
+void report_exclusive_across_calls(const ir::IrModule &mod, Diagnostics &diags,
+                                   const std::string &file,
+                                   analysis::asa::FactBase &base,
+                                   DiagLevel level) {
+    for (const ExclusiveViolation &v :
+         check_exclusive_across_calls(mod, base)) {
+        SourceLoc loc;
+        /* La linea de la LLAMADA, que es donde se ve el fallo.  Dentro de la
+         * funcion los dos parametros son dos nombres y no hay nada que senalar:
+         * lo que los junta esta en quien la llama. */
+        loc.line = v.line;
+        loc.set_file(file);
+        diags.diag(
+            loc, level, "VX2053",
+            {std::to_string(v.promised), v.function, std::to_string(v.other)});
+        /* La PRUEBA, en datos: sin la llamada delante esto seria una acusacion
+         * que quien la lee no puede juzgar. */
+        diags.note(loc, vx::diag::format("VX2054", {std::to_string(v.line)}));
+        /* Y la salida, que depende de QUIEN hizo la promesa.  Derivada del
+         * tipo, se habla de prestamos y las salidas las define el modelo;
+         * escrita por el programador, lo que sobra o falta es su declaracion, y
+         * mandarle a terminar un prestamo seria mandarle a buscar algo que en
+         * su programa no existe. */
+        if (v.declared)
+            diags.note(
+                loc, vx::diag::format("VX2056", {std::to_string(v.promised)}));
+        else
+            diags.note(loc, vx::diag::format("VX2055", {}));
+    }
+}
+
+void check_borrows_before_opt(const ir::IrModule &mod, const std::string &file,
+                              bool violations_are_errors, Diagnostics &diags) {
+    util::CronoTramo span("phase:borrow_across_calls",
+                          util::flag_on(util::FlagId::Times));
+    /* Base propia del momento de ANTES.  El porque, en la cabecera. */
+    analysis::asa::FactBase pre_opt_base(analysis::asa::kStagePreOpt);
+    report_exclusive_across_calls(
+        mod, diags, file, pre_opt_base,
+        violations_are_errors ? DiagLevel::ERR : DiagLevel::WARN);
 }
 
 } // namespace borrow

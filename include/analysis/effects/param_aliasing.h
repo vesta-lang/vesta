@@ -63,6 +63,7 @@
 namespace ir {
 struct IrModule;
 struct IrFunction;
+enum IrFnPos : uint32_t; // ir/ssa_ir.h
 } // namespace ir
 
 namespace analysis {
@@ -180,40 +181,31 @@ class ParamAliasing {
      * comun -- dos regiones que no se tocan -- salia como solape probado y
      * tumbaba un programa correcto.
      *
-     * @param function Nombre de la funcion, el que el IR usa.
+     * @param function La funcion, que tiene que ser del modulo con el que se
+     *                 construyo: se la localiza por su posicion, sin nombre.
      * @param a Indice del primer parametro.
      * @param b Indice del segundo.
      * @return El veredicto; @c Unknown si no hay llamadas visibles.
      */
-    ParamPairInfo of(const std::string &function, size_t a, size_t b) const;
+    ParamPairInfo of(const ir::IrFunction &function, size_t a,
+                     size_t b) const;
 
   private:
-    /// @brief Los sitios de @p function con sus argumentos ya resueltos.
+    /// @brief Los sitios de @p callee con sus argumentos ya resueltos.
     ///
     /// La primera vez los resuelve; despues los devuelve.  Nulo si a esa
     /// funcion no la llama nadie visible.
     const std::vector<CallSiteLocs> *
-    sites_of(const std::string &function) const;
-
-    /// @brief La funcion @p name del modulo, o nulo.
-    ///
-    /// Hace falta para leer SU contrato: la extension que un parametro promete
-    /// (`i64 p[3]`) es lo que da ancho a la region del argumento, y sin ancho
-    /// dos posiciones de la misma reserva no se pueden separar.  El indice se
-    /// construye entero la primera vez -- una pasada -- porque hacerlo por
-    /// consulta seria recorrer las funciones una vez por cada una.
-    const ir::IrFunction *function_named(const std::string &name) const;
+    sites_of(const ir::IrFunction &callee) const;
 
     const ir::IrModule *mod_ = nullptr;
     const asa::ModuleWalk *walk_ = nullptr;
     asa::FactBase *base_ = nullptr;
     const char *stage_ = "";
-    /// Nombre -> funcion, construido a la primera consulta.  Vacio mientras no
-    /// se pregunte: quien no necesite contratos no lo paga.
-    mutable std::unordered_map<std::string, const ir::IrFunction *> by_name_;
-    /// Lo ya resuelto.  `mutable` porque la consulta es const y el cacheo es un
-    /// detalle suyo: quien pregunta no cambia nada de lo que se sabe.
-    mutable std::unordered_map<std::string, std::vector<CallSiteLocs>>
+    /// Lo ya resuelto, por la posicion de la funcion llamada.  `mutable`
+    /// porque la consulta es const y el cacheo es un detalle suyo: quien
+    /// pregunta no cambia nada de lo que se sabe.
+    mutable std::unordered_map<ir::IrFnPos, std::vector<CallSiteLocs>>
         resolved_;
 };
 

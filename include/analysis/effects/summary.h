@@ -17,8 +17,12 @@
 #define ANALYSIS_EFFECTS_SUMMARY_H
 
 #include "analysis/effects/effects.h"
+#include "util/named_alloc.h"
 
+#include <cstdint>
+#include <stdexcept>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -60,9 +64,59 @@ struct FunctionSummary {
     bool exported = false;
 };
 
-/// Nivel modulo = MAPA symbol -> summary (NO un efecto de modulo).
+namespace scratch {
+struct SummaryFns; ///< Los resumenes de las funciones, por indice.
+} // namespace scratch
+
+/// Posicion de una funcion dentro de un @ref ModuleSummary.
+enum SummaryFnIdx : uint32_t {};
+/// Ninguna funcion: el nombre no esta en el resumen.
+inline constexpr SummaryFnIdx NO_SUMMARY_FN = SummaryFnIdx(UINT32_MAX);
+
+/**
+ * @brief Nivel modulo: el resumen de cada funcion, por INDICE (NO un efecto de
+ *        modulo).
+ *
+ * La identidad de una funcion aqui es su indice.  El nombre solo se mira UNA
+ * vez, al resolver un sitio de llamada o una consulta de fuera; el punto fijo
+ * y todo lo que lo recorre van por indice.  Antes todo iba por nombre: cada
+ * paso del punto fijo hasheaba varias cadenas por arista del grafo de llamadas.
+ */
 struct ModuleSummary {
-    std::unordered_map<std::string, FunctionSummary> fns;
+    /// Los resumenes, en el orden en que se anadieron.
+    util::NamedVector<FunctionSummary, scratch::SummaryFns> fns;
+    /// Nombre -> indice.  La clave apunta al nombre INTERNADO de la funcion,
+    /// que no se mueve aunque @ref fns crezca.
+    std::unordered_map<std::string_view, SummaryFnIdx> index;
+
+    /// Anade el resumen de la funcion de nombre internado @p name.
+    SummaryFnIdx add(const std::string *name, FunctionSummary s) {
+        const SummaryFnIdx i = static_cast<SummaryFnIdx>(fns.size());
+        fns.push_back(std::move(s));
+        index.emplace(*name, i);
+        return i;
+    }
+    /// Indice de @p name, o @ref NO_SUMMARY_FN si no esta.
+    SummaryFnIdx find(std::string_view name) const {
+        const auto it = index.find(name);
+        return it == index.end() ? NO_SUMMARY_FN : it->second;
+    }
+    /// Resumen de @p name, o nulo si no esta.
+    const FunctionSummary *get(std::string_view name) const {
+        const SummaryFnIdx i = find(name);
+        return i == NO_SUMMARY_FN ? nullptr : &fns[i];
+    }
+    /// Resumen de @p name; que no este es un error de quien pregunta.
+    const FunctionSummary &at(std::string_view name) const {
+        const FunctionSummary *s = get(name);
+        if (s == nullptr)
+            throw std::out_of_range("ModuleSummary::at: funcion sin resumen");
+        return *s;
+    }
+    void clear() {
+        fns.clear();
+        index.clear();
+    }
 };
 
 // ===========================================================================

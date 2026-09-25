@@ -26,6 +26,7 @@ VESTA_ALLOC_MODULE_HERE("analysis");
 #include "ir/ssa_ir.h"
 
 #include <chrono>
+#include <optional>
 #include <cstdlib>
 #include <iostream>
 
@@ -44,10 +45,99 @@ std::string nombre_region(AbstractLoc::Kind k, uint32_t id) {
     }
     return std::string(base) + "#" + std::to_string(id);
 }
+
+/**
+ * @brief Comprueba que los accesos de UNA instruccion caben en su region.
+ *
+ * Solo acusa lo DEMOSTRADO: extension concreta, offset exacto y region de pila
+ * o del monton, cuyo tamano se conoce aqui.
+ */
+struct RegionCheck {
+    const ir::IrFunction &fn;
+    const PointsTo &pt;
+    const RangeFacts &ranges;
+    const ir::IrInstr &in;
+    std::vector<BoundsViolation> &out;
+
+    /// Revisa las regiones de @p ls; @p write dice si se escriben.
+    void check(const LocSet &ls, bool write) const {
+        if (ls.is_top) return;
+        for (const AbstractLoc &l : ls.locs) {
+            if (l.width <= 0 || !l.concrete()) continue;
+            /* La extension se indexa por VALUE-ID, y solo Stack y Heap tienen
+             * ahi su raiz: en `ArgDerived` el identificador es el INDICE DEL
+             * PARAMETRO, asi que consultarlo devolveria la extension de un
+             * valor sin relacion.  De un parametro no se sabe el tamano -- lo
+             * sabe quien llama --, asi que no se afirma nada. */
+            if (l.kind != AbstractLoc::Kind::Stack &&
+                l.kind != AbstractLoc::Kind::Heap)
+                continue;
+            const RegionExtent &ex = pt.extent_of(l.id);
+            int64_t limit = 0;
+            int64_t object = 0;
+            if (ex.constante()) {
+                limit = ex.limite();
+                object = ex.bytes;
+            } else if (ex.simbolica()) {
+                /* Tamano SIMBOLICO: se sabe QUE valor lo manda, y con su rango
+                 * se puede acotar.  Para AFIRMAR que un acceso se sale hace
+                 * falta pasarse del tamano MAXIMO posible -- si el mayor
+                 * `malloc` que ese valor puede pedir no llega, ninguno llega.
+                 * Con el minimo no se prueba nada: solo diria que PODRIA
+                 * salirse, y eso no es un error. */
+                const ValueRange &rr = ranges.at(ex.sym);
+                int64_t rlo, rhi;
+                if (!rr.acotada() || !rr.vista_con_signo(rlo, rhi) || rhi < 0)
+                    continue;
+                limit = rhi;
+                object = rhi;
+            } else {
+                continue;
+            }
+            const int64_t end = l.off + l.width;
+            if (l.off >= 0 && end <= limit) continue;
+            BoundsViolation v;
+            v.function = fn.name;
+            v.line = in.source_line;
+            v.write = write;
+            v.width = l.width;
+            v.off = l.off;
+            v.limite = limit;
+            v.objeto = object;
+            v.region = nombre_region(l.kind, l.id);
+            out.push_back(std::move(v));
+        }
+    }
+};
+
+/// Reparte el tiempo entre tramos: cada `close` suma lo transcurrido desde el
+/// anterior al contador que se le da.
+struct PhaseClock {
+    std::chrono::steady_clock::time_point mark = std::chrono::steady_clock::now();
+
+    void close(long &into) {
+        const auto now = std::chrono::steady_clock::now();
+        into += static_cast<long>(
+            std::chrono::duration_cast<std::chrono::microseconds>(now - mark)
+                .count());
+        mark = now;
+    }
+};
+
+/// Quita al motor, al salir, los resumenes que se le dieron aqui -- si eran
+/// propios de esta llamada y no de quien lo presto --.
+struct SummariesRelease {
+    EffectAnalysis &ea;
+    bool release; ///< los resumenes son locales: hay que quitarselos.
+    ~SummariesRelease() {
+        if (release) ea.usar_resumenes(nullptr);
+    }
+};
 } // namespace
 
-std::vector<BoundsViolation> check_region_bounds(const ir::IrModule &mod,
-                                                 EffectAnalysis *ea_dado) {
+std::vector<BoundsViolation>
+check_region_bounds(const ir::IrModule &mod, EffectAnalysis *ea_dado,
+                    const analysis::RangeSummaries *given_summaries) {
     std::vector<BoundsViolation> out;
     /* Interruptor de escape.  La comprobacion esta MEDIDA a cero falsos sobre
      * los 454 programas del corpus, pero un veredicto que rompe una compilacion
@@ -69,28 +159,38 @@ std::vector<BoundsViolation> check_region_bounds(const ir::IrModule &mod,
      * la consecuencia era que el mismo analisis de rangos corria dos veces
      * sobre cada funcion: el motor los calculaba sin resumenes para points-to,
      * y aqui se volvian a calcular con ellos para juzgar.  Dos respuestas
-     * distintas a la misma pregunta, y ninguna razon para querer la peor. */
-    const analysis::RangeSummaries resumenes =
-        analysis::compute_range_summaries(mod);
-    ea.usar_resumenes(&resumenes);
-    /* Y se los quitamos al salir.  El motor puede venir de fuera y vivir mas
-     * que esta funcion, mientras que los resumenes son locales: dejarselos
-     * puestos seria dejarle un puntero a algo que ya no existe.  Va como
-     * destructor y no al final para que un `return` por el camino -- o una
-     * excepcion -- tampoco pueda saltarselo. */
-    struct RetirarResumenes {
-        analysis::effects::EffectAnalysis &ea;
-        ~RetirarResumenes() { ea.usar_resumenes(nullptr); }
-    } retirar_resumenes{ea};
+     * distintas a la misma pregunta, y ninguna razon para querer la peor.
+     *
+     * Y se PIDEN a quien los tenga.  Calcularlos aqui era la tercera vez que
+     * se analizaba cada funcion del modulo: la base de hechos ya los tiene, y
+     * su motor de efectos ya se construyo con ellos.  Solo quien llama sin
+     * base los paga aqui. */
+    std::optional<analysis::RangeSummaries> own_summaries;
+    const analysis::RangeSummaries *summaries = given_summaries;
+    if (summaries == nullptr) {
+        own_summaries.emplace(analysis::compute_range_summaries(mod));
+        summaries = &*own_summaries;
+    }
+    /* Los propios son locales, y hay que quitarselos al motor al salir: puede
+     * venir de fuera y vivir mas que esta funcion, y dejarselos puestos seria
+     * dejarle un puntero a algo que ya no existe.  Como destructor, para que un
+     * `return` por el camino tampoco se lo salte.  Los de la base viven lo que
+     * ella, y ahi no hay nada que quitar. */
+    const SummariesRelease release{ea, own_summaries.has_value()};
 
-    ea.module_summary(mod); // deja el motor con sus tablas listas
+    /* Un motor ya construido CON ESTOS resumenes tiene sus tablas listas: el
+     * de la base.  Rehacerlo seria repetir el escape del modulo entero. */
+    if (ea_dado == nullptr || ea.summaries() != summaries) {
+        ea.usar_resumenes(summaries);
+        ea.module_summary(mod); // deja el motor con sus tablas listas
+    }
 
     /* Reparto del coste.  Hizo falta: la sospecha era el def-use y no lo era,
      * ni el motor duplicado -- solo midiendo cada parte se llego a la que es.
      */
     const bool medir = util::flag_on(util::FlagId::Times);
     using RelojLim = std::chrono::steady_clock;
-    auto marca = RelojLim::now();
+    PhaseClock phases;
     long us_resumenes = 0, us_rangos = 0, us_llamadas = 0;
     long n_llamadas = 0;
     /* Reparto del tiempo DENTRO del recorrido por puntos.  En nanosegundos: en
@@ -100,15 +200,8 @@ std::vector<BoundsViolation> check_region_bounds(const ir::IrModule &mod,
      * efectos de cada instruccion -- y solo midiendo se sabe cual paga. */
     long long ns_calcular = 0, ns_montar_estado = 0, ns_efectos = 0;
     long long n_bloques = 0, n_instrs = 0;
-    auto cerrar = [&](long &destino) {
-        const auto ahora = RelojLim::now();
-        destino += static_cast<long>(
-            std::chrono::duration_cast<std::chrono::microseconds>(ahora - marca)
-                .count());
-        marca = ahora;
-    };
 
-    cerrar(us_resumenes);
+    phases.close(us_resumenes);
     for (const ir::IrFunction &fn : mod.functions) {
         if (fn.blocks.empty()) continue;
         /* Los cuerpos comptime no son parte del programa que se ejecuta: corren
@@ -135,7 +228,7 @@ std::vector<BoundsViolation> check_region_bounds(const ir::IrModule &mod,
         ns_calcular += std::chrono::duration_cast<std::chrono::nanoseconds>(
                            RelojLim::now() - t_calc)
                            .count();
-        cerrar(us_rangos);
+        phases.close(us_rangos);
         /* Si alguna cota de bucle esta INFERIDA, aqui no se acusa.
          *
          * Rechazar un programa es afirmar que el acceso se sale SIEMPRE, y eso
@@ -200,59 +293,9 @@ std::vector<BoundsViolation> check_region_bounds(const ir::IrModule &mod,
                     std::chrono::duration_cast<std::chrono::nanoseconds>(
                         RelojLim::now() - t_ef)
                         .count();
-                auto revisa = [&](const LocSet &ls, bool escribe) {
-                    if (ls.is_top) return;
-                    for (const AbstractLoc &l : ls.locs) {
-                        if (l.width <= 0 || !l.concrete()) continue;
-                        /* La extension se indexa por VALUE-ID, y solo Stack y
-                         * Heap tienen ahi su raiz: en `ArgDerived` el
-                         * identificador es el INDICE DEL PARAMETRO, asi que
-                         * consultarlo devolveria la extension de un valor sin
-                         * relacion.  De un parametro no se sabe el tamano -- lo
-                         * sabe quien llama --, asi que no se afirma nada. */
-                        if (l.kind != AbstractLoc::Kind::Stack &&
-                            l.kind != AbstractLoc::Kind::Heap)
-                            continue;
-                        const analysis::RegionExtent &ex = pt.extent_of(l.id);
-                        int64_t tope = 0;
-                        int64_t objeto = 0;
-                        if (ex.constante()) {
-                            tope = ex.limite();
-                            objeto = ex.bytes;
-                        } else if (ex.simbolica()) {
-                            /* Tamano SIMBOLICO: se sabe QUE valor lo manda, y
-                             * con su rango se puede acotar.  Para AFIRMAR que
-                             * un acceso se sale hace falta pasarse del tamano
-                             * MAXIMO posible -- si el mayor `malloc` que ese
-                             * valor puede pedir no llega, ninguno llega.  Con
-                             * el minimo no se prueba nada: solo diria que
-                             * PODRIA salirse, y eso no es un error. */
-                            const ValueRange &rr = rangos.at(ex.sym);
-                            int64_t rlo, rhi;
-                            if (!rr.acotada() ||
-                                !rr.vista_con_signo(rlo, rhi) || rhi < 0)
-                                continue;
-                            tope = rhi;
-                            objeto = rhi;
-                        } else {
-                            continue;
-                        }
-                        const int64_t fin = l.off + l.width;
-                        if (l.off >= 0 && fin <= tope) continue;
-                        BoundsViolation v;
-                        v.function = fn.name;
-                        v.line = in.source_line;
-                        v.write = escribe;
-                        v.width = l.width;
-                        v.off = l.off;
-                        v.limite = tope;
-                        v.objeto = objeto;
-                        v.region = nombre_region(l.kind, l.id);
-                        out.push_back(std::move(v));
-                    }
-                };
-                revisa(r.effects.mem.writes, true);
-                revisa(r.effects.mem.reads, false);
+                const RegionCheck region_check{fn, pt, rangos, in, out};
+                region_check.check(r.effects.mem.writes, true);
+                region_check.check(r.effects.mem.reads, false);
 
                 /* Y lo que hace una LLAMADA sobre la memoria de AQUI.
                  *
@@ -281,8 +324,8 @@ std::vector<BoundsViolation> check_region_bounds(const ir::IrModule &mod,
                             RelojLim::now() - t_ll)
                             .count();
                     ++n_llamadas;
-                    revisa(ll.escribe, true);
-                    revisa(ll.lee, false);
+                    region_check.check(ll.escribe, true);
+                    region_check.check(ll.lee, false);
                 }
 
                 /* Acceso INDEXADO (`buf[i]`).  El modelo colapsa el offset no
@@ -372,11 +415,11 @@ std::vector<BoundsViolation> check_region_bounds(const ir::IrModule &mod,
             }
         }
     }
-    cerrar(us_rangos);
+    phases.close(us_rangos);
     if (medir)
         std::cerr << "[limites] " << mod.functions.size() << " funciones, "
                   << n_llamadas << " llamadas | resumenes " << us_resumenes
-                  << " us (" << resumenes.rondas << " pasos) | rangos+recorrer "
+                  << " us (" << summaries->rondas << " pasos) | rangos+recorrer "
                   << us_rangos << " us | en-la-llamada " << us_llamadas
                   << " us\n"
                   << "[limites]   reparto: calcular " << (ns_calcular / 1000000)

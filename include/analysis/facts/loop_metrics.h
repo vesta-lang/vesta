@@ -22,7 +22,9 @@
 #define ANALYSIS_FACTS_LOOP_METRICS_H
 
 #include "ir/ssa_ir.h"
+#include "util/named_alloc.h"
 
+#include <cstdint>
 #include <vector>
 
 namespace analysis {
@@ -55,17 +57,44 @@ struct LoopMetrics {
     bool has_side_effects = false;
 };
 
+namespace scratch {
+struct LiveAcrossCounts; ///< Cuantos valores de cada cuerpo se usan fuera.
+struct LiveAcrossLoopOf; ///< Bloque -> bucle medido al que pertenece.
+struct LiveAcrossDefIn;  ///< Valor -> bucle medido en el que se define.
+struct LiveAcrossSeen;   ///< Valor ya contado.
+} // namespace scratch
+
+/// Cuantos valores definidos en el cuerpo de un bucle se usan fuera de el.
+enum LiveAcross : uint32_t {};
+
+/**
+ * @brief @c live_across de VARIOS bucles de @p fn a la vez, en un recorrido.
+ *
+ * El proxy de presion es: valores definidos en el cuerpo y usados FUERA de el
+ * (loop-carried via PHIs del header + live-out); no depende del latch ni de
+ * temporales intra-iteracion.  Saberlo exige mirar los usos de toda la
+ * funcion, y hacerlo por bucle era bucles por tamano de la funcion.  Aqui cada
+ * uso se mira una vez para todos.
+ *
+ * @param fn     funcion SSA.
+ * @param bodies los cuerpos, DISJUNTOS entre si (bucles mas internos: un bloque
+ *               esta en el cuerpo de uno solo).
+ * @return La cuenta de cada cuerpo, en el mismo orden.
+ */
+util::NamedVector<LiveAcross, scratch::LiveAcrossCounts> compute_live_across(
+    const ir::IrFunction &fn,
+    const std::vector<const std::vector<ir::IrBlockId> *> &bodies);
+
 /**
  * @brief Mide el cuerpo (bloques @p body) de un bucle de @p fn.  Neutral.
- * @param fn   funcion SSA.
- * @param body bloques del cuerpo (todos los del bucle salvo el header).
- *
- * @c live_across (proxy de presion) = valores definidos en el cuerpo y usados
- * FUERA de el (loop-carried via PHIs del header + live-out); no depende del
- * latch ni de temporales intra-iteracion.
+ * @param fn          funcion SSA.
+ * @param body        bloques del cuerpo (todos los del bucle salvo el header).
+ * @param live_across su proxy de presion, de @ref compute_live_across: es lo
+ *                    unico que no sale del propio cuerpo.
  */
 LoopMetrics compute_loop_metrics(const ir::IrFunction &fn,
-                                 const std::vector<ir::IrBlockId> &body);
+                                 const std::vector<ir::IrBlockId> &body,
+                                 LiveAcross live_across);
 
 } // namespace analysis
 

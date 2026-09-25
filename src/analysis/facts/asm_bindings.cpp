@@ -188,6 +188,13 @@ AsmBindingFacts compute_asm_bindings(const ir::IrFunction &fn) {
     const std::vector<ir::IrValueId> vals = single_values_of_slots(fn, huecos);
     for (size_t k = 0; k < f.ligaduras.size(); ++k)
         f.ligaduras[k].valor = vals[k];
+
+    /* Las clases, internadas: marcadores y clases son un punado de nombres
+     * que se repiten en cada bloque, y quien las consulta no tiene por que
+     * volver a copiarlas. */
+    f.operand_classes.reserve(f.ligaduras.size());
+    for (const LigaduraAsm &l : f.ligaduras)
+        f.operand_classes.push_back(vx::asm_operand_class(l.marcador, l.clase));
     return f;
 }
 
