@@ -152,7 +152,7 @@ struct IrFacts {
 
     // --- estructura ---
     uint32_t block_count = 0;
-    uint32_t loop_count = 0; ///< back-edges (aproximacion de bucles).
+    /* Los bucles NO van aqui: los sabe `LoopFacts`, sobre los dominadores. */
     bool recursive = false;  ///< se llama a si misma directamente.
 
     /// value id -> alguien lo LEE (aparece como operando).
@@ -229,7 +229,7 @@ extern const char *const kIrFactsAnalysisName;
  * es lo unico que importa, porque interpretarlo como propio no daria error,
  * daria hechos inventados.
  */
-constexpr uint32_t kIrFactsFormat = 1;
+constexpr uint32_t kIrFactsFormat = 2; // 2: sin la cuenta de bucles
 
 /// Empaqueta @p f en bytes.  No escribe @c owner: es un puntero y se rehidrata.
 std::vector<uint8_t> serialize_ir_facts(const IrFacts &f);

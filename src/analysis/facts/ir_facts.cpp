@@ -20,20 +20,6 @@ namespace analysis {
 
 char IRFactsAnalysis::ID = 0;
 
-namespace {
-
-/// @brief Va @p target hacia ATRAS desde el bloque @p from?
-///
-/// Es la aproximacion de bucle que usa este recorrido: un salto a un bloque que
-/// ya se paso.  Funcion con nombre y no una lambda dentro del bucle -- se
-/// prueba sola, sale con su nombre en un perfil, y no captura nada cuya vida
-/// haya que razonar.
-bool is_back_edge(ir::IrBlockId target, ir::IrBlockId from) {
-    return target != ir::IR_NO_BLOCK && target <= from;
-}
-
-} // namespace
-
 IrFacts build_ir_facts(const ir::IrFunction &fn) {
     IrFacts f;
     /* La funcion que se describe: es lo que permite resolver `def` sin guardar
@@ -86,21 +72,6 @@ IrFacts build_ir_facts(const ir::IrFunction &fn) {
             case ir::IrOp::CALLN: f.has_dynamic_call = true; break;
             default: break;
             }
-            // back-edges (bucles).
-            if (in.op == ir::IrOp::BR) {
-                if (is_back_edge(in.target_block, bi)) ++f.loop_count;
-            } else if (in.op == ir::IrOp::BR_COND) {
-                if (is_back_edge(in.target_block, bi) ||
-                    is_back_edge(in.false_block, bi))
-                    ++f.loop_count;
-            } else if (in.op == ir::IrOp::SWITCH_DENSE ||
-                       in.op == ir::IrOp::MATCH_VARIANT) {
-                for (ir::IrBlockId t : in.jump_targets)
-                    if (is_back_edge(t, bi)) {
-                        ++f.loop_count;
-                        break;
-                    }
-            }
         }
     }
     return f;
@@ -120,7 +91,6 @@ std::vector<uint8_t> serialize_ir_facts(const IrFacts &f) {
         w.str(s);
     w.u8(f.has_dynamic_call ? 1u : 0u);
     w.u32(f.block_count);
-    w.u32(f.loop_count);
     w.u8(f.recursive ? 1u : 0u);
     return w.take();
 }
@@ -151,7 +121,6 @@ bool deserialize_ir_facts(const uint8_t *data, size_t n,
 
     f.has_dynamic_call = r.u8() != 0;
     f.block_count = r.u32();
-    f.loop_count = r.u32();
     f.recursive = r.u8() != 0;
     if (!r.ok()) return false;
 

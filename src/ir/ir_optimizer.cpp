@@ -52,6 +52,7 @@
 #include "ir/passes/unroll.h" // desenrollado de bucles (factor automatico)
 #include "ir/passes/select_simplify.h" // canonicalizacion algebraica de SELECT
 #include "analysis/asa/fact_base.h"    // la puerta UNICA a los hechos del ASA
+#include "analysis/facts/dom_facts.h"  // grafo y dominadores, de UN sitio
 #include "analysis/facts/loop_iv_bounds.h" // hasta donde llega la variable de un bucle
 #include "analysis/facts/demanded_bits.h" // cuantos bits de un valor mira alguien
 #include "analysis/facts/alignment.h"     // de cuanto es multiplo un valor
@@ -125,7 +126,6 @@ struct SlotOffZero;      ///< ... se accede siempre con desplazamiento cero.
 struct SlotLoadsOff0;    ///< ... y todas sus lecturas.
 struct BoxCarrier;       ///< ... el valor lleva una caja dentro.
 struct CarrierAlias;     ///< ... y quien es su alias.
-struct BlockVisited;     ///< Recorrido de bloques: ya visitado.
 struct LoopHeader;       ///< Bucles: el bloque es cabecera.
 struct InLoop;           ///< ... el bloque esta dentro de uno.
 struct ExtKind;          ///< Normalizar extensiones: 1=SEXT, 2=ZEXT.
@@ -134,8 +134,6 @@ struct ExtIsConst;       ///< ... el valor es constante.
 /* Las que crecen a base de `push_back` sobre un vector diminuto: el perfil las
  * ve como `_M_realloc_insert` de cinco a diecinueve bytes, cincuenta veces por
  * funcion, y sin etiqueta no hay forma de saber cual es cual. */
-struct Reachable;      ///< Bloques alcanzables desde la entrada.
-struct RpoPos;         ///< Bloque -> su posicion en el orden inverso.
 struct StrcatOffsets;  ///< Concatenar cadenas: donde empieza cada trozo.
 struct ConstOfValue;   ///< Valor -> la constante que lleva.
 struct SiteOfValue;    ///< Valor -> el sitio de reserva del que sale.
@@ -174,10 +172,7 @@ struct InlineTimes;       ///< Veces que se aplano un recursivo en ESTE llamante
 struct InlineTouched;     ///< Cuales de esas cuentas hay que volver a cero.
 struct InlinePositions;   ///< Llamadas inlinables de un bloque.
 
-/* El arbol de dominadores numerado, para contestar "domina" sin subir por el. */
-struct DomPre;  ///< Cuando entra el recorrido en cada bloque.
-struct DomPost; ///< ... y cuando sale.
-struct DomWalk; ///< La pila de ese recorrido.
+/* Los dominadores ya no se calculan aqui: salen de `analysis::DomFacts`. */
 struct LoopWalk; ///< La pila al marcar los bloques de un bucle.
 
 /* mem2reg por lotes: todos los objetos de una funcion en un recorrido. */
@@ -3342,207 +3337,11 @@ bool sr_rewrite_load_zero(IrInstr &ld, IrFunction &fn, bool apply) {
 }
 
 //==============================================================================
-//  Dominancia: idom + dominance frontier + dom-tree (para SROA/mem2reg).
+//  Dominancia (para SROA/mem2reg): de `DomFacts`, el productor unico.
 //==============================================================================
-
-/// Instante del recorrido del arbol de dominadores en que se entra en un
-/// bloque o se sale de el.
-enum SrDomOrder : uint32_t {};
-/// Un bloque inalcanzable: no esta en el arbol y no tiene instante.
-static constexpr SrDomOrder SR_NO_DOM_ORDER = SrDomOrder(0xFFFFFFFFu);
 
 /// Cual de los hijos de un bloque en el arbol de dominadores toca visitar.
 enum SrChildPos : uint32_t {};
-
-/// Un paso pendiente al numerar el arbol de dominadores.
-struct SrDomWalk {
-    IrBlockId block;
-    SrChildPos next_child;
-};
-
-struct SrDom {
-    size_t N = 0;
-    IrBlockId UNDEF = IrBlockId(0);
-    std::vector<std::vector<IrBlockId>> preds, succs;
-    std::vector<IrBlockId> idom;                      ///< inmediato dominador
-    std::vector<std::vector<IrBlockId>> df;           ///< dominance frontier
-    std::vector<std::vector<IrBlockId>> dom_children; ///< hijos en el dom-tree
-    util::NamedVector<uint8_t, scratch::Reachable> reachable; ///< desde entry
-    /// Numeracion del arbol de dominadores: cuando se ENTRA y cuando se SALE de
-    /// cada bloque en un recorrido en profundidad.  Un bloque inalcanzable no
-    /// esta en el arbol y queda en @c SR_NO_DOM_ORDER.
-    util::NamedVector<SrDomOrder, scratch::DomPre> dom_pre;
-    util::NamedVector<SrDomOrder, scratch::DomPost> dom_post;
-
-    /**
-     * @brief Si @p T domina a @p B, en tiempo CONSTANTE.
-     *
-     * T domina a B exactamente cuando B cae dentro del subarbol de T, y eso es
-     * que el recorrido entra en B despues que en T y sale antes.
-     *
-     * Antes se subia por la cadena de dominadores inmediatos desde B, que es
-     * O(profundidad del arbol).  En una funcion con mucho codigo inlinado el
-     * arbol es casi una cadena -- profundidad del orden de los bloques --, y
-     * esta consulta se hace por cada arista al buscar bucles: cuadratico.
-     */
-    bool dominates(IrBlockId T, IrBlockId B) const {
-        if (T == B) return true;
-        if (T >= N || B >= N) return false;
-        if (dom_pre[T] == SR_NO_DOM_ORDER || dom_pre[B] == SR_NO_DOM_ORDER)
-            return false;
-        return dom_pre[T] <= dom_pre[B] && dom_post[B] <= dom_post[T];
-    }
-};
-
-/**
- * @brief Computa CFG + dominadores (Cooper-Harvey-Kennedy) + dominance frontier
- *        (Cytron) + dom-tree para @p fn.  Convencion: bloque 0 = entry.
- */
-SrDom sr_compute_dom(const IrFunction &fn) {
-    SrDom d;
-    const size_t N = fn.blocks.size();
-    d.N = N;
-    d.UNDEF = static_cast<IrBlockId>(N);
-    d.preds.assign(N, {});
-    d.succs.assign(N, {});
-    d.idom.assign(N, d.UNDEF);
-    d.df.assign(N, {});
-    d.dom_children.assign(N, {});
-    d.reachable.assign(N, 0);
-    if (N == 0) return d;
-
-    /* CFG desde los terminadores. */
-    for (size_t b = 0; b < N; ++b) {
-        const auto &bb = fn.blocks[b];
-        if (bb.instrs.empty()) continue;
-        const auto &last = bb.instrs.back();
-        IrBlockId t1 = IR_NO_BLOCK, t2 = IR_NO_BLOCK;
-        if (last.op == IrOp::BR) {
-            t1 = last.target_block;
-        } else if (last.op == IrOp::BR_COND) {
-            t1 = last.target_block;
-            t2 = last.false_block;
-        }
-        if (t1 != IR_NO_BLOCK && t1 < N) {
-            d.preds[t1].push_back((IrBlockId)b);
-            d.succs[b].push_back(t1);
-        }
-        if (t2 != IR_NO_BLOCK && t2 < N) {
-            d.preds[t2].push_back((IrBlockId)b);
-            d.succs[b].push_back(t2);
-        }
-    }
-
-    const IrBlockId entry = IrBlockId(0);
-    /* Reverse postorder via DFS iterativo (evita stack overflow en CFGs
-     * grandes). */
-    std::vector<IrBlockId> rpo;
-    {
-        util::NamedVector<uint8_t, scratch::BlockVisited> vis(N, 0);
-        std::vector<std::pair<IrBlockId, size_t>> st; /* (bloque, idx_succ) */
-        st.push_back({entry, 0});
-        vis[entry] = 1;
-        d.reachable[entry] = 1;
-        std::vector<IrBlockId> post;
-        while (!st.empty()) {
-            auto &top = st.back();
-            if (top.second < d.succs[top.first].size()) {
-                IrBlockId s = d.succs[top.first][top.second++];
-                if (s < N && !vis[s]) {
-                    vis[s] = 1;
-                    d.reachable[s] = 1;
-                    st.push_back({s, 0});
-                }
-            } else {
-                post.push_back(top.first);
-                st.pop_back();
-            }
-        }
-        rpo.assign(post.rbegin(), post.rend());
-    }
-    util::NamedVector<uint32_t, scratch::RpoPos> rpo_pos(N, UINT32_MAX);
-    for (size_t i = 0; i < rpo.size(); ++i)
-        rpo_pos[rpo[i]] = (uint32_t)i;
-
-    d.idom[entry] = entry;
-    auto intersect = [&](IrBlockId b1, IrBlockId b2) -> IrBlockId {
-        while (b1 != b2) {
-            while (b1 != d.UNDEF && rpo_pos[b1] > rpo_pos[b2])
-                b1 = d.idom[b1];
-            while (b2 != d.UNDEF && rpo_pos[b2] > rpo_pos[b1])
-                b2 = d.idom[b2];
-            if (b1 == d.UNDEF || b2 == d.UNDEF) return d.UNDEF;
-        }
-        return b1;
-    };
-    bool ch = true;
-    while (ch) {
-        ch = false;
-        for (IrBlockId b : rpo) {
-            if (b == entry) continue;
-            IrBlockId nd = d.UNDEF;
-            for (IrBlockId p : d.preds[b]) {
-                if (d.idom[p] != d.UNDEF) {
-                    nd = (nd == d.UNDEF) ? p : intersect(nd, p);
-                    if (nd == d.UNDEF) break;
-                }
-            }
-            if (nd != d.UNDEF && nd != d.idom[b]) {
-                d.idom[b] = nd;
-                ch = true;
-            }
-        }
-    }
-
-    /* Dom-tree children. */
-    for (IrBlockId b = IrBlockId(0); b < N; ++b) {
-        if (b != entry && d.idom[b] != d.UNDEF)
-            d.dom_children[d.idom[b]].push_back(b);
-    }
-
-    /* Numerar el arbol: entrada y salida de cada bloque en un recorrido en
-     * profundidad.  Es lo que deja contestar "domina" en tiempo constante --
-     * ver @ref SrDom::dominates --.  Iterativo: una funcion con mucho codigo
-     * inlinado tiene un arbol casi en cadena, y una recursion por nivel
-     * desbordaria la pila del proceso. */
-    d.dom_pre.assign(N, SR_NO_DOM_ORDER);
-    d.dom_post.assign(N, SR_NO_DOM_ORDER);
-    {
-        uint32_t clock = 0; // cuantos instantes se han repartido
-        util::NamedVector<SrDomWalk, scratch::DomWalk> walk;
-        walk.push_back({entry, SrChildPos(0)});
-        d.dom_pre[entry] = SrDomOrder(clock++);
-        while (!walk.empty()) {
-            SrDomWalk &top = walk.back();
-            const auto &kids = d.dom_children[top.block];
-            if (top.next_child < kids.size()) {
-                const IrBlockId c = kids[top.next_child];
-                top.next_child = SrChildPos(top.next_child + 1);
-                d.dom_pre[c] = SrDomOrder(clock++);
-                /* `top` ya no se usa: apilar puede mover el vector. */
-                walk.push_back({c, SrChildPos(0)});
-            } else {
-                d.dom_post[top.block] = SrDomOrder(clock++);
-                walk.pop_back();
-            }
-        }
-    }
-
-    /* Dominance frontier (Cytron): por cada bloque b con >=2 preds, por cada
-     * pred p, sube en el dom-tree desde p hasta idom[b] añadiendo b al DF. */
-    for (IrBlockId b = IrBlockId(0); b < N; ++b) {
-        if (d.preds[b].size() < 2) continue;
-        for (IrBlockId p : d.preds[b]) {
-            IrBlockId runner = p;
-            while (runner != d.UNDEF && runner != d.idom[b]) {
-                d.df[runner].push_back(b);
-                if (d.idom[runner] == runner) break; /* entry */
-                runner = d.idom[runner];
-            }
-        }
-    }
-    return d;
-}
 
 /// Si un bloque es la cabecera de un bucle.
 enum SrLoopHeaderMark : uint8_t {
@@ -3569,7 +3368,12 @@ enum SrInLoopMark : uint8_t {
  * tamano de la funcion.
  */
 struct SrFnGraph {
-    SrDom dom;
+    /* Del grafo de TERMINADORES: aqui se colocan PHIs, y una PHI solo tiene
+     * argumento por las aristas de @c IrBlock::preds -- la de un `catch` no es
+     * una de ellas --.  Ver @ref analysis::DomFacts. */
+    analysis::DomFacts dom;
+    /// La frontera de dominancia: donde va una PHI si un bloque define algo.
+    analysis::BlockGraph df;
     util::NamedVector<SrLoopHeaderMark, scratch::LoopHeader> loop_header;
     util::NamedVector<SrInLoopMark, scratch::InLoop> in_loop;
 };
@@ -3581,7 +3385,8 @@ struct SrFnGraph {
  */
 SrFnGraph sr_fn_graph(const IrFunction &fn) {
     SrFnGraph g;
-    g.dom = sr_compute_dom(fn);
+    g.dom = analysis::compute_dom_facts(fn, ir::IrEdgeWant::TerminatorOnly);
+    g.df = analysis::compute_dominance_frontier(g.dom);
     const size_t N = fn.blocks.size();
     g.loop_header.assign(N, SR_NOT_LOOP_HEADER);
     g.in_loop.assign(N, SR_OUTSIDE_LOOP);
@@ -3863,7 +3668,7 @@ sr_materialize_inits(IrFunction &fn, const SrPromotion &p, SrObjState &o,
  */
 struct SrRenamer {
     const IrFunction &fn;
-    const SrDom &dom;
+    const analysis::DomFacts &dom;
     const SrAddrIndex &index;
     const std::vector<SrPromotion> &promos;
     bool stack_mode;
@@ -3922,8 +3727,13 @@ struct SrRenamer {
             }
             if (in.dst != IR_NO_VALUE && in.dst < repl.size()) repl[in.dst] = rv;
         }
-        for (IrBlockId s : dom.succs[b])
-            for (SrPhiSlot k = phi_off[s]; k < phi_off[s + 1];
+        /* Por ARISTA del terminador, repetidas incluidas -- dos ramas al mismo
+         * sitio son dos aristas para las PHI, y @c DomFacts las junta --.  En
+         * la pila: casi siempre son una o dos. */
+        ir::IrEdgeList edges;
+        fn.edges_of(b, ir::IrEdgeWant::TerminatorOnly, edges);
+        for (const ir::IrEdge &e : edges)
+            for (SrPhiSlot k = phi_off[e.to]; k < phi_off[e.to + 1];
                  k = SrPhiSlot(k + 1)) {
                 SrPhi &ph = phis[phi_at[k]];
                 SrObjState &o = objs[vars[ph.var].obj];
@@ -3970,7 +3780,7 @@ bool sr_mem2reg_batch(IrFunction &fn, const SrFnGraph &graph,
             p.reason = "VXA133";
         return false;
     }
-    const SrDom &dom = graph.dom;
+    const analysis::DomFacts &dom = graph.dom;
     const size_t nv0 = fn.values.size();
 
     /* 0) Una variable por cada (objeto, desplazamiento) distinto, y por cada
@@ -4075,7 +3885,7 @@ bool sr_mem2reg_batch(IrFunction &fn, const SrFnGraph &graph,
             }
             if (o.reason != nullptr) continue;
         }
-        if (o.seed_block >= N || !dom.reachable[o.seed_block]) {
+        if (o.seed_block >= N || !dom.reachable(o.seed_block)) {
             o.reason = "VXA138";
             continue;
         }
@@ -4107,8 +3917,8 @@ bool sr_mem2reg_batch(IrFunction &fn, const SrFnGraph &graph,
             }
         for (size_t wp = 0; wp < work.size() && o.reason == nullptr; ++wp) {
             const IrBlockId b = work[wp];
-            for (IrBlockId f : dom.df[b]) {
-                if (has_phi[f] == vi || !dom.reachable[f]) continue;
+            for (IrBlockId f : graph.df[b]) {
+                if (has_phi[f] == vi || !dom.reachable(f)) continue;
                 /* Solo en bloques DOMINADOS por la reserva: ahi el objeto
                  * existe en cada predecesor.  Un merge que no lo esta no puede
                  * leer el campo (seria SSA invalido): su phi estaria muerto. */
@@ -4159,7 +3969,7 @@ bool sr_mem2reg_batch(IrFunction &fn, const SrFnGraph &graph,
     walk.push_back(SrRenameStep{IrBlockId(0), SrChildPos(0), SrPushedPos(0)});
     while (!walk.empty()) {
         SrRenameStep &top = walk.back();
-        const std::vector<IrBlockId> &kids = dom.dom_children[top.block];
+        const analysis::BlockGraph::Row kids = dom.children_of(top.block);
         if (top.next_child < kids.size()) {
             const IrBlockId c = kids[top.next_child];
             top.next_child = SrChildPos(top.next_child + 1);
@@ -4850,8 +4660,10 @@ static bool sroa_stack_structs_impl(IrFunction &fn) {
     if (sroa_off) return false;
 
     // GUARD SOUND: si la funcion tiene control de excepcion LOCAL
-    // (TRYENTER/LANDINGPAD -> catch handler), el CFG de sr_compute_dom NO
-    // modela la arista implicita `try-region -> handler`.  Un campo escrito
+    // (TRYENTER/LANDINGPAD -> catch handler), el grafo con el que mem2reg
+    // coloca PHIs -- el de solo terminadores, @c SrFnGraph -- NO lleva la
+    // arista `try-region -> handler`, y no puede: una PHI solo recibe por las
+    // aristas de @c IrBlock::preds.  Un campo escrito
     // antes de un punto que puede lanzar y leido en el catch parece tener def
     // alcanzante por el edge normal, pero en el path de excepcion NO lo tiene
     // -> mem2reg produciria un valor equivocado en el handler.  Bail la fn
@@ -7263,7 +7075,13 @@ static bool fold_guarded_compares(IrFunction &fn) {
         }
     if (cmp_defs.empty()) return false;
 
-    SrDom d = sr_compute_dom(fn);
+    /* Con el grafo COMPLETO, aristas a los `catch` incluidas.  Aqui no se
+     * colocan PHIs, se razona sobre por donde se llega: un manejador al que
+     * tambien se entra saltando tiene DOS predecesores, y dar por buena la
+     * guarda del salto seria afirmarla en el camino de la excepcion, donde no
+     * se cumple.  Con el grafo de solo terminadores -- el que habia -- eso se
+     * colaba. */
+    const analysis::DomFacts d = analysis::compute_dom_facts(fn);
 
     // Predicado activo: relacion CIERTA sobre (a,b).
     struct Pred {
@@ -7283,12 +7101,12 @@ static bool fold_guarded_compares(IrFunction &fn) {
             IrBlockId b = stack.back();
             stack.pop_back();
             order.push_back(b);
-            for (IrBlockId c : d.dom_children[b])
+            for (IrBlockId c : d.children_of(b))
                 stack.push_back(c);
         }
     }
     for (IrBlockId b : order) {
-        if (b != 0 && d.idom[b] != d.UNDEF && d.idom[b] != b)
+        if (b != 0 && d.reachable(b) && d.idom[b] != b)
             active[b] = active[d.idom[b]]; // hereda del dominador inmediato
         // Guarda propia: unico predecesor P con br_cond sobre un CMP conocido.
         if (d.preds[b].size() != 1) continue;
@@ -10121,86 +9939,13 @@ static bool dse_impl(IrFunction &fn, const analysis::PointsTo *pt,
     return changed;
 }
 
-/**
- * @brief Mapa nombre-completo -> bloque, para resolver las referencias por
- *        NOMBRE que hace un @c LABEL_ADDR a un bloque de la propia funcion.
- *
- * La clave es la que compone @c emit_label_addr para un handler local:
- * `<funcion>_<bloque>`.  Los @c LABEL_ADDR que apuntan a funciones, lambdas o
- * destructores externos llevan el nombre de la funcion a secas, asi que no
- * entran en este mapa y no se confunden con un bloque.
- */
-static std::unordered_map<std::string, IrBlockId>
-bloques_por_nombre(const IrFunction &fn) {
-    std::unordered_map<std::string, IrBlockId> name2id;
-    for (size_t b = 0; b < fn.blocks.size(); ++b)
-        if (!fn.blocks[b].name.empty())
-            name2id.emplace(fn.name + "_" + fn.blocks[b].name,
-                            static_cast<IrBlockId>(b));
-    return name2id;
-}
-
-/**
- * @brief Sucesores REALES de un bloque, aristas implicitas incluidas.
- *
- * Un handler de `try/catch` no cuelga de ningun salto: se alcanza cuando salta
- * la excepcion, y lo unico que lo referencia es el @c LABEL_ADDR que el
- * @c tryenter guarda.  Esa arista es tan real como un @c br, y quien la ignora
- * da el handler por muerto.
- *
- * Estaba escrita solo en el reordenador de bloques.  El pase que borra lo
- * inalcanzable no la conocia, asi que en cuanto el inlinado le daba una razon
- * para volver a correr, se llevaba por delante el handler y dejaba el
- * @c tryenter apuntando a una etiqueta que ya no existia -- el enlazador
- * terminaba diciendo "simbolo no resuelto" y el programa no llegaba a
- * construirse.  Ahora la regla vive en un solo sitio y la usan los dos.
- *
- * @param fn      Funcion.
- * @param name2id Mapa de @c bloques_por_nombre.
- * @param b       Bloque del que se quieren los sucesores.
- * @param out     Se limpia y se rellena con los sucesores.
- */
-static void
-sucesores_de(const IrFunction &fn,
-             const std::unordered_map<std::string, IrBlockId> &name2id,
-             size_t b, std::vector<IrBlockId> &out) {
-    out.clear();
-    if (b >= fn.blocks.size() || fn.blocks[b].instrs.empty()) return;
-    /* Se miran TODAS las instrucciones, no solo la ultima.  Un bloque bien
-     * formado tiene su salto al final, pero los que salen de un `asm` llevan un
-     * `br` en medio seguido del propio bloque de ensamblador; quedarse con la
-     * ultima instruccion da ese salto por inexistente y su destino, por muerto.
-     * Contar de mas solo conserva un bloque que quiza sobra; contar de menos
-     * borra uno que hace falta. */
-    for (const IrInstr &ins : fn.blocks[b].instrs) {
-        switch (ins.op) {
-        case IrOp::LABEL_ADDR: {
-            auto it = name2id.find(ins.func_name);
-            if (it != name2id.end() && it->second != b)
-                out.push_back(it->second);
-            break;
-        }
-        case IrOp::BR:
-            if (ins.target_block != IR_NO_BLOCK)
-                out.push_back(ins.target_block);
-            break;
-        case IrOp::BR_COND:
-            if (ins.target_block != IR_NO_BLOCK)
-                out.push_back(ins.target_block);
-            if (ins.false_block != IR_NO_BLOCK) out.push_back(ins.false_block);
-            break;
-        case IrOp::SWITCH_DENSE:
-            /* El default va en target_block y un caso por entrada en
-             * jump_targets[]: omitirlos deja los bloques del match colgando. */
-            if (ins.target_block != IR_NO_BLOCK)
-                out.push_back(ins.target_block);
-            for (IrBlockId s : ins.jump_targets)
-                if (s != IR_NO_BLOCK) out.push_back(s);
-            break;
-        default: break;
-        }
-    }
-}
+/* Los sucesores de un bloque salen de @c IrFunction::edges_of con
+ * @c IrEdgeWant::All, la UNICA regla de aristas del intermedio: mira todas las
+ * instrucciones (los bloques que salen de un `asm` llevan un `br` en medio) y
+ * da la arista al handler de cada @c tryenter.  Aqui habia una copia que
+ * encontraba el handler buscando por NOMBRE la etiqueta del @c LABEL_ADDR; el
+ * verificador (VX7047) exige ahora que ese nombre y el bloque del
+ * @c tryenter hablen del mismo handler, asi que basta con el bloque. */
 
 static bool unreachable_impl(IrFunction &fn) {
     if (fn.blocks.empty()) return false;
@@ -10209,9 +9954,7 @@ static bool unreachable_impl(IrFunction &fn) {
     util::NamedVector<bool, scratch::Unreachable> reachable(nblocks, false);
 
     // BFS desde el bloque de entrada (bloque 0)
-    const std::unordered_map<std::string, IrBlockId> name2id =
-        bloques_por_nombre(fn);
-    std::vector<IrBlockId> succs;
+    IrEdgeList edges;
     std::queue<IrBlockId> worklist;
     worklist.push(IrBlockId(0));
     reachable[0] = true;
@@ -10221,22 +9964,13 @@ static bool unreachable_impl(IrFunction &fn) {
         worklist.pop();
 
         if (bid >= nblocks) continue;
-        const IrBlock &bb = fn.blocks[bid];
 
-        // Los sucesores, con las mismas reglas que usa el reordenador: saltos,
-        // casos de un match, y el handler que solo nombra un LABEL_ADDR.
-        sucesores_de(fn, name2id, bid, succs);
-        for (IrBlockId s : succs) {
-            if (s < nblocks && !reachable[s]) {
-                reachable[s] = true;
-                worklist.push(s);
-            }
-        }
-        // Usar sucesores precalculados si existen
-        for (IrBlockId s : bb.succs) {
-            if (s < nblocks && !reachable[s]) {
-                reachable[s] = true;
-                worklist.push(s);
+        // Saltos (tambien los de en medio), casos de un match y handlers.
+        fn.edges_of(bid, IrEdgeWant::All, edges);
+        for (const IrEdge &e : edges) {
+            if (e.to < nblocks && !reachable[e.to]) {
+                reachable[e.to] = true;
+                worklist.push(e.to);
             }
         }
     }
@@ -10892,16 +10626,19 @@ static bool inline_loop_header_impl(IrFunction &fn) {
         // El cmp.dst debe ser el unico operand del BR_COND.
         if (h_last.operands.empty() || h_last.operands[0] != h_cmp.dst)
             continue;
-        // Contar predecesores de H.
+        // Contar los bloques que llegan a H, por la regla unica de aristas.
+        // Con el grafo COMPLETO: un `tryenter` que tenga H de handler, o un
+        // salto en medio de un bloque, tambien son entradas, y fusionar H en
+        // B las dejaria apuntando a un bloque vacio.
         int preds = 0;
+        IrEdgeList edges;
         for (size_t pi = 0; pi < fn.blocks.size(); ++pi) {
-            if (fn.blocks[pi].instrs.empty()) continue;
-            const IrInstr &pterm = fn.blocks[pi].instrs.back();
-            if (pterm.op == IrOp::BR && pterm.target_block == hid)
-                ++preds;
-            else if (pterm.op == IrOp::BR_COND &&
-                     (pterm.target_block == hid || pterm.false_block == hid))
-                ++preds;
+            fn.edges_of(IrBlockId(pi), IrEdgeWant::All, edges);
+            for (const IrEdge &e : edges)
+                if (e.to == hid) {
+                    ++preds; // cada bloque cuenta una vez
+                    break;
+                }
         }
         if (preds != 1) continue; // mas de 1 pred o 0 -> no fusionar
         // No tocar entry block: si H es entry, no podemos fusionarlo
@@ -11553,104 +11290,18 @@ static bool licm_impl(IrFunction &fn, const analysis::PointsTo *pt,
         return !ins.func_name.empty() && pure_callees->count(ins.func_name) > 0;
     };
 
-    /* Construir CFG: para cada bloque, sus sucesores y predecesores. */
-    std::vector<std::vector<IrBlockId>> preds(N);
-    std::vector<std::vector<IrBlockId>> succs(N);
-    for (size_t b = 0; b < N; ++b) {
-        const auto &bb = fn.blocks[b];
-        if (bb.instrs.empty()) continue;
-        const auto &last = bb.instrs.back();
-        IrBlockId t1 = IR_NO_BLOCK, t2 = IR_NO_BLOCK;
-        if (last.op == IrOp::BR) {
-            t1 = last.target_block;
-        } else if (last.op == IrOp::BR_COND) {
-            t1 = last.target_block;
-            t2 = last.false_block;
-        }
-        if (t1 != IR_NO_BLOCK && t1 < N) {
-            preds[t1].push_back(static_cast<IrBlockId>(b));
-            succs[b].push_back(t1);
-        }
-        if (t2 != IR_NO_BLOCK && t2 < N) {
-            preds[t2].push_back(static_cast<IrBlockId>(b));
-            succs[b].push_back(t2);
-        }
-    }
-
-    /* Dominadores via Cooper-Harvey-Kennedy iterativo.
-     * dom[entry] = entry, otros = UNDEF.  Procesar en reverse postorder
-     * hasta punto fijo.  intersect(b1, b2) sube en el dom-tree hasta
-     * encontrar el ancestro comun mas cercano. */
-    const IrBlockId UNDEF = static_cast<IrBlockId>(N);
-    const IrBlockId entry = IrBlockId(0); /* convencion: bloque 0 es entry */
-
-    /* DFS para reverse postorder. */
-    std::vector<IrBlockId> rpo;
-    rpo.reserve(N);
-    {
-        std::vector<bool> visited(N, false);
-        std::function<void(IrBlockId)> dfs = [&](IrBlockId b) {
-            if (b >= N || visited[b]) return;
-            visited[b] = true;
-            for (IrBlockId s : succs[b])
-                dfs(s);
-            rpo.push_back(b);
-        };
-        dfs(entry);
-        std::reverse(rpo.begin(), rpo.end());
-    }
-    /* rpo_pos[b] = posicion de b en rpo (mayor = mas adelante = mas alto).
-     * Usado por intersect_dom.  Bloques no alcanzables tienen UNDEF rpo_pos. */
-    util::NamedVector<uint32_t, scratch::RpoPos> rpo_pos(N, UINT32_MAX);
-    for (size_t i = 0; i < rpo.size(); ++i)
-        rpo_pos[rpo[i]] = static_cast<uint32_t>(i);
-
-    /* idom[b] = inmediato dominador.  UNDEF = no computado todavia. */
-    std::vector<IrBlockId> idom(N, UNDEF);
-    idom[entry] = entry;
-
-    auto intersect_dom = [&](IrBlockId b1, IrBlockId b2) -> IrBlockId {
-        while (b1 != b2) {
-            while (b1 != UNDEF && rpo_pos[b1] > rpo_pos[b2])
-                b1 = idom[b1];
-            while (b2 != UNDEF && rpo_pos[b2] > rpo_pos[b1])
-                b2 = idom[b2];
-            if (b1 == UNDEF || b2 == UNDEF) return UNDEF;
-        }
-        return b1;
-    };
-
-    bool dom_changed = true;
-    while (dom_changed) {
-        dom_changed = false;
-        for (IrBlockId b : rpo) {
-            if (b == entry) continue;
-            IrBlockId new_idom = UNDEF;
-            for (IrBlockId p : preds[b]) {
-                if (idom[p] != UNDEF) {
-                    new_idom =
-                        (new_idom == UNDEF) ? p : intersect_dom(new_idom, p);
-                    if (new_idom == UNDEF) break;
-                }
-            }
-            if (new_idom != UNDEF && new_idom != idom[b]) {
-                idom[b] = new_idom;
-                dom_changed = true;
-            }
-        }
-    }
-
-    /* Helper: T domina B?  Camina la cadena idom desde B hasta entry o T. */
-    auto dominates = [&](IrBlockId T, IrBlockId B) -> bool {
-        if (T == B) return true;
-        if (T >= N || B >= N || idom[B] == UNDEF) return false;
-        IrBlockId cur = B;
-        while (idom[cur] != cur) {
-            cur = idom[cur];
-            if (cur == T) return true;
-        }
-        return false;
-    };
+    /* El grafo y los dominadores, de @c DomFacts, del grafo de TERMINADORES:
+     * es el que tenia aqui escrito.  Aqui habia una copia entera -- el RPO por
+     * RECURSION a traves de un `std::function`, que en una funcion de miles de
+     * bloques desborda la pila, y un "domina" que subia la cadena de
+     * dominadores por cada arista, cuadratico con el codigo que deja el
+     * inliner --.  Una diferencia, a favor: dos ramas del mismo salto a la
+     * cabecera eran dos predecesores iguales, y abajo contaban como "varios
+     * pre-headers"; ahora es uno. */
+    const analysis::DomFacts dom =
+        analysis::compute_dom_facts(fn, ir::IrEdgeWant::TerminatorOnly);
+    const analysis::BlockGraph &preds = dom.preds;
+    const analysis::BlockGraph &succs = dom.succs;
 
     /* Back-edge real: arista B->T donde T domina a B. */
     struct BackEdge {
@@ -11660,7 +11311,7 @@ static bool licm_impl(IrFunction &fn, const analysis::PointsTo *pt,
     std::vector<BackEdge> backs;
     for (size_t b = 0; b < N; ++b) {
         for (IrBlockId s : succs[b]) {
-            if (dominates(s, static_cast<IrBlockId>(b))) {
+            if (dom.dominates(s, static_cast<IrBlockId>(b))) {
                 backs.push_back({static_cast<IrBlockId>(b), s});
             }
         }
@@ -12719,53 +12370,23 @@ static bool speculative_devirt_impl(IrFunction &fn,
 static void reorder_blocks_rpo(IrFunction &fn) {
     const size_t N = fn.blocks.size();
     if (N <= 1) return;
-    /* Los sucesores salen de `sucesores_de`, que ya incluye la arista implicita
-     * del LABEL_ADDR al handler de un try/catch.  Sin esa arista el handler
-     * queda inalcanzable en el recorrido y el orden inverso lo empuja AL
-     * PRINCIPIO, desplazando al bloque de entrada de la posicion 0 -- se
-     * empezaria a ejecutar por el bloque equivocado. */
-    const std::unordered_map<std::string, IrBlockId> name2id =
-        bloques_por_nombre(fn);
-    auto succs_of = [&](size_t b, std::vector<IrBlockId> &out) {
-        sucesores_de(fn, name2id, b, out);
-    };
-    std::vector<std::vector<IrBlockId>> sc(N);
-    for (size_t b = 0; b < N; ++b)
-        succs_of(b, sc[b]);
-    std::vector<int> state(N, 0); // 0=sin visitar, 1=en pila, 2=hecho
-    std::vector<IrBlockId> post;
-    post.reserve(N);
-    std::vector<std::pair<size_t, size_t>> stk; // (bloque, indice de sucesor)
-    stk.push_back({0, 0});
-    state[0] = 1;
-    while (!stk.empty()) {
-        auto &top = stk.back();
-        if (top.second < sc[top.first].size()) {
-            const IrBlockId s = sc[top.first][top.second++];
-            if (s < N && state[s] == 0) {
-                state[s] = 1;
-                stk.push_back({static_cast<size_t>(s), 0});
-            }
-        } else {
-            post.push_back(static_cast<IrBlockId>(top.first));
-            state[top.first] = 2;
-            stk.pop_back();
-        }
-    }
-    // Nuevo orden fisico: RPO de los ALCANZABLES (= reverse del post-order,
-    // deja el entry SIEMPRE en la posicion 0) seguido de los bloques no
-    // alcanzables al FINAL.  Antes se hacia post.push_back(inalcanzable) y
-    // luego reverse(post) -> los inalcanzables quedaban AL PRINCIPIO,
-    // desplazando el entry de la posicion 0 (el interprete/emisor arrancaban
-    // por el bloque equivocado -> resultados corruptos en funciones con
-    // cualquier bloque que succs_of no alcanzara).
+    /* El RPO es el de los dominadores, sobre el grafo COMPLETO: incluye la
+     * arista de cada `tryenter` a su handler.  Sin ella el handler queda
+     * inalcanzable en el recorrido y, si se colocara delante, desplazaria al
+     * bloque de entrada de la posicion 0 -- se empezaria a ejecutar por el
+     * bloque equivocado. */
+    const analysis::DomFacts dom = analysis::compute_dom_facts(fn);
+    // Nuevo orden fisico: RPO de los ALCANZABLES (deja el entry SIEMPRE en la
+    // posicion 0) seguido de los bloques no alcanzables al FINAL.  Ponerlos
+    // delante desplazaba el entry y el interprete/emisor arrancaban por el
+    // bloque equivocado.
     std::vector<IrBlockId> order;
     order.reserve(N);
-    for (size_t i = 0; i < post.size(); ++i)
-        order.push_back(post[post.size() - 1 - i]);
+    for (IrBlockId b : dom.rpo)
+        order.push_back(b);
     size_t unreachable = 0;
     for (size_t b = 0; b < N; ++b)
-        if (state[b] != 2) {
+        if (!dom.reachable(IrBlockId(b))) {
             order.push_back(static_cast<IrBlockId>(b));
             ++unreachable;
         }

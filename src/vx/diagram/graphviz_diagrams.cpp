@@ -1120,6 +1120,12 @@ void render_ir_function(std::ostringstream &os, const ir::IrFunction &fn,
         case ir::IrEdgeKind::Exception:
             emit_edge(os, src, dst, "exc", EdgeKind::Dashed, "#b91c1c");
             break;
+        case ir::IrEdgeKind::SwitchDefault:
+            emit_edge(os, src, dst, "default");
+            break;
+        case ir::IrEdgeKind::SwitchCase:
+            emit_edge(os, src, dst, "case");
+            break;
         }
     }
 

@@ -2179,6 +2179,21 @@ else ()
     target_link_libraries(test_loop_facts PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
 endif ()
 
+# DomFacts: el grafo de bloques y los dominadores en UN sitio, y la regla unica
+# de aristas del IR.  Oraculo: dominadores de libro sobre conjuntos, en miles de
+# funciones al azar (incluidas irreducibles y con `catch`).
+add_executable(test_dom_facts tests/analysis/test_dom_facts.cpp)
+target_include_directories(test_dom_facts PRIVATE ${VM_INCLUDES})
+target_link_libraries(test_dom_facts PRIVATE vx_lib vmcore sqlite3 capstone keystone aot_emit)
+if(VESTA_BUILD_PREPROCESSOR)
+    target_link_libraries(test_dom_facts PRIVATE vpp_lib)
+endif()
+if (WIN32)
+    target_link_libraries(test_dom_facts PRIVATE vesta_openssl ws2_32 synchronization)
+else ()
+    target_link_libraries(test_dom_facts PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
+endif ()
+
 add_executable(test_rbank_loop_adapter tests/jit/test_rbank_loop_adapter.cpp)
 target_include_directories(test_rbank_loop_adapter PRIVATE ${VM_INCLUDES})
 target_link_libraries(test_rbank_loop_adapter PRIVATE vx_lib vmcore sqlite3 capstone keystone aot_emit)

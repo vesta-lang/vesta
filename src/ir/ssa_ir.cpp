@@ -2133,27 +2133,15 @@ std::vector<IrEdge> ir_cfg_edges(const IrFunction &fn) {
      * todos; los `br.cond` anaden la segunda y los `try` son raros. */
     out.reserve(fn.blocks.size());
 
-    const IrBlockId n = static_cast<IrBlockId>(fn.blocks.size());
-    for (const auto &bb : fn.blocks) {
-        /* El `tryenter` va en MEDIO del bloque, asi que hay que recorrerlo.  No
-         * cuesta una pasada extra: el terminador es el ultimo de este mismo
-         * recorrido, y el destino del manejador ya viene resuelto en
-         * `target_block` -- no hay ningun nombre que buscar. */
-        for (const auto &ins : bb.instrs) {
-            if (ins.op == IrOp::TRYENTER && ins.target_block < n)
-                out.push_back({bb.id, ins.target_block, IrEdgeKind::Exception});
-        }
-        if (bb.instrs.empty()) continue;
-        const IrInstr &term = bb.instrs.back();
-        if (term.op == IrOp::BR) {
-            if (term.target_block < n)
-                out.push_back({bb.id, term.target_block, IrEdgeKind::Uncond});
-        } else if (term.op == IrOp::BR_COND) {
-            if (term.target_block < n)
-                out.push_back({bb.id, term.target_block, IrEdgeKind::True});
-            if (term.false_block < n)
-                out.push_back({bb.id, term.false_block, IrEdgeKind::False});
-        }
+    /* Bloque a bloque, por la regla de UN sitio (@ref IrFunction::edges_of).
+     * Aqui estaba escrita otra vez, y a esta copia le faltaban los
+     * `SWITCH_DENSE`: un `match` compilado a tabla salia en los diagramas sin
+     * sus aristas. */
+    IrEdgeList edges;
+    for (size_t b = 0; b < fn.blocks.size(); ++b) {
+        fn.edges_of(static_cast<IrBlockId>(b), IrEdgeWant::All, edges);
+        for (const IrEdge &e : edges)
+            out.push_back(e);
     }
     return out;
 }
@@ -2165,10 +2153,61 @@ std::vector<IrEdge> ir_cfg_edges(const IrFunction &fn) {
 /**
  * @brief Verifica que el modulo esta en forma SSA correcta.
  */
+/**
+ * @brief Que cada `tryenter` lleve su manejador UNA sola vez, dicho igual.
+ *
+ * El manejador aparece dos veces: como bloque (@c target_block, lo que ve
+ * quien camina el grafo -- @c IrFunction::edges_of --) y como direccion con
+ * nombre (el @c LABEL_ADDR de su primer operando, lo que ejecuta la maquina).
+ * Varias copias de la regla de aristas resolvian el nombre en vez del bloque;
+ * para dejar UNA, la que mira el bloque, esto tiene que ser cierto siempre, y
+ * se comprueba en vez de suponerlo.
+ *
+ * @param fn     Funcion a comprobar.
+ * @param errors Donde anotar lo que no cuadre, con el texto del catalogo.
+ * @return true si todos cuadran.
+ */
+static bool verify_tryenter_handlers(const IrFunction &fn,
+                                     std::vector<std::string> &errors) {
+    /* El nombre al que apunta cada valor definido por un LABEL_ADDR. */
+    std::vector<const std::string *> label_of(fn.values.size(), nullptr);
+    bool any_try = false;
+    for (const IrBlock &bb : fn.blocks)
+        for (const IrInstr &in : bb.instrs) {
+            if (in.op == IrOp::LABEL_ADDR && in.dst < label_of.size())
+                label_of[in.dst] = &in.func_name;
+            if (in.op == IrOp::TRYENTER) any_try = true;
+        }
+    if (!any_try) return true;
+    bool ok = true;
+    for (const IrBlock &bb : fn.blocks)
+        for (const IrInstr &in : bb.instrs) {
+            if (in.op != IrOp::TRYENTER || in.operands.empty()) continue;
+            const IrValueId pc = in.operands[0];
+            /* Un manejador que no sale de un LABEL_ADDR no tiene nombre que
+             * comparar: ahi solo cuenta el bloque. */
+            if (pc >= label_of.size() || label_of[pc] == nullptr) continue;
+            const std::string want =
+                in.target_block < fn.blocks.size()
+                    ? fn.name + "_" + fn.blocks[in.target_block].name
+                    : std::string("?");
+            if (*label_of[pc] == want) continue;
+            errors.push_back(vx::diag::format(
+                "VX7047", {fn.name, bb.name,
+                           in.target_block < fn.blocks.size()
+                               ? fn.blocks[in.target_block].name
+                               : std::string("?"),
+                           *label_of[pc]}));
+            ok = false;
+        }
+    return ok;
+}
+
 bool ir_verify(const IrModule &mod, std::vector<std::string> &errors) {
     bool ok = true;
 
     for (const auto &fn : mod.functions) {
+        if (!verify_tryenter_handlers(fn, errors)) ok = false;
         // conjunto de valores definidos (SSA: cada uno exactamente una vez)
         std::unordered_map<IrValueId, int> def_count;
         for (const auto &v : fn.values)
@@ -2282,28 +2321,78 @@ bool ir_verify_if_asked(const IrModule &mod, const char *stage,
     return false;
 }
 
-void IrFunction::recompute_succs_of(IrBlockId b) {
+/// Anade la arista @p from -> @p to si @p to es un bloque de la funcion.  Un
+/// destino fuera no es una arista: lo dejaria colgando quien construyo mal la
+/// instruccion, y aqui no se inventa.
+static inline void push_edge(IrEdgeList &out, IrBlockId from, IrBlockId to,
+                             size_t n_blocks, IrEdgeKind kind,
+                             uint32_t case_index = 0) {
+    if (to != IR_NO_BLOCK && to < n_blocks)
+        out.push_back(IrEdge{from, to, kind, case_index});
+}
+
+/// Las aristas de UN salto (BR, BR_COND o SWITCH_DENSE), en su orden.  Nada si
+/// @p in no salta.
+static inline void push_jump_edges(IrEdgeList &out, IrBlockId b,
+                                   const IrInstr &in, size_t N) {
+    if (in.op == IrOp::BR) {
+        push_edge(out, b, in.target_block, N, IrEdgeKind::Uncond);
+    } else if (in.op == IrOp::BR_COND) {
+        push_edge(out, b, in.target_block, N, IrEdgeKind::True);
+        push_edge(out, b, in.false_block, N, IrEdgeKind::False);
+    } else if (in.op == IrOp::SWITCH_DENSE) {
+        push_edge(out, b, in.target_block, N, IrEdgeKind::SwitchDefault);
+        for (size_t i = 0; i < in.jump_targets.size(); ++i)
+            push_edge(out, b, in.jump_targets[i], N, IrEdgeKind::SwitchCase,
+                      static_cast<uint32_t>(i));
+    }
+}
+
+void IrFunction::edges_of(IrBlockId b, IrEdgeWant want,
+                          IrEdgeList &out) const {
+    out.clear();
     const size_t N = blocks.size();
     if (b >= N) return;
+    const IrBlock &blk = blocks[b];
+    if (blk.instrs.empty()) return;
+    const size_t last = blk.instrs.size() - 1;
+    if (want == IrEdgeWant::All) {
+        for (size_t i = 0; i < last; ++i) {
+            const IrInstr &in = blk.instrs[i];
+            /* Las de excepcion: el manejador de cada `TRYENTER`.  No es un
+             * terminador -- el bloque sigue --, asi que puede estar en
+             * cualquier sitio.  Se ancla en el `tryenter` y no en el `throw`:
+             * lanzar lo puede hacer cualquier instruccion protegida, y lo que
+             * el `tryenter` dice es exacto -- a partir de aqui, lo que se
+             * lance acaba alli --. */
+            if (in.op == IrOp::TRYENTER) {
+                push_edge(out, b, in.target_block, N, IrEdgeKind::Exception);
+                continue;
+            }
+            /* Y los saltos que NO estan al final.  Un bloque bien formado no
+             * los tiene, pero los que salen de elevar un `asm` llevan un `br`
+             * en medio seguido del propio ensamblador, y la marca
+             * `SWITCH_DENSE` de un `match` va delante de su cadena de
+             * comparaciones.  Quien analiza tiene que verlos: una arista de
+             * mas solo hace afirmar menos, una de menos da por muerto -- o
+             * por dominado -- un bloque que no lo esta. */
+            push_jump_edges(out, b, in, N);
+        }
+    }
+    /* Las del terminador, en su orden: las unicas que ve quien coloca PHIs. */
+    push_jump_edges(out, b, blk.instrs[last], N);
+}
+
+void IrFunction::recompute_succs_of(IrBlockId b) {
+    if (b >= blocks.size()) return;
     IrBlock &blk = blocks[b];
     blk.succs.clear();
-    if (blk.instrs.empty()) return;
-    const IrInstr &t = blk.instrs.back();
-    /* Un destino fuera de la funcion no es una arista: lo dejaria colgando
-     * quien construyo mal el terminador, y aqui no se inventa. */
-    auto add = [&](IrBlockId s) {
-        if (s != IR_NO_BLOCK && s < N) blk.succs.push_back(s);
-    };
-    if (t.op == IrOp::BR) {
-        add(t.target_block);
-    } else if (t.op == IrOp::BR_COND) {
-        add(t.target_block);
-        add(t.false_block);
-    } else if (t.op == IrOp::SWITCH_DENSE) {
-        add(t.target_block);
-        for (IrBlockId s : t.jump_targets)
-            add(s);
-    }
+    /* Sin las de excepcion: de estas aristas cuelgan los argumentos de las
+     * PHI, y un manejador no los recibe por aqui. */
+    IrEdgeList edges;
+    edges_of(b, IrEdgeWant::TerminatorOnly, edges);
+    for (const IrEdge &e : edges)
+        blk.succs.push_back(e.to);
 }
 
 void IrFunction::recompute_edges() {

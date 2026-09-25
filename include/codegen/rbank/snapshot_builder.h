@@ -82,13 +82,15 @@ struct SnapshotBuilder {
     }
 
     /** @brief Cierra las DEPENDENCIAS: Values->{Liveness,Loops};
-     * Profile->Loops. */
+     * Profile->Loops; Loops->Dom. */
     static uint32_t resolve(uint32_t e) noexcept {
         if (e & static_cast<uint32_t>(Fact::Values))
             e |= static_cast<uint32_t>(Fact::Liveness) |
                  static_cast<uint32_t>(Fact::Loops);
         if (e & static_cast<uint32_t>(Fact::Profile))
             e |= static_cast<uint32_t>(Fact::Loops);
+        if (e & static_cast<uint32_t>(Fact::Loops))
+            e |= static_cast<uint32_t>(Fact::Dom);
         return e;
     }
 
@@ -100,6 +102,7 @@ struct SnapshotBuilder {
         s.prof = prof;
         // Forzar via los accessors lazy (computan + cachean + resuelven deps).
         if (has(e, Fact::Liveness)) (void)s.liveness();
+        if (has(e, Fact::Dom)) (void)s.dom_facts();
         if (has(e, Fact::Loops)) (void)s.loop_facts();
         if (has(e, Fact::Profile)) (void)s.profile_facts();
         if (has(e, Fact::Values)) (void)s.value_reqs();

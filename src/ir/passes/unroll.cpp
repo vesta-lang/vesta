@@ -53,59 +53,6 @@ struct LoopInfo {
     analysis::LoopTripInfo trip; // numero de iteraciones (si constante).
 };
 
-// Reconstruye preds/succs de TODA la funcion desde los terminadores.
-//
-// Ademas de las aristas normales (BR/BR_COND), preserva la arista de HANDLER:
-// un `tryenter %handler_pc` instala un bloque catch al que NO se salta por un
-// terminador (solo al lanzarse una excepcion).  Si no la anadieramos, el bloque
-// handler quedaria sin pred (huerfano) y un consumidor del CFG podria tratarlo
-// como muerto.  El handler_pc es un LABEL_ADDR cuyo @c func_name es el nombre
-// del bloque catch; se resuelve val -> nombre -> id y se anade `bloque_tryenter
-// -> bloque_handler`.
-void rebuild_cfg(IrFunction &fn) {
-    for (auto &b : fn.blocks) {
-        b.preds.clear();
-        b.succs.clear();
-    }
-    auto add_edge = [&](IrBlockId from, IrBlockId to) {
-        if (to == IR_NO_BLOCK || to >= fn.blocks.size()) return;
-        fn.blocks[from].succs.push_back(to);
-        fn.blocks[to].preds.push_back(from);
-    };
-
-    // val -> nombre de bloque (de cada LABEL_ADDR) y nombre de bloque -> id.
-    std::unordered_map<IrValueId, std::string> label_of_val;
-    std::unordered_map<std::string, IrBlockId> block_by_name;
-    for (size_t bi = 0; bi < fn.blocks.size(); ++bi) {
-        block_by_name[fn.blocks[bi].name] = (IrBlockId)bi;
-        for (const IrInstr &in : fn.blocks[bi].instrs)
-            if (in.op == IrOp::LABEL_ADDR && in.dst != IR_NO_VALUE &&
-                !in.func_name.empty())
-                label_of_val[in.dst] = in.func_name;
-    }
-
-    for (size_t bi = 0; bi < fn.blocks.size(); ++bi) {
-        const auto &instrs = fn.blocks[bi].instrs;
-        if (instrs.empty()) continue;
-        const IrInstr &t = instrs.back();
-        if (t.op == IrOp::BR) {
-            add_edge((IrBlockId)bi, t.target_block);
-        } else if (t.op == IrOp::BR_COND) {
-            add_edge((IrBlockId)bi, t.target_block);
-            add_edge((IrBlockId)bi, t.false_block);
-        }
-        // Arista de handler: tryenter %handler_pc -> bloque catch.
-        for (const IrInstr &in : instrs) {
-            if (in.op != IrOp::TRYENTER || in.operands.empty()) continue;
-            auto lv = label_of_val.find(in.operands[0]);
-            if (lv == label_of_val.end()) continue;
-            auto bn = block_by_name.find(lv->second);
-            if (bn != block_by_name.end()) add_edge((IrBlockId)bi, bn->second);
-        }
-        // RET/THROW/UNREACHABLE/TAILCALL/etc.: sin sucesores normales.
-    }
-}
-
 // Ensambla los HECHOS de un bucle innermost en @p out.  Toda la logica de
 // analisis vive en analysis/facts; aqui solo se piden los hechos y se agregan.
 bool analyze_loop(const IrFunction &fn, const analysis::LoopFacts &lf,
@@ -352,11 +299,9 @@ static bool unroll_impl(IrFunction &fn, int factor,
     if (unroll_disabled()) return false;
     if (fn.blocks.size() < 3) return false;
 
-    // NO se reconstruye el CFG de la funcion aqui: rebuild_cfg solo mira los
-    // terminadores y perderia las aristas de handler (tryenter -> bloque
-    // catch), dejando el bloque handler sin pred y expuesto a que un pase
-    // posterior lo borre.  detect_loop_structure calcula los preds del header
-    // localmente.
+    // NO se reconstruye el CFG de la funcion al entrar: detect_loop_structure
+    // calcula los preds del header localmente.  Al salir, si hubo cambios,
+    // recompute_edges deja preds/succs por la regla unica del intermedio.
 
     /* Lo PRIMERO, lo que decide si hay algo que hacer: sin bucles no hay nada
      * que desenrollar, asi que preparar antes las tablas era recorrer la
@@ -533,7 +478,7 @@ static bool unroll_impl(IrFunction &fn, int factor,
         }();
         (void)registered;
     }
-    if (changed) rebuild_cfg(fn);
+    if (changed) fn.recompute_edges();
     return changed;
 }
 

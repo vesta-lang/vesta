@@ -9,15 +9,13 @@
  * @file analysis/facts/loop_facts.cpp
  * @brief Implementacion de @c compute_loop_facts (ver loop_facts.h).
  *
- * CFG desde terminadores -> dominadores (Cooper-Harvey-Kennedy) -> back-edges
- * -> cuerpos de bucle (BFS inverso) -> profundidad por bloque.  Mismo algoritmo
- * canonico que SROA/LICM usaban por separado, ahora unificado.
+ * Dominadores (de @c DomFacts, ya no calculados aqui) -> back-edges -> cuerpos
+ * de bucle (BFS inverso) -> profundidad por bloque.
  */
 
 #include "analysis/facts/loop_facts.h"
 
-#include "util/alloc/small_vector.h" // los vecinos de un bloque, sin reservar
-#include "util/named_alloc.h"        // que el perfil diga QUE es cada tabla
+#include "util/alloc/small_vector.h" // las tablas de trabajo, sin reservar
 
 #include <cstdint>
 #include <vector>
@@ -36,314 +34,17 @@ namespace {
 /**
  * @name Las tablas de este analisis, EN LA PILA
  *
- * Este fichero era, el solo, OCHO sitios de 168.007 reservas cada uno -- una
- * por tabla y siete visitas por funcion --: 1,34 millones, el 5% de todo lo
- * que reserva compilar.  Y ninguna era grande: casi todas de uno a veinticuatro
- * bytes, porque todas se dimensionan al numero de BLOQUES y una funcion normal
- * tiene unos pocos.
- *
- * Son estructuras de trabajo que nacen y mueren dentro de una llamada, asi que
- * ahora viven en la PILA mientras quepan.  @c kInlineBlocks es cuantos bloques
- * caben antes de tocar el monton; pasado eso crecen como cualquier vector y
- * todo sigue igual.
- *
- * LO QUE SE PIERDE, y se dice: tres de ellas llevaban etiqueta
- * (@c util::NamedVector) para que el perfil supiera cual era cual, porque
- * byte a byte son identicas a las otras ciento sesenta tablas de cuatro bytes
- * del arbol.  La etiqueta estaba para ENCONTRARLAS; encontradas y quitadas, lo
- * que queda es el resto de las funciones grandes.  Si ese resto llega a pesar,
- * la etiqueta vuelve.
+ * Todas se dimensionan al numero de BLOQUES o de BUCLES, y una funcion normal
+ * tiene pocos: viven en linea mientras quepan y solo despues tocan el monton.
+ * Cuando esto reservaba en el monton era, el solo, el 5 % de todas las
+ * reservas de compilar.
  * @{
  */
-
-/// Bloques que caben en la pila antes de que una tabla toque el monton.
-/// Ocho cubre la funcion normal; el `main` de un programa de verdad no, y por
-/// eso las tablas siguen sabiendo crecer.
-constexpr size_t kInlineBlocks = 8;
-
-/**
- * @brief Los vecinos de UN bloque, con los dos primeros dentro de la tabla.
- *
- * Dos, porque eso es lo que tiene un bloque: el que sigue y el del salto.
- */
-using Neighbors = util::SmallVector<IrBlockId, 2>;
-/// Bloque -> su numero de postorden.
-using PostorderNums = util::SmallVector<uint32_t, kInlineBlocks>;
-/// Una lista de bloques: el postorden, su inverso, una pila de recorrido.
+/// Lo mismo que usa @c DomFacts: la misma funcion normal cabe en las dos.
+constexpr size_t kInlineBlocks = kDomInlineBlocks;
+/// Una lista de bloques: cabeceras, latches, cuerpos, una pila de recorrido.
 using BlockList = util::SmallVector<IrBlockId, kInlineBlocks>;
 /// @}
-
-/**
- * @brief El grafo de bloques, en DOS tablas contiguas en vez de una por
- *        bloque.
- *
- * Los vecinos del bloque `b` son `edges[offs[b] .. offs[b+1])`.  Antes esto
- * era un vector de vectores, y ahi cada bloque pagaba SU reserva la primera
- * vez que se le anadia un vecino: el grafo de una funcion costaba tantas
- * reservas como bloques, dos veces -- sucesores y predecesores --.
- *
- * Ademas de no reservar, se recorre en orden: los vecinos de todos los bloques
- * estan seguidos en memoria, que es lo que pide la regla de estructuras del
- * proyecto para un camino que se pasa la vida mirando tablas.
- */
-struct Graph {
-    /// Donde empieza cada bloque dentro de @c edges.  Tiene N+1 entradas.
-    util::SmallVector<uint32_t, kInlineBlocks + 1> offs;
-    /// Los vecinos de todos los bloques, seguidos.
-    util::SmallVector<IrBlockId, kInlineBlocks * 2> edges;
-
-    /// Cuantos bloques hay.
-    size_t size() const noexcept { return offs.empty() ? 0 : offs.size() - 1; }
-
-    /// Los vecinos de UN bloque, como algo que se puede recorrer e indexar.
-    struct Row {
-        const IrBlockId *first;
-        const IrBlockId *last;
-        const IrBlockId *begin() const noexcept { return first; }
-        const IrBlockId *end() const noexcept { return last; }
-        size_t size() const noexcept {
-            return static_cast<size_t>(last - first);
-        }
-        IrBlockId operator[](size_t i) const noexcept { return first[i]; }
-    };
-
-    Row operator[](size_t b) const noexcept {
-        const IrBlockId *base = edges.begin();
-        return Row{base + offs[b], base + offs[b + 1]};
-    }
-};
-
-/** @brief Anade @p t a @p v si es un bloque valido y no estaba ya. */
-void add_neighbor(Neighbors &v, IrBlockId t, size_t N) {
-    if (t == ir::IR_NO_BLOCK || static_cast<size_t>(t) >= N) return;
-    for (IrBlockId x : v)
-        if (x == t) return; // dedup
-    v.push_back(t);
-}
-
-/** @brief Sucesores de cada bloque, tomados de los terminadores. */
-Graph build_succs(const IrFunction &fn) {
-    const size_t N = fn.blocks.size();
-    Graph succs;
-    succs.offs.assign(N + 1, 0);
-    // Los vecinos del bloque en curso se juntan aqui -- hace falta para
-    // deduplicar -- y esta fila se REUSA entre bloques, asi que el
-    // almacenamiento en linea se paga una vez y no una por bloque.
-    Neighbors row;
-    for (size_t b = 0; b < N; ++b) {
-        row.clear();
-        for (const ir::IrInstr &ins : fn.blocks[b].instrs) {
-            add_neighbor(row, ins.target_block, N);
-            add_neighbor(row, ins.false_block, N);
-            for (uint32_t jt : ins.jump_targets)
-                add_neighbor(row, static_cast<IrBlockId>(jt), N);
-        }
-        for (IrBlockId s : row)
-            succs.edges.push_back(s);
-        succs.offs[b + 1] = static_cast<uint32_t>(succs.edges.size());
-    }
-    return succs;
-}
-
-/** @brief Predecesores = inversa de los sucesores. */
-Graph build_preds(const Graph &succs) {
-    const size_t N = succs.size();
-    Graph preds;
-    // Contar cuantos predecesores tiene cada bloque, en offs[b+1]...
-    preds.offs.assign(N + 1, 0);
-    for (size_t b = 0; b < N; ++b)
-        for (IrBlockId s : succs[b])
-            preds.offs[static_cast<size_t>(s) + 1]++;
-    // ...y convertir las cuentas en donde empieza cada uno.
-    for (size_t b = 0; b < N; ++b)
-        preds.offs[b + 1] += preds.offs[b];
-    preds.edges.resize(preds.offs[N], IrBlockId(0));
-    // Cursor por bloque: cuantos lleva colocados ya.
-    util::SmallVector<uint32_t, kInlineBlocks> placed(N, 0);
-    for (size_t b = 0; b < N; ++b)
-        for (IrBlockId s : succs[b]) {
-            const size_t si = static_cast<size_t>(s);
-            preds.edges[preds.offs[si] + placed[si]++] =
-                static_cast<IrBlockId>(b);
-        }
-    return preds;
-}
-
-/**
- * @brief Numeracion postorden por DFS desde @p entry (iterativo).
- * @param po      salida: po[b] = numero postorden, o UINT32_MAX si
- * inalcanzable.
- * @param rpo     salida: bloques en reverse-postorden (solo alcanzables).
- */
-void compute_rpo(const Graph &succs, IrBlockId entry, PostorderNums &po,
-                 BlockList &rpo) {
-    const size_t N = succs.size();
-    po.assign(N, UINT32_MAX);
-    // Bloques ya vistos por el recorrido en profundidad.
-    util::SmallVector<uint8_t, kInlineBlocks> visited(N, 0);
-    BlockList order; // postorden
-    // DFS iterativo con pila de (nodo, indice de sucesor).  Un struct propio y
-    // no un `std::pair`, que no es trivialmente copiable y esta tabla se mueve
-    // con `memcpy`.
-    struct Visit {
-        IrBlockId block; ///< donde esta el recorrido.
-        uint32_t next;   ///< por que sucesor suyo va.
-    };
-    util::SmallVector<Visit, kInlineBlocks> stk;
-    if (static_cast<size_t>(entry) >= N) return;
-    visited[entry] = 1;
-    stk.push_back({entry, 0});
-    while (!stk.empty()) {
-        Visit &top = stk.back();
-        if (top.next < succs[top.block].size()) {
-            IrBlockId s = succs[top.block][top.next++];
-            if (!visited[s]) {
-                visited[s] = 1;
-                stk.push_back({s, 0});
-            }
-        } else {
-            order.push_back(top.block);
-            stk.pop_back();
-        }
-    }
-    uint32_t n = 0;
-    for (IrBlockId b : order)
-        po[b] = n++;
-    // RPO = orden inverso del postorden.  A mano y no con iteradores inversos,
-    // que esta tabla no tiene: copiar del final al principio es lo mismo.
-    rpo.clear();
-    rpo.reserve(order.size());
-    for (size_t i = order.size(); i-- > 0;)
-        rpo.push_back(order[i]);
-}
-
-/**
- * @brief El dominador comun mas cercano de @p a y @p b, subiendo por @p idom.
- *
- * Numeros de postorden mas ALTOS = mas cerca de la entrada en RPO; se sube por
- * el que este mas lejos hasta que se encuentran.
- */
-IrBlockId idom_intersect(const BlockList &idom, const PostorderNums &po,
-                         IrBlockId a, IrBlockId b) {
-    while (a != b) {
-        while (po[a] < po[b])
-            a = idom[a];
-        while (po[b] < po[a])
-            b = idom[b];
-    }
-    return a;
-}
-
-/** @brief idom via CHK.  idom[b] = IR_NO_BLOCK si inalcanzable. */
-BlockList compute_idom(const Graph &preds, const PostorderNums &po,
-                       const BlockList &rpo, IrBlockId entry) {
-    const size_t N = preds.size();
-    BlockList idom(N, ir::IR_NO_BLOCK);
-    if (rpo.empty()) return idom;
-    idom[entry] = entry;
-
-    bool changed = true;
-    while (changed) {
-        changed = false;
-        for (IrBlockId b : rpo) {
-            if (b == entry) continue;
-            IrBlockId new_idom = ir::IR_NO_BLOCK;
-            for (IrBlockId p : preds[b]) {
-                if (idom[p] == ir::IR_NO_BLOCK)
-                    continue; // pred aun sin procesar
-                new_idom = (new_idom == ir::IR_NO_BLOCK)
-                               ? p
-                               : idom_intersect(idom, po, p, new_idom);
-            }
-            if (new_idom != ir::IR_NO_BLOCK && idom[b] != new_idom) {
-                idom[b] = new_idom;
-                changed = true;
-            }
-        }
-    }
-    return idom;
-}
-
-/// Instante en que el recorrido del arbol de dominadores entra o sale de un
-/// bloque.
-enum DomTick : uint32_t {};
-/// Un bloque inalcanzable: no esta en el arbol.
-constexpr DomTick NO_DOM_TICK = DomTick(0xFFFFFFFFu);
-/// Posicion en la lista aplanada de hijos del arbol.
-enum DomChildSlot : uint32_t {};
-
-/**
- * @brief El arbol de dominadores numerado: cuando se ENTRA y cuando se SALE de
- *        cada bloque en un recorrido en profundidad.
- *
- * Existe para contestar "domina" en tiempo CONSTANTE.  Antes se subia por la
- * cadena de dominadores inmediatos desde el bloque, y esa pregunta se hace por
- * cada arista al buscar bucles: con el codigo que deja el inliner el arbol es
- * casi una cadena, y eso era aristas por profundidad.
- */
-struct DomNumbering {
-    util::SmallVector<DomTick, kInlineBlocks> pre, post;
-
-    /// @p a domina a @p b: @p b cae dentro del subarbol de @p a.
-    bool dominates(IrBlockId a, IrBlockId b) const {
-        if (pre[a] == NO_DOM_TICK || pre[b] == NO_DOM_TICK) return false;
-        return pre[a] <= pre[b] && post[b] <= post[a];
-    }
-};
-
-/// Un paso pendiente del recorrido que numera el arbol.
-struct DomWalkStep {
-    IrBlockId block;
-    DomChildSlot next; ///< siguiente hijo por visitar.
-};
-
-/** @brief Numera el arbol de dominadores dado por @p idom (iterativo). */
-DomNumbering number_dom_tree(const BlockList &idom, IrBlockId entry) {
-    const size_t N = idom.size();
-    DomNumbering d;
-    d.pre.assign(N, NO_DOM_TICK);
-    d.post.assign(N, NO_DOM_TICK);
-    if (N == 0 || idom[entry] == ir::IR_NO_BLOCK) return d;
-    /* Los hijos de cada bloque, contiguos. */
-    util::SmallVector<DomChildSlot, kInlineBlocks + 1> off(N + 1,
-                                                          DomChildSlot(0));
-    for (size_t b = 0; b < N; ++b)
-        if (IrBlockId(b) != entry && idom[b] != ir::IR_NO_BLOCK)
-            off[idom[b] + 1] = DomChildSlot(off[idom[b] + 1] + 1);
-    for (size_t b = 0; b < N; ++b)
-        off[b + 1] = DomChildSlot(off[b + 1] + off[b]);
-    BlockList kids;
-    kids.resize(off[N], IrBlockId(0));
-    {
-        util::SmallVector<DomChildSlot, kInlineBlocks> next(N, DomChildSlot(0));
-        for (size_t b = 0; b < N; ++b)
-            next[b] = off[b];
-        for (size_t b = 0; b < N; ++b)
-            if (IrBlockId(b) != entry && idom[b] != ir::IR_NO_BLOCK) {
-                const IrBlockId p = idom[b];
-                kids[next[p]] = IrBlockId(b);
-                next[p] = DomChildSlot(next[p] + 1);
-            }
-    }
-    uint32_t clock = 0; // instantes repartidos
-    util::SmallVector<DomWalkStep, kInlineBlocks> walk;
-    d.pre[entry] = DomTick(clock++);
-    walk.push_back({entry, off[entry]});
-    while (!walk.empty()) {
-        DomWalkStep &top = walk.back();
-        if (top.next < off[top.block + 1]) {
-            const IrBlockId c = kids[top.next];
-            top.next = DomChildSlot(top.next + 1);
-            d.pre[c] = DomTick(clock++);
-            /* `top` ya no se usa: apilar puede mover la tabla. */
-            walk.push_back({c, off[c]});
-        } else {
-            d.post[top.block] = DomTick(clock++);
-            walk.pop_back();
-        }
-    }
-    return d;
-}
 
 /// Indice de un bucle mientras se construyen.
 enum LoopIdx : uint32_t {};
@@ -361,6 +62,13 @@ struct BackEdge {
 } // namespace
 
 LoopFacts compute_loop_facts(const IrFunction &fn) {
+    /* Sin base a la que preguntar: se calculan aqui.  Quien tenga la base
+     * pide los dominadores por ella y llama a la otra forma, para que no se
+     * calculen dos veces. */
+    return compute_loop_facts(fn, compute_dom_facts(fn));
+}
+
+LoopFacts compute_loop_facts(const IrFunction &fn, const DomFacts &dom) {
     const size_t N = fn.blocks.size();
     LoopFacts f;
     f.loop_depth.assign(N, 0);
@@ -369,14 +77,8 @@ LoopFacts compute_loop_facts(const IrFunction &fn) {
     f.loop_id.assign(N, LoopFacts::NO_LOOP);
     if (N == 0) return f;
 
-    const IrBlockId entry = IrBlockId(0);
-    auto succs = build_succs(fn);
-    auto preds = build_preds(succs);
-    PostorderNums po;
-    BlockList rpo;
-    compute_rpo(succs, entry, po, rpo);
-    auto idom = compute_idom(preds, po, rpo, entry);
-    const DomNumbering dom = number_dom_tree(idom, entry);
+    const BlockGraph &succs = dom.succs;
+    const BlockGraph &preds = dom.preds;
 
     /* Aristas de retroceso (b -> h con h dominando b).  Cada cabecera es UN
      * bucle, numerado en el orden en que aparece su primera arista. */

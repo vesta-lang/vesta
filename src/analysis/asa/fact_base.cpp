@@ -54,6 +54,7 @@ const char *const kProducerEscape = "asa.escape";
 const char *const kProducerLayout = "asa.layout";
 const char *const kProducerAsmFlow = "asa.asm_flow";
 const char *const kProducerBoundary = "asa.boundary";
+const char *const kProducerDominators = "asa.dominators";
 const char *const kProducerLoops = "asa.loops";
 const char *const kProducerBulkMemory = "asa.bulk_memory";
 const char *const kProducerCodeOrigin = "asa.code_origin";
@@ -129,6 +130,7 @@ void register_asa_canonical_names() {
         register_canonical_name(kProducerLayout);
         register_canonical_name(kProducerAsmFlow);
         register_canonical_name(kProducerBoundary);
+        register_canonical_name(kProducerDominators);
         register_canonical_name(kProducerLoops);
         register_canonical_name(kProducerBulkMemory);
         register_canonical_name(kProducerBackend);
@@ -607,15 +609,51 @@ AddressSpaces FactBase::address_spaces_from_store_(const ir::IrFunction &fn,
     return computed;
 }
 
+namespace {
+
+/// Calcula los dominadores de una funcion.  Con nombre y no como lambda: quien
+/// construye sale asi en el perfil.
+struct DominatorsBuild {
+    const ir::IrFunction &fn;
+    DomFacts operator()() const { return compute_dom_facts(fn); }
+};
+
+/// Calcula los bucles de una funcion con sus dominadores, ya pedidos a la
+/// base.
+struct LoopsBuild {
+    const ir::IrFunction &fn;
+    const DomFacts &dom;
+    LoopFacts operator()() const { return compute_loop_facts(fn, dom); }
+};
+
+} // namespace
+
+const DomFacts &FactBase::dominators(const ir::IrFunction &fn,
+                                     const char *stage) {
+    ++queries_;
+    const std::string *key = key_of(fn, stage_or_default(stage));
+    const bool fresh = !manager_.cached_v<DominatorsAnalysis>(key, fn.version);
+    if (fresh) {
+        /* Demostrado: sale de la forma del grafo, sin punto fijo que pueda
+         * pararse ni aproximacion. */
+        mark(kProducerDominators, *key, Certainty::Proven);
+    }
+    return memoized<DominatorsAnalysis, DomFacts>(fresh, key, fn.version,
+                                                  DominatorsBuild{fn});
+}
+
 const LoopFacts &FactBase::loops(const ir::IrFunction &fn, const char *stage) {
     ++queries_;
     const std::string *key = key_of(fn, stage_or_default(stage));
     const bool fresh = !manager_.cached_v<LoopsAnalysis>(key, fn.version);
     if (fresh) {
-        mark(kProducerLoops, *key, Certainty::Proven);
+        mark(kProducerLoops, *key, Certainty::Proven, kProducerDominators);
     }
-    return memoized<LoopsAnalysis, LoopFacts>(
-        fresh, key, fn.version, [&fn]() { return compute_loop_facts(fn); });
+    /* Los dominadores FUERA de la factoria: pedirlos tambien es una consulta
+     * a la base, y dentro quedaria atada a que la factoria se ejecute. */
+    const DomFacts &dom = dominators(fn, stage);
+    return memoized<LoopsAnalysis, LoopFacts>(fresh, key, fn.version,
+                                              LoopsBuild{fn, dom});
 }
 
 const LoopIvBounds &FactBase::iv_bounds(const ir::IrFunction &fn,
@@ -819,6 +857,7 @@ void FactBase::invalidate(const ir::IrFunction &fn) {
     manager_.invalidate<IRFactsAnalysis>(key);
     manager_.invalidate<RangeAnalysis>(key);
     manager_.invalidate<MemoryAnalysis>(key);
+    manager_.invalidate<DominatorsAnalysis>(key);
     manager_.invalidate<LoopsAnalysis>(key);
     /* Y su sello con ellos: un hecho muerto que deja su procedencia atras hace
      * que el volcado afirme lo que ya no se sabe. */

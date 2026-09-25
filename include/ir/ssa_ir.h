@@ -1646,6 +1646,49 @@ inline bool ir_op_ends_block(IrOp op) noexcept {
 }
 
 /**
+ * @brief De que clase es una arista del grafo de flujo.
+ *
+ * Todas menos @c Exception las dice el TERMINADOR: son por las que se sigue
+ * cuando el bloque termina, las que guardan @c IrBlock::succs / @c preds y de
+ * las que depende que cada PHI tenga un argumento por predecesor.  La de
+ * @c Exception la abre un `TRYENTER` en medio del bloque y lleva al manejador
+ * si algo lanza por el camino: un analisis que camine el grafo tiene que
+ * verla, porque sin ella el bloque de un `catch` parece inalcanzable, se queda
+ * sin dominador y se da por muerto.
+ */
+enum class IrEdgeKind : uint8_t {
+    Uncond,        ///< @c BR: se pasa sin preguntar.
+    True,          ///< @c BR_COND, rama tomada.
+    False,         ///< @c BR_COND, rama no tomada.
+    Exception,     ///< se llega si algo LANZA dentro de la region protegida.
+    SwitchDefault, ///< @c SWITCH_DENSE, fuera de la tabla.
+    SwitchCase,    ///< @c SWITCH_DENSE, una entrada de la tabla.
+};
+
+/// Una arista: de donde, a donde y de que clase.
+struct IrEdge {
+    IrBlockId from;
+    IrBlockId to;
+    IrEdgeKind kind;
+    /// Solo @c SwitchCase: la posicion de la entrada en `jump_targets`, que es
+    /// lo que dice para que valor del selector se toma.  Va en la arista y no
+    /// se cuenta fuera porque un destino invalido no da arista, y contarlas
+    /// descolocaria todas las que vienen detras.  Cero en las demas.
+    uint32_t case_index;
+};
+
+/// Que aristas se piden.  Existe por COSTE: las del terminador salen de la
+/// ultima instruccion y las de excepcion exigen recorrer el bloque entero, asi
+/// que quien solo quiere las primeras no debe pagar las segundas.
+enum class IrEdgeWant : uint8_t {
+    TerminatorOnly, ///< solo el ultimo salto: O(1).  Las aristas de las PHI.
+    All, ///< todo lo que salta, en cualquier sitio: O(instrucciones del bloque).
+};
+
+/// Las aristas de UN bloque: casi siempre una o dos, asi que en la pila.
+using IrEdgeList = util::SmallVector<IrEdge, 4>;
+
+/**
  * @brief Bloque basico de la CFG (Control Flow Graph).
  *
  * Un bloque basico es una secuencia lineal de instrucciones con una
@@ -2479,6 +2522,33 @@ struct IrFunction {
      * @param b Bloque cuyos sucesores rehacer.
      */
     void recompute_succs_of(IrBlockId b);
+
+    /**
+     * @brief TODOS los destinos de control del bloque @p b, con su clase.
+     *
+     * LA regla de a donde se puede ir desde un bloque.  Estaba escrita CUATRO
+     * veces y no coincidian dos: @ref recompute_succs_of no veia el `catch`
+     * de un `TRYENTER` (a proposito), los bucles si, y @ref ir_cfg_edges --
+     * los diagramas -- no veia los `SWITCH_DENSE`, con lo que un `match`
+     * compilado a tabla se dibujaba sin sus aristas.  Ahora las tres salen de
+     * aqui.
+     *
+     * Con @c IrEdgeWant::All se recorre el bloque entero: la @c Exception de
+     * cada `TRYENTER` y tambien los saltos que NO estan al final -- el `br`
+     * en medio que deja elevar un `asm`, la marca `SWITCH_DENSE` que va
+     * delante de su cadena de comparaciones --, en su orden.  Es lo que
+     * necesita quien ANALIZA: una arista de mas solo hace afirmar menos, una
+     * de menos da por muerto un bloque que no lo esta.  Despues, siempre, las
+     * del ULTIMO (BR: destino; BR_COND: cierto, falso; SWITCH_DENSE: defecto y
+     * la tabla), SIN quitar repetidos: con @c TerminatorOnly son las unicas, y
+     * son las de @c IrBlock::succs, de las que cuelgan las PHI.  Un destino
+     * fuera de la funcion no es una arista y no sale.
+     *
+     * @param b    Bloque.
+     * @param want Que aristas: sin @c All no recorre el bloque.
+     * @param out  Se vacia y se llena.
+     */
+    void edges_of(IrBlockId b, IrEdgeWant want, IrEdgeList &out) const;
 
     /**
      * @brief Anade una instruccion al bloque indicado.
@@ -3354,23 +3424,9 @@ bool ir_verify(const IrModule &mod, std::vector<std::string> &errors);
 bool ir_verify_if_asked(const IrModule &mod, const char *stage,
                         const std::string &file);
 
-/// De que clase es una arista del grafo de flujo.
-enum class IrEdgeKind : uint8_t {
-    Uncond,    ///< @c BR: se pasa sin preguntar.
-    True,      ///< @c BR_COND, rama tomada.
-    False,     ///< @c BR_COND, rama no tomada.
-    Exception, ///< se llega si algo LANZA dentro de la region protegida.
-};
-
-/// Una arista: de donde, a donde y de que clase.
-struct IrEdge {
-    IrBlockId from;
-    IrBlockId to;
-    IrEdgeKind kind;
-};
-
 /**
- * @brief El grafo de flujo de @p fn, entero.
+ * @brief El grafo de flujo de @p fn, entero.  (@c IrEdgeKind / @c IrEdge estan
+ *        arriba, junto a @c IrBlock: @c IrFunction::edges_of los necesita.)
  *
  * POR QUE EXISTE, Y POR QUE LO PIDE TODO EL MUNDO AQUI.  Recorrer los bloques
  * mirando el terminador es tres lineas, y por eso cada consumidor se las

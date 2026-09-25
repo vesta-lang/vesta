@@ -146,37 +146,9 @@ LoopStructureIndex build_loop_structure_index(const ir::IrFunction &fn,
     }
 
     /* Predecesores desde los terminadores, cada uno una vez aunque salte dos
-     * veces al mismo bloque. */
-    ix.pred_off.assign(nb + 1, LoopListSlot(0));
-    for (int pass = 0; pass < 2; ++pass) {
-        util::NamedVector<LoopListSlot, scratch::LoopPredOffsets> next;
-        if (pass == 1) {
-            loop_prefix_sum(ix.pred_off);
-            ix.preds.resize(ix.pred_off[nb]);
-            next.assign(ix.pred_off.begin(), ix.pred_off.end() - 1);
-        }
-        for (size_t p = 0; p < nb; ++p) {
-            const auto &pins = fn.blocks[p].instrs;
-            if (pins.empty()) continue;
-            const IrInstr &t = pins.back();
-            IrBlockId to[2] = {IR_NO_BLOCK, IR_NO_BLOCK};
-            if (t.op == IrOp::BR) {
-                to[0] = t.target_block;
-            } else if (t.op == IrOp::BR_COND) {
-                to[0] = t.target_block;
-                if (t.false_block != t.target_block) to[1] = t.false_block;
-            }
-            for (IrBlockId s : to) {
-                if (s >= nb) continue;
-                if (pass == 0) {
-                    ix.pred_off[s + 1] = LoopListSlot(ix.pred_off[s + 1] + 1);
-                } else {
-                    ix.preds[next[s]] = IrBlockId(p);
-                    next[s] = LoopListSlot(next[s] + 1);
-                }
-            }
-        }
-    }
+     * veces al mismo bloque: el grafo de la regla unica, al reves. */
+    ix.preds = invert_block_graph(
+        block_successors(fn, ir::IrEdgeWant::TerminatorOnly));
 
     /* Loop-closed SSA: un valor definido en el CUERPO de un bucle -- su nivel,
      * sin la cabecera -- no puede usarse en un bloque de fuera.  Se mira cada
@@ -354,9 +326,7 @@ LoopStructure detect_loop_structure(const ir::IrFunction &fn,
     // Preheader: unico pred del header FUERA del bucle.  Los predecesores son
     // los de los terminadores (no los de fn.blocks[].preds, que un pase previo
     // pudo dejar obsoletos), y los tiene el indice.
-    for (LoopListSlot s = index.pred_off[H]; s < index.pred_off[H + 1];
-         s = LoopListSlot(s + 1)) {
-        const IrBlockId p = index.preds[s];
+    for (IrBlockId p : index.preds[H]) {
         if (st.contains(p)) continue;
         if (st.preheader != IR_NO_BLOCK)
             return loop_bail(st, "loop.two_entries"); // >1 entrada.

@@ -667,6 +667,13 @@ es = "la llamada a '{0}' pasa {1} argumentos por la convencion de la plataforma,
 en = "the intermediate form does not hold up at '{0}': {1} problems in '{2}'"
 es = "el intermedio no se sostiene en '{0}': {1} problemas en '{2}'"
 
+# Un `tryenter` lleva su manejador DOS veces: como bloque (lo que ve quien
+# camina el grafo) y como direccion con nombre (lo que ejecuta la maquina).
+# Si no coinciden, un analisis razona sobre un `catch` y se ejecuta otro.
+[VX7047]
+en = "function '{0}', block '{1}': the tryenter goes to handler block '{2}' but its handler address names '{3}'"
+es = "funcion '{0}', bloque '{1}': el tryenter va al bloque manejador '{2}' pero su direccion de manejador nombra '{3}'"
+
 # --- diagramas (VX7050-VX7059) ---
 
 [VX7050]

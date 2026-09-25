@@ -160,6 +160,7 @@
 
 #include "analysis/asa/fact.h"
 #include "analysis/facts/ir_facts.h"
+#include "analysis/facts/dom_facts.h"
 #include "analysis/facts/loop_facts.h"
 #include "analysis/facts/loop_iv_bounds.h"
 #include "analysis/facts/range_summary.h"
@@ -227,6 +228,10 @@ extern const char *const kProducerEffects;
 /// en una variable local; cuesta un punto fijo sobre el modulo entero.
 extern const char *const kProducerEscape;
 extern const char *const kProducerBoundary;
+/// El grafo de bloques y sus dominadores: lo que casi todo analisis de flujo
+/// pide antes que nada.  Productor propio y no parte de los bucles, que ahora
+/// lo CONSUMEN como los demas.
+extern const char *const kProducerDominators;
 extern const char *const kProducerLoops;
 /// Como se COLOCA la memoria del programa: lo unico que un compilador con
 /// enlazador propio sabe y uno tradicional no.
@@ -481,7 +486,25 @@ class FactBase {
                                         const char *stage = nullptr);
 
     /**
+     * @brief El grafo de bloques de @p fn y sus DOMINADORES.
+     *
+     * Lo piden los bucles, y lo pediran el motor de rangos, las relaciones y
+     * la escalarizacion: se calcula UNA vez por funcion y momento y lo
+     * comparten todos.  Demostrado: sale de la forma del grafo, sin punto fijo
+     * que pueda pararse ni aproximacion.
+     *
+     * @param fn Funcion IR a consultar.
+     * @return Los dominadores, cacheados mientras viva la base.
+     */
+    const DomFacts &dominators(const ir::IrFunction &fn,
+                               const char *stage = nullptr);
+
+    /**
      * @brief Forma del CFG de @p fn: bucles, cabeceras y profundidad.
+     *
+     * Los dominadores los pide POR LA BASE: asi se comparten y una
+     * invalidacion arrastra a los dos.
+     *
      * @param fn Funcion IR a consultar.
      * @return Los hechos de bucle, cacheados mientras viva la base.
      */

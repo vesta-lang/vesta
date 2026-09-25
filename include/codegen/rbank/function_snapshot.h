@@ -99,6 +99,7 @@
  *        |-- liveness()                       [Liveness]  compute_liveness
  *        |     '-- block_liveness()           [BlockLive] compute_block_liveness
  *        |-- loop_facts()                    [Loops]     compute_loop_facts
+ *        |     '-- dom_facts()                [Dom]       compute_dom_facts
  *        |-- profile_facts()                  [Profile]
  *        |     '-- loop_facts()   (cache hit)
  *        '-- call positions <- liveness()   (cache hit)
@@ -116,6 +117,7 @@
  *   Fact      value_type                   productor           capa
  *   -------   --------------------------   -----------------   ----------
  *   BlockLive ir::BlockLiveness            compute_block_live  STRUCTURAL
+ *   Dom       analysis::DomFacts           compute_dom_facts   STRUCTURAL
  *   Liveness  ir::LivenessResult           compute_liveness    DERIVED
  *   Loops     analysis::LoopFacts          compute_loop_facts  DERIVED
  *   Profile   analysis::ProfileFacts       compute_profile..   DERIVED
@@ -125,9 +127,9 @@
  * Pendientes con MODULO ya existente en @c analysis/ (solo falta registrar su
  * @c QueryProducer + su celda para consultarlos por aqui): PointsTo + alias
  * (@c analysis/memory/), EscapeInfo (@c analysis/escape/), SemanticEffects
- * (@c analysis/effects/), MachineCostFacts (@c analysis/hw/).  Pendientes POR
- * construir: DomFacts (extraer del optimizer) y next-use / UseDef (habilita
- * seleccion de victima estilo Belady).  Cada uno = una celda + un
+ * (@c analysis/effects/), MachineCostFacts (@c analysis/hw/).  (DomFacts ya
+ * esta: se extrajo del optimizador y es la celda @c dom.)  Cada uno = una
+ * celda + un
  * @c QueryProducer; ni @c query<T>() ni los consumidores se tocan.
  *
  * ESCALADO (mismo modelo mental, sin cambiarlo; cada nivel cuando tenga
@@ -183,8 +185,9 @@ enum class Fact : uint32_t {
         1u << 4, ///< RematFacts (Tipo A, IR-driven: recomputabilidad + receta).
     UseDef = 1u << 5, ///< UseDefFacts (Tipo A, IR-driven: next-use por valor).
     BlockLive = 1u << 6, ///< Vivos por bloque (Tipo A; de ellos sale Liveness).
-    // Futuro: Dom = 1u<<7, Alias = 1u<<8, Escape = 1u<<9, Memory = 1u<<10, ...
-    All = Liveness | Loops | Profile | Values | Remat | UseDef | BlockLive,
+    Dom = 1u << 7, ///< Grafo y dominadores (Tipo A; de ellos salen los bucles).
+    // Futuro: Alias = 1u<<8, Escape = 1u<<9, Memory = 1u<<10, ...
+    All = Liveness | Loops | Profile | Values | Remat | UseDef | BlockLive | Dom,
 };
 
 /**
@@ -246,8 +249,10 @@ struct FunctionSnapshot {
         remat; ///< Tipo A (recomputabilidad + receta).
     LazyFact<analysis::UseDefFacts> use_def; ///< Tipo A (next-use por valor).
     LazyFact<ir::BlockLiveness> block_live;  ///< Tipo A (vivos por bloque).
-    // Futuro: LazyFact<analysis::DomFacts> dom;  LazyFact<analysis::AliasFacts>
-    // alias; ...
+    /// Tipo A: grafo y dominadores, del grafo de ANALISIS (con los `catch`).
+    /// Los bucles salen de aqui, asi que pedir los dos los calcula una vez.
+    LazyFact<analysis::DomFacts> dom;
+    // Futuro: LazyFact<analysis::AliasFacts> alias; ...
 
     /** @brief True si el hecho @p f ya esta materializado en su celda. */
     bool is_computed(Fact f) const noexcept {
@@ -259,6 +264,7 @@ struct FunctionSnapshot {
         case Fact::Remat: return remat.ready();
         case Fact::UseDef: return use_def.ready();
         case Fact::BlockLive: return block_live.ready();
+        case Fact::Dom: return dom.ready();
         default: return false;
         }
     }
@@ -293,6 +299,10 @@ struct FunctionSnapshot {
     /** @brief Intervalos de vida. */
     const ir::LivenessResult &liveness() const {
         return query<ir::LivenessResult>();
+    }
+    /** @brief Grafo y dominadores. */
+    const analysis::DomFacts &dom_facts() const {
+        return query<analysis::DomFacts>();
     }
     /** @brief LoopFacts. */
     const analysis::LoopFacts &loop_facts() const {
@@ -406,6 +416,11 @@ inline const LazyFact<ir::BlockLiveness> &
 FunctionSnapshot::cell<ir::BlockLiveness>() const {
     return block_live;
 }
+template <>
+inline const LazyFact<analysis::DomFacts> &
+FunctionSnapshot::cell<analysis::DomFacts>() const {
+    return dom;
+}
 
 // ---------------------------------------------------------------------------
 //  Productores registrados por tipo (QueryProducer<T>): AQUI vive el ALGORITMO.
@@ -423,9 +438,17 @@ template <> struct QueryProducer<ir::LivenessResult> {
         return ir::compute_liveness(*s.fn, s.query<ir::BlockLiveness>());
     }
 };
+template <> struct QueryProducer<analysis::DomFacts> {
+    static analysis::DomFacts produce(const FunctionSnapshot &s) {
+        return analysis::compute_dom_facts(*s.fn);
+    }
+};
 template <> struct QueryProducer<analysis::LoopFacts> {
     static analysis::LoopFacts produce(const FunctionSnapshot &s) {
-        return analysis::compute_loop_facts(*s.fn);
+        /* Con los dominadores de la celda: quien pida los dos no los paga
+         * dos veces. */
+        return analysis::compute_loop_facts(*s.fn,
+                                            s.query<analysis::DomFacts>());
     }
 };
 template <> struct QueryProducer<analysis::ProfileFacts> {

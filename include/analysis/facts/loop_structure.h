@@ -19,6 +19,7 @@
 #ifndef ANALYSIS_FACTS_LOOP_STRUCTURE_H
 #define ANALYSIS_FACTS_LOOP_STRUCTURE_H
 
+#include "analysis/facts/dom_facts.h"
 #include "analysis/facts/loop_facts.h"
 #include "ir/ssa_ir.h"
 #include "util/named_alloc.h"
@@ -143,8 +144,6 @@ struct LoopMemberOffsets; ///< Bucle -> donde empiezan sus bloques.
 struct LoopMembers;       ///< Los bloques de cada bucle, anidados incluidos.
 struct LoopBodyOffsets;   ///< Bucle -> donde empieza su cuerpo.
 struct LoopBody;          ///< Los bloques del NIVEL de cada bucle.
-struct LoopPredOffsets;   ///< Bloque -> donde empiezan sus predecesores.
-struct LoopPreds;         ///< Los predecesores, sacados de los terminadores.
 struct LoopInnerCount;    ///< Bucle -> cuantos bucles tiene justo dentro.
 struct LoopEscapes;       ///< Bucle -> algun valor de su cuerpo se usa fuera.
 struct LoopDefBlock;      ///< Valor -> bloque que lo define.
@@ -184,8 +183,7 @@ struct LoopStructureIndex {
     util::NamedVector<ir::IrBlockId, scratch::LoopBody> body;
     /// Predecesores de cada bloque segun los terminadores, sin repetir.  No
     /// los de `IrBlock::preds`, que un pase previo pudo dejar obsoletos.
-    util::NamedVector<LoopListSlot, scratch::LoopPredOffsets> pred_off;
-    util::NamedVector<ir::IrBlockId, scratch::LoopPreds> preds;
+    BlockGraph preds;
     /// Cuantos bucles tiene cada uno justo dentro.
     util::NamedVector<LoopChildCount, scratch::LoopInnerCount> inner_count;
     /// Si algun valor de su cuerpo se usa fuera.

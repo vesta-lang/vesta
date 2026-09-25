@@ -607,68 +607,72 @@ struct Motor : Contexto {
     }
 
     // --- construccion del grafo ------------------------------------------
+    /// Registra @p a como saliente de su origen y entrante de su destino.
+    void anadir_arista(const Arista &a) {
+        const uint32_t id = static_cast<uint32_t>(aristas.size());
+        aristas.push_back(a);
+        salientes[a.desde].push_back(id);
+        entrantes[a.hasta].push_back(id);
+    }
+
+    /**
+     * @brief Las aristas de la funcion, cada una con lo que AFIRMA al tomarla.
+     *
+     * De donde a donde lo dice la regla unica del intermedio
+     * (@c IrFunction::edges_of); aqui solo se anade que se sabe al pasar por
+     * cada una: la condicion de un `br.cond`, o el caso de un `switch`.
+     *
+     * Con el grafo de los TERMINADORES, como siempre: la arista a un `catch`
+     * y los saltos de en medio de un bloque salen de un punto que no es el
+     * final del bloque, y el estado que aqui se propaga es el del final.
+     */
     void construir_aristas() {
         const size_t nb = fn.blocks.size();
+        ir::IrEdgeList edges;
         for (ir::IrBlockId bi = ir::IrBlockId(0); bi < nb; ++bi) {
-            if (fn.blocks[bi].instrs.empty()) continue;
+            fn.edges_of(bi, ir::IrEdgeWant::TerminatorOnly, edges);
+            if (edges.empty()) continue;
             const ir::IrInstr &t = fn.blocks[bi].instrs.back();
-            auto anadir_arista = [&](Arista a) {
-                if (a.hasta == ir::IR_NO_BLOCK || a.hasta >= nb) return;
-                const uint32_t id = static_cast<uint32_t>(aristas.size());
-                aristas.push_back(a);
-                salientes[bi].push_back(id);
-                entrantes[a.hasta].push_back(id);
-            };
-            auto anadir = [&](ir::IrBlockId d, ir::IrValueId c, bool r) {
+            const ir::IrValueId op0 =
+                t.operands.empty() ? ir::IR_NO_VALUE : t.operands[0];
+            /* Tabla densa: el brazo `idx` se toma cuando el selector vale
+             * exactamente `min + idx`, y el brazo por defecto cuando cae FUERA
+             * de toda la tabla.  El minimo viaja en los 32 bits bajos del
+             * inmediato (el bit 32 dice otra cosa: que la comprobacion de rango
+             * sobra porque la tabla cubre el enum entero). */
+            const uint64_t min = t.imm & 0xFFFFFFFFu;
+            const size_t n_cases = t.jump_targets.size();
+            for (const ir::IrEdge &e : edges) {
                 Arista a;
                 a.desde = bi;
-                a.hasta = d;
-                a.cond = c;
-                a.rama = r;
+                a.hasta = e.to;
+                switch (e.kind) {
+                case ir::IrEdgeKind::True:
+                    a.cond = op0;
+                    a.rama = true;
+                    break;
+                case ir::IrEdgeKind::False:
+                    a.cond = op0;
+                    a.rama = false;
+                    break;
+                case ir::IrEdgeKind::SwitchCase:
+                    a.sel = op0;
+                    a.dentro = true;
+                    a.caso_lo = min + e.case_index;
+                    a.caso_hi = min + e.case_index;
+                    break;
+                case ir::IrEdgeKind::SwitchDefault:
+                    /* Sin tabla, el defecto es un salto sin mas. */
+                    if (n_cases == 0) break;
+                    a.sel = op0;
+                    a.dentro = false;
+                    a.caso_lo = min;
+                    a.caso_hi = min + n_cases - 1;
+                    break;
+                case ir::IrEdgeKind::Uncond:
+                case ir::IrEdgeKind::Exception: break;
+                }
                 anadir_arista(a);
-            };
-            auto anadir_caso = [&](ir::IrBlockId d, ir::IrValueId sel,
-                                   bool dentro, uint64_t lo, uint64_t hi) {
-                Arista a;
-                a.desde = bi;
-                a.hasta = d;
-                a.sel = sel;
-                a.dentro = dentro;
-                a.caso_lo = lo;
-                a.caso_hi = hi;
-                anadir_arista(a);
-            };
-            if (t.op == IrOp::BR) {
-                anadir(t.target_block, ir::IR_NO_VALUE, true);
-            } else if (t.op == IrOp::BR_COND) {
-                const ir::IrValueId c =
-                    t.operands.empty() ? ir::IR_NO_VALUE : t.operands[0];
-                anadir(t.target_block, c, true);
-                anadir(t.false_block, c, false);
-            } else if (t.op == IrOp::SWITCH_DENSE) {
-                /* Tabla densa: el brazo `idx` se toma cuando el selector vale
-                 * exactamente `min + idx`, y el brazo por defecto cuando cae
-                 * FUERA de toda la tabla.  El minimo viaja en los 32 bits bajos
-                 * del inmediato (el bit 32 dice otra cosa: que la comprobacion
-                 * de rango sobra porque la tabla cubre el enum entero). */
-                const ir::IrValueId sel =
-                    t.operands.empty() ? ir::IR_NO_VALUE : t.operands[0];
-                const uint64_t min = t.imm & 0xFFFFFFFFu;
-                const size_t n = t.jump_targets.size();
-                for (size_t idx = 0; idx < n; ++idx)
-                    anadir_caso(t.jump_targets[idx], sel, true, min + idx,
-                                min + idx);
-                if (n > 0)
-                    anadir_caso(t.target_block, sel, false, min, min + n - 1);
-                else
-                    anadir(t.target_block, ir::IR_NO_VALUE, true);
-            } else if (t.op == IrOp::MATCH_VARIANT) {
-                /* Marcador: el dispatch de verdad es la cadena de comparaciones
-                 * que viene detras, y esa ya la lee la guarda.  Aqui solo hay
-                 * que no perder los sucesores si acaba cerrando el bloque. */
-                for (ir::IrBlockId d : t.jump_targets)
-                    anadir(d, ir::IR_NO_VALUE, true);
-                anadir(t.target_block, ir::IR_NO_VALUE, true);
             }
         }
         marcar_retrocesos();

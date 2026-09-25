@@ -134,7 +134,6 @@ static void test_round_trip() {
     CHECK(back.used == original.used, "who reads each value matches");
     CHECK(back.static_callees == original.static_callees, "callees match");
     CHECK(back.block_count == original.block_count, "block count matches");
-    CHECK(back.loop_count == original.loop_count, "loop count matches");
     CHECK(back.recursive == original.recursive, "recursion matches");
     CHECK(back.has_dynamic_call == original.has_dynamic_call,
           "dynamic calls match");

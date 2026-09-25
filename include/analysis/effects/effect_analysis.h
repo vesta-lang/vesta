@@ -34,6 +34,7 @@
 #include "analysis/effects/ir_effects.h"
 #include "analysis/effects/summary.h"
 #include "analysis/facts/ir_facts.h"
+#include "analysis/facts/loop_facts.h"
 #include "analysis/facts/range_summary.h"
 #include "analysis/facts/value_range.h"
 #include "analysis/manager/analysis_manager.h"
@@ -269,6 +270,10 @@ class EffectAnalysis {
     /// Rangos de valor cacheados por funcion (los consume points-to y el
     /// comprobador de limites).
     const RangeFacts &ranges_of(const ir::IrFunction &fn);
+    /// Bucles de la funcion, cacheados: de aqui sale la faceta estructural.
+    const LoopFacts &loops_of(const ir::IrFunction &fn);
+    /// La faceta ESTRUCTURAL de @p fn: bloques, bucles y recursion directa.
+    StructuralSummary structural_of(const ir::IrFunction &fn);
 
     FunctionSummary compute_summary(const ir::IrModule &mod,
                                     const ir::IrFunction &fn);

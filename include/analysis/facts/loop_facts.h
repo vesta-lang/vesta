@@ -27,18 +27,16 @@
  * (arista b->h con h dominando b) -> cuerpo del bucle (BFS inverso por preds)
  * -> profundidad = numero de bucles que contienen el bloque.
  *
- * NOTA (dispersion aun mas profunda, documentada): los dominadores tambien
- * viven como @c DomInfo LOCAL en @c ir_optimizer.cpp.  @c LoopFacts los computa
- * INTERNAMENTE por ahora (autocontenido); un futuro @c DomFacts los
- * centralizara y entonces @c LoopFacts, SROA e LICM los compartiran (patron
- * strangler-fig: primero el productor unificado, luego migran los
- * consumidores).
+ * Los dominadores ya no se calculan aqui: salen de @c DomFacts
+ * (dom_facts.h), el productor unico.  Quedan copias propias en
+ * @c ir_optimizer.cpp que migran despues (patron strangler-fig).
  */
 
 #ifndef VESTA_ANALYSIS_FACTS_LOOP_FACTS_H
 #define VESTA_ANALYSIS_FACTS_LOOP_FACTS_H
 
 #include "analysis/fact_validation.h"
+#include "analysis/facts/dom_facts.h"
 #include "ir/ssa_ir.h"
 
 #include <cstdint>
@@ -113,9 +111,23 @@ struct LoopsAnalysis {
 };
 
 /**
- * @brief Computa los @c LoopFacts de una funcion desde su CFG.
- * @param fn  funcion SSA (bloques con terminadores BR/BR_COND/SWITCH/RET).
+ * @brief Computa los @c LoopFacts de una funcion con sus dominadores ya
+ *        calculados.
+ *
+ * La forma buena: quien tenga la base pide @c DomFacts por ella, y asi los
+ * dominadores se calculan una vez y los comparten todos.
+ *
+ * @param fn  funcion SSA.
+ * @param dom sus dominadores (@c compute_dom_facts o la base).
  * @return    hechos por bloque; vectores dimensionados a @c fn.blocks.size().
+ */
+LoopFacts compute_loop_facts(const ir::IrFunction &fn, const DomFacts &dom);
+
+/**
+ * @brief Lo mismo, calculando aqui los dominadores.
+ *
+ * Para quien no tiene base a la que preguntar.  Correcto, pero sin reparto:
+ * los dominadores se calculan otra vez.
  */
 LoopFacts compute_loop_facts(const ir::IrFunction &fn);
 

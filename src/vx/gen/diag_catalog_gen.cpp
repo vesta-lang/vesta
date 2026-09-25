@@ -248,6 +248,7 @@ const CatEntry kEntries[] = {
     {"VX7044", {"the call to '{0}' says it has arguments but hands in no block holding them", "la llamada a '{0}' dice traer argumentos pero no entrega el bloque que los guarda"}},
     {"VX7045", {"the call to '{0}' passes {1} arguments by the platform convention, and only {2} can be placed that way; declare where they go with register(\"...\") on its parameters", "la llamada a '{0}' pasa {1} argumentos por la convencion de la plataforma, y por ahi solo se pueden colocar {2}; di por donde van con register(\"...\") en sus parametros"}},
     {"VX7046", {"the intermediate form does not hold up at '{0}': {1} problems in '{2}'", "el intermedio no se sostiene en '{0}': {1} problemas en '{2}'"}},
+    {"VX7047", {"function '{0}', block '{1}': the tryenter goes to handler block '{2}' but its handler address names '{3}'", "funcion '{0}', bloque '{1}': el tryenter va al bloque manejador '{2}' pero su direccion de manejador nombra '{3}'"}},
     {"VX7050", {"diagram written: {0}", "diagrama generado: {0}"}},
     {"VX7051", {"the diagram could not be written to '{0}'", "no se pudo escribir el diagrama en '{0}'"}},
     {"VX7052", {"unknown diagram format '{0}'; use mermaid, graphviz, html, both or all. Falling back to mermaid", "formato de diagrama desconocido '{0}'; usa mermaid, graphviz, html, both o all. Se usa mermaid"}},
@@ -825,7 +826,7 @@ const CatEntry kEntries[] = {
     {"use_def.unused", {"'{2}' is never used", "'{2}' no se usa en ningun sitio"}},
     {"value_shape.none", {"it has no values with components", "no tiene valores con componentes"}},
 };
-const int kEntryCount = 804;
+const int kEntryCount = 805;
 
 } // namespace
 

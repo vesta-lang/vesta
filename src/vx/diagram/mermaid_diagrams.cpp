@@ -445,6 +445,8 @@ void render_ir_function(std::ostringstream &os, const ir::IrFunction &fn,
         case ir::IrEdgeKind::True: os << " -->|true| "; break;
         case ir::IrEdgeKind::False: os << " -->|false| "; break;
         case ir::IrEdgeKind::Exception: os << " -.->|exc| "; break;
+        case ir::IrEdgeKind::SwitchDefault: os << " -->|default| "; break;
+        case ir::IrEdgeKind::SwitchCase: os << " -->|case| "; break;
         }
         os << fn_id << "_b" << e.to << "\n";
     }

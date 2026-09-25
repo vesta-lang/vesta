@@ -409,17 +409,22 @@ void produce_structure(Production &p) {
     for (const ir::IrFunction &fn : p.mod.functions) {
         if (!p.is_interesting(fn)) continue;
         const IrFacts &h = p.base.structure(fn);
+        /* Los bucles los sabe quien los analiza, sobre los dominadores; aqui
+         * se contaban aparte con "salta a un bloque de numero menor", que no
+         * es lo mismo -- basta con que el orden de los bloques no sea el del
+         * programa -- y daba otra cifra que el resto del ASA. */
+        const LoopFacts &loops = p.base.loops(fn);
         Fact f;
         f.what.domain = kProducerStructure;
         f.what.code = "structure.shape";
         f.what.a = h.block_count;
-        f.what.b = h.loop_count;
+        f.what.b = loops.loop_count;
         std::ostringstream o;
         /* Clave=valor con claves en INGLES, que son identificadores y no se
          * traducen.  Cinco numeros no caben en los dos del hecho, y meterlos
          * como frase los volveria intraducibles; asi el dato sigue siendo dato
          * y quien lo pinte puede componer la frase que quiera. */
-        o << "blocks=" << h.block_count << " loops=" << h.loop_count
+        o << "blocks=" << h.block_count << " loops=" << loops.loop_count
           << " calls=" << h.static_callees.size()
           << (h.has_dynamic_call ? " +dynamic" : "")
           << (h.recursive ? " recursive" : "") << " params=" << fn.params.size()
@@ -427,6 +432,7 @@ void produce_structure(Production &p) {
         f.what.detail = p.store.intern(o.str());
         f.about = function_subject(p, fn);
         f.seal = p.base.seal(kProducerStructure, fn);
+        f.seal.support.add(kProducerLoops); // la cifra de bucles es suya
         f.proof.rule = "cfg-walk";
         p.structure_of[fn.name] = p.assert_fact(std::move(f));
     }

@@ -312,23 +312,13 @@ void Transpiler::analyze_function(const ir::IrFunction &fn) {
 
     // Pasada unica sobre todas las instrucciones: contar usos, registrar
     // defs, computar predecesores del CFG.
+    ir::IrEdgeList edges;
     for (const auto &bb : fn.blocks) {
-        // Predecesores via terminadores del bloque actual.
-        if (!bb.instrs.empty()) {
-            const auto &term = bb.instrs.back();
-            if (term.op == ir::IrOp::BR) {
-                if (term.target_block < B) {
-                    ana_.block_preds[term.target_block].push_back(bb.id);
-                }
-            } else if (term.op == ir::IrOp::BR_COND) {
-                if (term.target_block < B) {
-                    ana_.block_preds[term.target_block].push_back(bb.id);
-                }
-                if (term.false_block < B) {
-                    ana_.block_preds[term.false_block].push_back(bb.id);
-                }
-            }
-        }
+        // Predecesores via terminadores del bloque actual, por la regla unica
+        // de aristas del intermedio.
+        fn.edges_of(bb.id, ir::IrEdgeWant::TerminatorOnly, edges);
+        for (const ir::IrEdge &e : edges)
+            ana_.block_preds[e.to].push_back(bb.id);
 
         for (const auto &ins : bb.instrs) {
             if (ins.dst != ir::IR_NO_VALUE && ins.dst < N) {

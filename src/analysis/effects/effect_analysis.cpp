@@ -165,41 +165,39 @@ EfectoEnLlamada EffectAnalysis::at_call_site(const ir::IrFunction &caller,
     return r;
 }
 
-// Extrae la faceta ESTRUCTURAL de una funcion (bloques, back-edges = bucles,
-// recursion directa).  El detalle de trip-counts (para Big-O) lo afina el
-// subsistema de coste; aqui damos la forma.
-/// Si saltar de @p from a @p to vuelve atras en el orden de bloques.
-static inline bool is_back_edge(ir::IrBlockId from, ir::IrBlockId to) {
-    return to != ir::IR_NO_BLOCK && to <= from;
+namespace {
+
+/// Calcula los bucles de UNA funcion para el gestor de analisis.
+struct LoopsOfFunction {
+    const ir::IrFunction &fn;
+    LoopFacts operator()() const { return compute_loop_facts(fn); }
+};
+
+} // namespace
+
+const LoopFacts &EffectAnalysis::loops_of(const ir::IrFunction &fn) {
+    return facts_mgr_.get_or_compute<LoopsAnalysis, LoopFacts>(
+        fn.name_key(), LoopsOfFunction{fn});
 }
 
-static StructuralSummary structural_of(const ir::IrFunction &fn) {
+StructuralSummary EffectAnalysis::structural_of(const ir::IrFunction &fn) {
     StructuralSummary st;
     st.block_count = static_cast<uint32_t>(fn.blocks.size());
-    // Back-edge = arista a un bloque de indice <= el actual (aproximacion de
-    // bucle sobre el orden de bloques).  Recursion directa = se llama a si
-    // misma.
-    for (ir::IrBlockId bi = ir::IrBlockId(0); bi < fn.blocks.size(); ++bi) {
-        for (const ir::IrInstr &in : fn.blocks[bi].instrs) {
-            if (in.op == ir::IrOp::BR) {
-                if (is_back_edge(bi, in.target_block)) ++st.loop_count;
-            } else if (in.op == ir::IrOp::BR_COND) {
-                if (is_back_edge(bi, in.target_block) ||
-                    is_back_edge(bi, in.false_block))
-                    ++st.loop_count;
-            } else if (in.op == ir::IrOp::SWITCH_DENSE ||
-                       in.op == ir::IrOp::MATCH_VARIANT) {
-                for (ir::IrBlockId t : in.jump_targets)
-                    if (is_back_edge(bi, t)) {
-                        ++st.loop_count;
-                        break;
-                    }
-            }
+    /* Los bucles de verdad, sobre los dominadores: los mismos que ven el coste,
+     * las variables de induccion y el resto del ASA.  Antes se contaban aqui
+     * "saltos a un bloque de numero menor", que da otra cifra en cuanto el
+     * orden de los bloques no es el del programa. */
+    const LoopFacts &lf = loops_of(fn);
+    st.loop_count = lf.loop_count;
+    for (ir::IrBlockId b = ir::IrBlockId(0); b < fn.blocks.size(); ++b)
+        if (lf.depth_of(b) > st.max_loop_depth)
+            st.max_loop_depth = lf.depth_of(b);
+    // Recursion directa = se llama a si misma.
+    for (const ir::IrBlock &bb : fn.blocks)
+        for (const ir::IrInstr &in : bb.instrs)
             if ((in.op == ir::IrOp::CALL || in.op == ir::IrOp::TAILCALL) &&
                 in.func_name == fn.name)
                 st.recursive = true;
-        }
-    }
     if (st.loop_count > 0)
         st.has_unbounded_loop = true; // conservador sin trip-count
     return st;
@@ -788,6 +786,9 @@ void EffectAnalysis::invalidate_function(const std::string &fn_name) {
     // Los hechos (def-use/CFG) de la funcion cambiaron -> invalidar en el
     // manager para que se recomputen la proxima vez que se pidan.
     facts_mgr_.invalidate<IRFactsAnalysis>(key);
+    // Los bucles no cuelgan de esos hechos (se calculan del grafo de bloques),
+    // asi que la cascada no los alcanza: se tiran aparte.
+    facts_mgr_.invalidate<LoopsAnalysis>(key);
     // TODO: propagar a los callers transitivos por el callgraph (SCC) cuando el
     // cierre interprocedural se cachee por-funcion (hoy module_summary lo
     // rehace).

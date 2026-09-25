@@ -507,6 +507,39 @@ static void probar_guarda() {
           "guarda: la rama falsa sabe x >= 10 (la negacion tambien informa)");
 }
 
+/// A un `catch` no se llega por ningun salto: se llega porque algo LANZA
+/// dentro de la region que abre su `tryenter`.  Si el motor no ve esa arista,
+/// da el manejador por inalcanzable y todo lo que calcula dentro sale vacio,
+/// que para quien lo consume es "aqui no se llega nunca".
+static void probar_catch_alcanzable() {
+    ir::IrFunction fn;
+    fn.name = "f";
+    const ir::IrBlockId b0 = fn.new_block("entry");
+    const ir::IrBlockId body = fn.new_block("body");
+    const ir::IrBlockId handler = fn.new_block("catch");
+
+    const ir::IrValueId pc = fn.new_value(ir::IrType::PTR);
+    emitir(fn, b0, ir::IrOp::LABEL_ADDR, pc, {}).func_name =
+        fn.name + "_" + fn.blocks[handler].name;
+    const ir::IrValueId ty = cte(fn, b0, ir::IrType::I64, 0);
+    emitir(fn, b0, ir::IrOp::TRYENTER, ir::IR_NO_VALUE, {pc, ty})
+        .target_block = handler;
+    emitir(fn, b0, ir::IrOp::BR, ir::IR_NO_VALUE, {}).target_block = body;
+    emitir(fn, body, ir::IrOp::RET, ir::IR_NO_VALUE, {});
+    const ir::IrValueId k = cte(fn, handler, ir::IrType::I64, 5);
+    emitir(fn, handler, ir::IrOp::RET, ir::IR_NO_VALUE, {k});
+
+    const IrFacts f = build_ir_facts(fn);
+    const RangeFacts r = compute_ranges(fn, f);
+    check(es(r.at(k), kI64, 5), "catch: una constante del manejador vale 5");
+    /* Lo que importa: si el motor cree que el punto se EJECUTA.  Un punto que
+     * da por inalcanzable no lo mira quien comprueba limites, y cualquier cosa
+     * que se afirme de el es cierta en vacio. */
+    const RangeWalk walk(fn, f, r, handler);
+    check(walk.reachable(),
+          "catch: el manejador de un tryenter se alcanza (lo abre el tryenter)");
+}
+
 /// `x = 20; if (x < 10) ...` -- la rama verdadera NO se alcanza.
 static void probar_rama_imposible() {
     ir::IrFunction fn;
@@ -931,6 +964,7 @@ int main() {
     probar_ensanchamiento();
     probar_guarda();
     probar_rama_imposible();
+    probar_catch_alcanzable();
     probar_phi();
     probar_consulta_por_punto();
     probar_switch(0, /*defecto_acotado=*/true);
