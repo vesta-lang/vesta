@@ -90,6 +90,8 @@ add_library(vx_lib STATIC
     lexer.cpp
     ast.cpp
     parser.cpp
+    # La tabla de anotaciones que el parser consulta al validar `@Nombre`.
+    annotation_names.cpp
     # Que declara el modulo, indexado UNA vez.  Buscar una declaracion por
     # nombre estaba escrito a mano, con un recorrido del modulo entero, en 33
     # sitios del frontend; varios corren por cada identificador del programa.
