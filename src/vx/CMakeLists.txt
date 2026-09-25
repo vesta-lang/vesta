@@ -434,6 +434,13 @@ add_library(vx_lib STATIC
     # Y leer del AST lo que el programa DECLARA, que es otra responsabilidad:
     # estaba escrito en uno de los dos caminos y el otro no lo hacia.
     contracts_collect.cpp
+    # Las piezas de compilar un proyecto, cada una en su fichero.  Estaban
+    # dentro de una lambda de ~1.400 lineas en compiler_project.cpp.
+    # Cuando un artefacto guardado sirve para esta compilacion.
+    project/module_cache_key.cpp
+    # El artefacto en cache de un modulo y como se adopta, venga de la cache
+    # comun o de la del proyecto: servido por una u otra tiene que quedar igual.
+    project/module_artifact.cpp
     # Traductor de los tipos de Vesta a entidades de la base de conocimiento de
     # depuracion (vxdbg).  Vive en el frontend porque la correspondencia entre
     # el vocabulario de Vesta y el modelo generico solo la conoce quien declara

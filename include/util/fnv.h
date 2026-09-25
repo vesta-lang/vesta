@@ -80,6 +80,22 @@ inline uint64_t fnv_bytes(uint64_t h, const void *data, size_t size) noexcept {
     return h;
 }
 
+/**
+ * @brief Anade una huella YA CALCULADA a un acumulador.
+ *
+ * Para juntar huellas que salen de sitios distintos -- la del fuente, la del
+ * compilador, la de las opciones -- en una sola clave.  Es la mezcla de
+ * `boost::hash_combine` con la constante de la razon aurea.  Estaba escrita a
+ * mano en cada sitio que juntaba huellas; aqui para que todos mezclen igual.
+ *
+ * @param h Acumulador.
+ * @param v Huella que se anade.
+ * @return El acumulador actualizado.
+ */
+inline uint64_t hash_combine(uint64_t h, uint64_t v) noexcept {
+    return h ^ (v + 0x9E3779B97F4A7C15ull + (h << 6) + (h >> 2));
+}
+
 } // namespace util
 
 #endif // VESTA_UTIL_FNV_H

@@ -55,6 +55,9 @@ int run_worker_from_source(std::string code, const std::string &file_name,
 #include "vx/compiler.h"
 #include "vx/contracts_collect.h" // lo que el programa DECLARA
 #include "vx/module_checks.h" // lo que se comprueba antes de optimizar
+#include "vx/project/module_cache_key.h" // cuando un artefacto guardado sirve
+#include "vx/project/module_work.h" // lo que se lleva de cada modulo
+#include "vx/project/module_artifact.h" // el artefacto en cache y su adopcion
 #include "vx/source_text.h"   // un solo fin de linea para todo el pipeline
 #include "vx/vxdbg_emit.h"    // grafo de conocimiento del programa
 #include "vxdbg/pack_store.h"
@@ -250,93 +253,6 @@ bool read_file_bytes_(const std::string &path, std::vector<uint8_t> &out) {
     return f.good();
 }
 
-/// Clave de CONTENIDO de un modulo para el CAS global (cross-proyecto).
-///
-/// A diferencia del cache por-path (.vxi/.vxir junto al source), esta clave es
-/// independiente de la RUTA: solo depende del contenido del modulo + los
-/// abi_hashes (ya de por si content-based) de sus deps directos + la version
-/// del compilador + el sufijo de target.  Asi dos proyectos con la MISMA
-/// stdlib (aunque este en rutas distintas) obtienen la MISMA clave -> hit en el
-/// store global -> se compila una sola vez para toda la maquina.  Es tambien la
-/// base de la compilacion DISTRIBUIDA (misma clave -> mismo artefacto en
-/// cualquier nodo).  @p dep_hashes debe venir ORDENADO por el caller.
-uint64_t module_content_key_(uint64_t source_hash,
-                             const std::vector<uint64_t> &dep_hashes,
-                             const std::string &tgt_suffix,
-                             uint64_t config_fp) {
-    uint64_t h = util::kFnvOffset; // FNV-1a 64 offset basis.
-    auto mix = [&](uint64_t v) {
-        for (int i = 0; i < 8; ++i) {
-            h ^= (v >> (i * 8)) & 0xFF;
-            h *= util::kFnvPrime;
-        }
-    };
-    mix(0x5641434B4559ull);           // dominio "CAS module key".
-    mix(vxi_compiler_version_hash()); // build del compilador -> no reusar
-                                      // stale.
-    mix(source_hash); // contenido (incl. instrument/native_poo).
-    // Config que afecta al IR pre-optimize (BuildConfig::ir_fingerprint):
-    // asm_target_bits, native_poo, exceptions, instrument.  Cierra el hueco de
-    // cross-bits AOT (@Naked/asm{} baja distinto en 32/64) con CAS compartido.
-    mix(config_fp);
-    /* Si la maquina de compilacion estaba cargada o no.  Es un eje REAL del
-     * resultado: sin ella, una funcion comptime no se puede ejecutar y su
-     * valor sale vacio, asi que el modulo compilado en esa pasada es
-     * PROVISIONAL.  Sin distinguirlo, la pasada buena reutilizaba el modulo
-     * provisional de la anterior y el arreglo no llegaba nunca. */
-    {
-        mix(util::flag_text(util::FlagId::McPrebuilt).empty() ? 0ull : 1ull);
-    }
-    if (!tgt_suffix.empty())
-        mix(vxi_fnv1a(tgt_suffix)); // @Target (PE/ELF/...).
-    for (uint64_t d : dep_hashes)
-        mix(d);
-    return h;
-}
-
-/// Empaqueta el par (.vxi, .vxir) en un blob del CAS: `[u32 len][vxi][u32
-/// len][vxir]` (little-endian).  Es el artefacto por-modulo (interfaz + IR
-/// completo: functions + static_data + globals + native_imports).
-std::vector<uint8_t> cas_pack_module_(const std::vector<uint8_t> &vxi,
-                                      const std::vector<uint8_t> &vxir) {
-    std::vector<uint8_t> out;
-    out.reserve(8 + vxi.size() + vxir.size());
-    auto put_u32 = [&](uint32_t v) {
-        out.push_back(v & 0xFF);
-        out.push_back((v >> 8) & 0xFF);
-        out.push_back((v >> 16) & 0xFF);
-        out.push_back((v >> 24) & 0xFF);
-    };
-    put_u32(static_cast<uint32_t>(vxi.size()));
-    out.insert(out.end(), vxi.begin(), vxi.end());
-    put_u32(static_cast<uint32_t>(vxir.size()));
-    out.insert(out.end(), vxir.begin(), vxir.end());
-    return out;
-}
-
-/// Divide un blob del CAS en sus partes (.vxi, .vxir).  @return false si el
-/// blob esta truncado o mal formado.
-bool cas_unpack_module_(const std::vector<uint8_t> &blob,
-                        std::vector<uint8_t> &vxi, std::vector<uint8_t> &vxir) {
-    size_t off = 0;
-    auto get_u32 = [&](uint32_t &v) -> bool {
-        if (off + 4 > blob.size()) return false;
-        v = static_cast<uint32_t>(blob[off]) |
-            (static_cast<uint32_t>(blob[off + 1]) << 8) |
-            (static_cast<uint32_t>(blob[off + 2]) << 16) |
-            (static_cast<uint32_t>(blob[off + 3]) << 24);
-        off += 4;
-        return true;
-    };
-    uint32_t vl = 0, il = 0;
-    if (!get_u32(vl) || off + vl > blob.size()) return false;
-    vxi.assign(blob.begin() + off, blob.begin() + off + vl);
-    off += vl;
-    if (!get_u32(il) || off + il > blob.size()) return false;
-    vxir.assign(blob.begin() + off, blob.begin() + off + il);
-    return true;
-}
-
 /* Donde caen los artefactos de un modulo.
  *
  * En la cache, SIEMPRE, y en el cajon de su tipo -- lo reparte
@@ -354,50 +270,6 @@ bool cas_unpack_module_(const std::vector<uint8_t> &blob,
  * `.cache/ir`.  Copiar ese cajon es exactamente lo mismo, y ademas se puede
  * hacer de golpe.  @see util::CacheScope
  */
-
-/**
- * @brief Huella del compilador que esta generando los artefactos.
- *
- * Se toma del propio ejecutable (tamano y fecha de modificacion): cambia en
- * cuanto se recompila el compilador, que es justo cuando los artefactos
- * cacheados dejan de ser validos.  Se calcula una sola vez.
- *
- * @return Valor que identifica esta version del compilador.
- */
-static uint64_t compiler_fingerprint_() {
-    static const uint64_t fp = []() -> uint64_t {
-        // Valvula para depurar: al recompilar el compilador (p.ej. para
-        // anadir una traza) la huella cambia, los artefactos se invalidan y
-        // se regeneran limpios -- con lo que el escenario que se queria
-        // observar desaparece justo al ir a mirarlo.  Con VX_CACHE_FINGERPRINT
-        // la huella queda fija en el valor que se le pase, asi que se puede
-        // instrumentar sin perder la cache que reproduce el fallo.
-        {
-            const std::string &fixed =
-                util::flag_text(util::FlagId::CacheFingerprint);
-            if (!fixed.empty()) return vxi_fnv1a(fixed);
-        }
-        std::error_code ec;
-        const std::string self = ::fs::get_executable_path();
-        uint64_t h = 0xcbf29ce484222325ULL;
-        auto mix = [&h](uint64_t v) {
-            h ^= v;
-            h *= 0x100000001b3ULL;
-        };
-        if (!self.empty()) {
-            const std::filesystem::path p(self);
-            const auto sz = std::filesystem::file_size(p, ec);
-            if (!ec) mix(static_cast<uint64_t>(sz));
-            const auto tm = std::filesystem::last_write_time(p, ec);
-            if (!ec) mix(static_cast<uint64_t>(tm.time_since_epoch().count()));
-        }
-        // Respaldo por si no se pudo mirar el ejecutable: al menos el formato
-        // de interfaz, que ya cambia con las modificaciones de fondo.
-        mix(VXI_FORMAT_VERSION);
-        return h;
-    }();
-    return fp;
-}
 
 /**
  * @brief El nombre de fichero de un artefacto de @p source_path .
@@ -521,7 +393,7 @@ guardar_hechos_(const std::string &ruta,
                 const std::vector<analysis::asa::DomainCost> &costes) {
     const std::vector<uint8_t> bytes =
         analysis::asa::serialize(almacen, huella, analysis::asa::cache_level(),
-                                 costes, compiler_fingerprint_());
+                                 costes, compiler_fingerprint());
     if (bytes.empty()) return false;
     return ::fs::write_file_atomic(ruta, bytes);
 }
@@ -545,7 +417,7 @@ recuperar_hechos_(const std::string &ruta, analysis::asa::FactStore &destino,
                   uint64_t huella,
                   const std::vector<analysis::asa::DomainCost> &vigentes) {
     return analysis::asa::read_facts_file(ruta, huella, destino, vigentes,
-                                          compiler_fingerprint_());
+                                          compiler_fingerprint());
 }
 
 /**
@@ -699,7 +571,7 @@ ensure_facts_impl_(const ir::IrModule &mod, analysis::asa::FactStore &store,
      * despues (UNA escritura).  La clave lleva la misma capa de configuracion
      * que los hechos de este momento, para que dos niveles de optimizacion no
      * se sirvan analisis el uno al otro. */
-    analysis::AnalysisStore analyses(compiler_fingerprint_(), fingerprint);
+    analysis::AnalysisStore analyses(compiler_fingerprint(), fingerprint);
     /* Y lo que el PROYECTO diga de sus caches: cuanto aguanta un analisis
      * guardado sin que se lo pidan.  Cero deja el defecto. */
     analyses.set_unused_runs(analysis_unused_runs_for_(source_path));
@@ -784,86 +656,6 @@ std::string read_source_(const std::string &path) {
     if (!vx::leer_fuente(path, s)) return {};
     return s;
 }
-
-/// Estructura de trabajo por modulo durante la compilacion del proyecto.
-struct ProjectModuleWork {
-    uint32_t module_id = 0;
-    std::string canonical_path;
-    std::string module_name;
-    std::string source;
-    /// v18: el conjunto comptime de este modulo, tal como se extrajo de su AST.
-    /// Se recolecta al compilarlo y se guarda en su `.vxi`, porque la proxima
-    /// compilacion puede servirlo del cache y entonces no habra AST.
-    std::string comptime_unit_source;
-    uint64_t comptime_unit_hash = 0;
-    std::vector<std::string> comptime_unit_names;
-    std::vector<std::string> comptime_unit_not_collected;
-    std::unique_ptr<ast::ModuleNode> ast;
-    std::unique_ptr<TypeChecker> tc;
-    ir::IrModule ir;
-    VxiModule vxi;
-    bool ok = false;
-    /// Los pares (simbolo, entidad) del grafo de depuracion de ESTE modulo.  Se
-    /// juntan al final: el ejecutable contiene todos los modulos, asi que su
-    /// mapa tiene que cubrirlos a todos.
-    std::vector<std::pair<std::string, vxdbg::LanguageEntityId>> vxdbg_symbols;
-    /// Y sus tramos de fuente, que se juntan igual.
-    std::vector<vxdbg::SourceExtent> vxdbg_spans;
-    ///  M.L20-full: Diagnostics local del modulo.  Cuando se
-    /// paraleliza el compile (VX_PARALLEL_COMPILE=1), cada thread
-    /// usa este diags propio en lugar del res.diagnostics compartido,
-    /// evitando race conditions.  Post-join se mergean al global.
-    Diagnostics diags;
-
-    /**
-     * @name Lo que de este modulo hace falta DESPUES de compilarlo
-     *
-     * CUATRO CONSUMIDORES TARDIOS TENIAN EN PIE EL AST ENTERO, y ninguno de
-     * los cuatro necesitaba un AST: el tree-shake pregunta si el modulo
-     * declara clases (un bit), los contratos son un mapa de nombre a siete
-     * banderas, y la inyeccion diferida son un bit y dos cadenas.  Medido en
-     * el pico de una compilacion de 144.000 lineas: 276 MB de frontend vivos
-     * MIENTRAS SE EMITE el `.vel`, o sea sostenidos por preguntas que ya
-     * estaban contestadas.
-     *
-     * Es la regla del ASA aplicada a la memoria y no al conocimiento: el hecho
-     * se produce UNA vez, donde se sabe, y lo que se guarda es el hecho -- no
-     * la estructura de la que salio.  Ver @c release_compiled_module.
-     */
-    ///@{
-    /// Si declara alguna clase.  Lo mira el tree-shake: un dep con clases no
-    /// se puede eliminar aunque sus simbolos importados no se usen.
-    bool has_classes = false;
-    /// Si le quedo codigo por inyectar, y cual.
-    bool inject_pending = false;
-    std::string inject_code;
-    std::string inject_arg;
-    /// Los contratos de huella declarados en su fuente, ya con la clave con la
-    /// que el analizador vera la funcion.
-    std::unordered_map<std::string, analyze::FunctionContracts> contracts;
-    ///@}
-
-    /**
-     * @name El intermedio, cuando esta en disco y no en la RAM
-     *
-     * Un modulo ya compilado no vuelve a hablar hasta que se funden todos, asi
-     * que sus cuerpos pueden bajar a disco mientras tanto.  DESALOJAR NO ES
-     * BORRAR: los bytes estan escritos antes de soltar la memoria y volver a
-     * traerlos reconstruye lo que habia.  Ver @c ir/module_spill.h.
-     */
-    ///@{
-    /// Donde dejo la cache el `.vxir` de este modulo, si lo dejo.  Es el mismo
-    /// fichero que sirve para recuperarlo, asi que un proyecto con cache no
-    /// escribe nada extra por desalojar.
-    std::string ir_cache_path;
-    /// De donde se recupera.  Vacio = el intermedio esta en la RAM.
-    std::string ir_spill_path;
-    /// Cuantas funciones bajaron.  Si vuelven otras tantas, se grita.
-    size_t ir_spilled_fns = 0;
-    /// Cuanta RAM ocupaban, para descontarla del techo al soltarlas.
-    size_t ir_footprint = 0;
-    ///@}
-};
 
 /**
  * @brief El techo de intermedio vivo, en bytes.  0 = sin techo.
@@ -3016,208 +2808,72 @@ CompileResult compile_vx_project(
             std::cerr << ln.str();
         }
 
-        // Mezclamos opts.instrument_mode (y cualquier flag futuro que
-        // afecte la emision IR/bytecode) en el source_hash para que el
-        // cache se invalide automaticamente al cambiar entre "trace"/"none".
-        // Sin esto, builds con cache de un modo distinto producen
-        // `.vel` con relocations sin resolver -> SEGV silente en runtime
-        // (limitacion MC.12 documentada).
-        /* La identidad del modulo es lo que DICE, no como esta escrito: se
-         * keyea por sus tokens y no por los bytes del fichero.  Anadir un
-         * comentario o reindentar obligaba a recompilar un modulo identico --
-         * medido en el banco, tocar un comentario salia mas caro que cambiar el
-         * cuerpo de una funcion.
-         *
-         * Con informacion de depuracion SI cuenta la linea de cada token: el
-         * artefacto lleva dentro donde esta cada cosa, y un comentario metido
-         * en medio las desplaza todas. */
-        uint64_t source_hash = hash_de_tokens(pm.source, opts.emit_debug);
-        // El COMPILADOR forma parte de lo que produjo el artefacto: un mismo
-        // fuente compilado por dos versiones distintas da IR distinto.  Sin
-        // esto, arreglar un bug de codegen no invalidaba nada y se seguian
-        // sirviendo artefactos generados por la version anterior -- el fallo
-        // parecia seguir vivo, o revivia al repoblarse la cache, y no habia
-        // forma de distinguirlo de un bug real.
-        source_hash ^= compiler_fingerprint_() + 0x9E3779B97F4A7C15ULL +
-                       (source_hash << 6) + (source_hash >> 2);
-        /* Y los mandos del entorno que cambian lo EMITIDO: el `.vxir` de un
-         * modulo compilado con un pase apagado no vale para uno compilado con
-         * el puesto.  Vale cero cuando no hay ninguno -- el caso normal --, asi
-         * que no invalida nada de lo ya guardado. */
-        if (const uint64_t env_fp = util::emitted_fingerprint()) {
-            source_hash ^= env_fp + 0x9E3779B97F4A7C15ULL + (source_hash << 6) +
-                           (source_hash >> 2);
-        }
-        if (!opts.instrument_mode.empty() && opts.instrument_mode != "none") {
-            const uint64_t instrument_hash = vxi_fnv1a(opts.instrument_mode);
-            source_hash ^= instrument_hash + 0x9E3779B97F4A7C15ULL +
-                           (source_hash << 6) + (source_hash >> 2);
-        }
-        /* Y SI HABIA maquina de compilacion, que es lo que decide si el cuerpo
-         * de un bloque `asm` generado por una funcion comptime sale ESCRITO o
-         * VACIO.  Son dos artefactos distintos del mismo fuente.
-         *
-         * Sin esto, la segunda pasada -- que existe precisamente para rehacer
-         * el modulo con la maquina ya cargada -- se servia del que guardo la
-         * primera, que se compilo SIN ella, y heredaba el cuerpo vacio.  Solo
-         * el modulo raiz se rehacia; los demas entraban al binario con el
-         * bloque en blanco y el programa daba otro valor, sin error.  Es el
-         * mismo modo de fallo de siempre: lo que cambia lo compilado y no esta
-         * en la clave hace que un acierto sirva algo que no corresponde. */
-        if ((opts_modulos.comptime_artifact != nullptr &&
+        /* Lo que decide si un artefacto guardado sirve para esta compilacion.
+         * Cada ingrediente, y por que esta, en `vx/project/module_cache_key.h`. */
+        ModuleCacheKeyInput key_in;
+        key_in.source = &pm.source;
+        key_in.opts = &opts;
+        key_in.comptime_machine =
+            (opts_modulos.comptime_artifact != nullptr &&
              !opts_modulos.comptime_artifact->empty()) ||
-            !util::flag_text(util::FlagId::McPrebuilt).empty()) {
-            const uint64_t machine_hash = vxi_fnv1a("comptime-machine");
-            source_hash ^= machine_hash + 0x9E3779B97F4A7C15ULL +
-                           (source_hash << 6) + (source_hash >> 2);
-        }
-        /* Y los `@Hook` del raiz, por la misma razon y con mas motivo: tejen
-         * LLAMADAS en el IR de este modulo, cuyo fuente no ha cambiado por
-         * ello.  Sin esto, compilar un programa con `@Hook(enter, "std.*")`
-         * dejaba la stdlib guardada CON el gancho dentro, y el siguiente
-         * programa que la usara moria al enlazar con "simbolo no resuelto"
-         * -- un gancho de otro programa, que en el suyo no existe.
-         *
-         * No basta con meterlo en la huella de configuracion del CAS: los
-         * artefactos que viven JUNTO al fuente (`math.vxir`) se reutilizan por
-         * este hash, no por aquella clave. */
-        if (hooks_source_fp != 0) {
-            source_hash ^= hooks_source_fp + 0x9E3779B97F4A7C15ULL +
-                           (source_hash << 6) + (source_hash >> 2);
-        }
-        //  AOT (fix): el IR de un dep depende del MODO de POO con que se
-        // baja.  En modo Full/VM las clases usan GC (newobj + gc_deref); en
-        // modo AOT (`native_poo`) usan stack/heap nativo (calloc + dtor RAII).
-        // Son IR DISTINTOS para el mismo source.  Si no mezclamos native_poo
-        // en el source_hash, un `.vxir` cacheado por `-m vm` se reusaria en
-        // `-m aot` (y viceversa) -> IR incompatible con el backend objetivo.
-        // Esto solo muerde libs con clases/funciones CONCRETAS (las plantillas
-        // genericas no producen IR en el dep; se monomorphizan en el root).
-        if (opts.native_poo) {
-            source_hash ^=
-                0xA07A07A07A07A07AULL + (source_hash << 7) + (source_hash >> 3);
-        }
-        // HALLAZGO-2: un modulo SOLO es target-especifico si usa @Target (que
-        // descarta decls distintas segun os/arch al parsear).  Para NO
-        // recompilar al alternar de target, separamos su cache por FICHERO (no
-        // por source_hash, que sobrescribiria el unico .vxir y forzaria
-        // recompilar en cada cambio).  Asi persisten `mod.<os>-<arch>.vxir`
-        // para cada target y alternar PE<->ELF es cache-hit.  Los modulos SIN
-        // @Target usan el fichero unico compartido (mismo IR para todos los
-        // targets).  El sufijo va vacio cuando no aplica.
-        std::string cache_tgt_suffix;
-        if ((!cc_tgt_os.empty() || !cc_tgt_arch.empty()) &&
-            pm.source.find("@Target") != std::string::npos) {
-            cache_tgt_suffix = "." + cc_tgt_os + "-" + cc_tgt_arch;
-        }
-        /* Compilar con la maquina de compilacion cargada da un resultado
-         * DISTINTO al de compilar sin ella: sin la maquina, una funcion
-         * comptime no se puede ejecutar y su valor sale vacio.  Los dos
-         * resultados no pueden compartir artefacto, o la pasada buena se
-         * encuentra el de la provisional y lo da por valido -- que es lo que
-         * pasaba: el valor correcto se calculaba y se tiraba.
-         *
-         * Se marca la pasada CON maquina y no la de sin ella, que es la unica
-         * que existe cuando no hay codigo de compilacion de por medio: asi el
-         * caso normal conserva sus artefactos de siempre. */
-        if (!util::flag_text(util::FlagId::McPrebuilt).empty())
-            cache_tgt_suffix += ".mc";
+            !util::flag_text(util::FlagId::McPrebuilt).empty();
+        key_in.hooks_source_fp = hooks_source_fp;
+        key_in.target_os = &cc_tgt_os;
+        key_in.target_arch = &cc_tgt_arch;
+        const ModuleCacheKey cache_key = module_cache_key(key_in);
+        const uint64_t source_hash = cache_key.source_hash;
+        const std::string &cache_tgt_suffix = cache_key.target_suffix;
 
         // ---- CAS global (content-addressed, cross-proyecto) ----
         // Clave de contenido del modulo (independiente de la ruta).  Se calcula
         // aqui para reusarla tambien en el write path (mas abajo).  Solo DEPS
         // (el root se ensambla, no se cachea como artefacto reusable).
         uint64_t cas_key = 0;
-        /* La identidad del RAIZ, para la cache de hechos.  El almacen por
-         * contenido solo la calcula para los deps -- el raiz no se guarda ahi
-         * --, pero los hechos SI son suyos: se producen sobre el modulo ya
-         * fusionado, que es el raiz con todo lo que arrastra.
-         *
-         * Se calcula igual, con la misma funcion, para que dos cosas que son la
-         * misma identidad no se separen nunca.  Lo escribe SOLO la tarea del
-         * raiz y se lee cuando todas han terminado, asi que no compite con
-         * nadie aunque los modulos se compilen en paralelo. */
-        if (is_root && pm.ast) {
-            std::vector<uint64_t> dep_hashes;
-            auto imps =
-                collect_imports_(*pm.ast, &ns_to_modname, &auto_imports,
-                                 auto_import_owner_dir, pm.canonical_path);
-            for (const auto &req : imps) {
-                auto itd = by_name.find(req.module_name);
-                if (itd != by_name.end())
-                    dep_hashes.push_back(work[itd->second].vxi.abi_hash);
-            }
-            std::sort(dep_hashes.begin(), dep_hashes.end());
-            root_facts_key = module_content_key_(
-                source_hash, dep_hashes, cache_tgt_suffix, cas_config_fp);
-        }
         bool cas_key_ok = false;
-        if (cas && !is_root && pm.ast) {
-            std::vector<uint64_t> dep_hashes;
-            auto imps =
-                collect_imports_(*pm.ast, &ns_to_modname, &auto_imports,
-                                 auto_import_owner_dir, pm.canonical_path);
-            for (const auto &req : imps) {
+        /* La MISMA clave de contenido sirve a dos cosas, y se calcula una vez:
+         * a un dep le da su entrada en el almacen comun, y al RAIZ su identidad
+         * para la cache de hechos.  El raiz no se guarda en el almacen, pero
+         * los hechos SI son suyos: se producen sobre el modulo ya fusionado,
+         * que es el raiz con todo lo que arrastra.  Que salgan de la misma
+         * funcion es lo que impide que dos cosas que son la misma identidad se
+         * separen.
+         *
+         * `root_facts_key` lo escribe SOLO la tarea del raiz y se lee cuando
+         * todas han terminado, asi que no compite con nadie aunque los modulos
+         * se compilen en paralelo. */
+        if (pm.ast && (is_root || cas)) {
+            DepAbiHashes dep_hashes;
+            for (const ImportRequest &req : collect_imports_(
+                     *pm.ast, &ns_to_modname, &auto_imports,
+                     auto_import_owner_dir, pm.canonical_path)) {
                 auto itd = by_name.find(req.module_name);
                 if (itd != by_name.end())
                     dep_hashes.push_back(work[itd->second].vxi.abi_hash);
             }
             std::sort(dep_hashes.begin(), dep_hashes.end());
-            cas_key = module_content_key_(source_hash, dep_hashes,
-                                          cache_tgt_suffix, cas_config_fp);
-            cas_key_ok = true;
+            const uint64_t content_key = module_content_key(
+                source_hash, dep_hashes, cache_tgt_suffix, cas_config_fp);
+            if (is_root) {
+                root_facts_key = content_key;
+            } else {
+                cas_key = content_key;
+                cas_key_ok = true;
+            }
+        }
+        if (cas_key_ok) {
             std::vector<uint8_t> blob;
             if (cas->get(cas_key, blob)) {
                 std::vector<uint8_t> vb, ib;
-                if (cas_unpack_module_(blob, vb, ib)) {
+                if (unpack_module_artifact(blob, vb, ib)) {
                     auto pr = vxi_parse(vb.data(), vb.size());
                     ir::IrModule dep_mod;
                     if (pr.ok && ir::parse_ir_module_cache(ib.data(), ib.size(),dep_mod)) {
-                        /* Lo que sale del almacen se comprueba igual que lo
-                         * recien construido.  Es el sitio donde un IR mal
-                         * guardado deja de ser un problema de quien lo guardo
-                         * y pasa a ser el de quien lo usa: aqui ya no hay
-                         * fuente al que volver, y lo que venga se optimiza y
-                         * se emite tal cual. */
-                        ir::ir_verify_if_asked(dep_mod, "cache",
-                                               pm.module_name);
-                        pm.vxi = std::move(pr.module_);
-                        /* v20: y si declaraba clases, que el
-                         * tree-shake lo preguntara despues y aqui no
-                         * hay AST al que preguntarselo.  Los DOS
-                         * caminos de acierto tienen que ponerlo, o el
-                         * dep se elimina o no segun por cual se
-                         * entre. */
-                        pm.has_classes = pm.vxi.declares_classes;
-                        /* v18: el conjunto comptime tambien por AQUi.  Hay dos
-                         * caminos de cache-hit -- el del almacen global y el de
-                         * los ficheros junto al fuente -- y los dos tienen que
-                         * recuperarlo, o el conjunto sale distinto segun por
-                         * cual se entre. */
-                        if (!pm.vxi.comptime_unit_source.empty()) {
-                            pm.comptime_unit_source +=
-                                pm.vxi.comptime_unit_source;
-                            pm.comptime_unit_names.insert(
-                                pm.comptime_unit_names.end(),
-                                pm.vxi.comptime_unit_names.begin(),
-                                pm.vxi.comptime_unit_names.end());
-                            pm.comptime_unit_hash = pm.vxi.comptime_unit_hash;
-                        }
-                        pm.comptime_unit_not_collected.insert(
-                            pm.comptime_unit_not_collected.end(),
-                            pm.vxi.comptime_unit_not_collected.begin(),
-                            pm.vxi.comptime_unit_not_collected.end());
-                        // abi_hash: leerlo del header del .vxi (offset 8).
-                        if (vb.size() >= 16) {
-                            uint64_t hh = 0;
-                            for (int b = 0; b < 8; ++b)
-                                hh |= static_cast<uint64_t>(vb[8 + b])
-                                      << (b * 8);
-                            pm.vxi.abi_hash = hh;
-                        }
-                        // Igual que en el acierto por ruta: TODO de una vez.
-                        ir::adopt_cached_module(pm.ir, std::move(dep_mod));
-                        pm.ok = true;
+                        /* Lo mismo que el acierto por ruta, por la misma
+                         * funcion: servido por una u otra cache, el modulo
+                         * tiene que quedar igual.  (`vxi_parse` ya lee
+                         * `abi_hash` de la cabecera; aqui se releia.) */
+                        adopt_cached_artifact(pm, std::move(pr.module_),
+                                              std::move(dep_mod));
                         if (verbose_cache) {
                             std::ostringstream tmp;
                             tmp << "[vx-cas] hit: " << pm.canonical_path
@@ -3362,38 +3018,11 @@ CompileResult compile_vx_project(
                             }
                             if (par_coherente &&
                                 ir::parse_ir_module_cache(ibytes.data(), ibytes.size(),dep_mod)) {
-                                pm.vxi = std::move(pr.module_);
-                                /* v20: ver el otro camino de acierto. */
-                                pm.has_classes = pm.vxi.declares_classes;
-                                /* v18: el conjunto comptime, del `.vxi`.  Un
-                                 * modulo servido del cache NO se parsea, asi
-                                 * que aqui no hay AST del que extraerlo: sin
-                                 * esto el conjunto del proyecto salia con un
-                                 * modulo de siete -- el unico recompilado -- y
-                                 * nada lo decia. */
-                                if (!pm.vxi.comptime_unit_source.empty()) {
-                                    pm.comptime_unit_source +=
-                                        pm.vxi.comptime_unit_source;
-                                    pm.comptime_unit_names.insert(
-                                        pm.comptime_unit_names.end(),
-                                        pm.vxi.comptime_unit_names.begin(),
-                                        pm.vxi.comptime_unit_names.end());
-                                    pm.comptime_unit_hash =
-                                        pm.vxi.comptime_unit_hash;
-                                }
-                                pm.comptime_unit_not_collected.insert(
-                                    pm.comptime_unit_not_collected.end(),
-                                    pm.vxi.comptime_unit_not_collected.begin(),
-                                    pm.vxi.comptime_unit_not_collected.end());
-                                /* TODO lo que el modulo restaurado trae, en una
-                                 * sola linea y decidido donde se conoce el
-                                 * formato.  Campo a campo aqui se olvido TRES
-                                 * veces -- `static_data`+`globals`,
-                                 * `native_imports` y `source_files` --, y
-                                 * ninguna dio error. */
-                                ir::adopt_cached_module(pm.ir,
-                                                        std::move(dep_mod));
-                                pm.ok = true;
+                                /* Por la misma funcion que el acierto del
+                                 * almacen comun. */
+                                adopt_cached_artifact(pm,
+                                                      std::move(pr.module_),
+                                                      std::move(dep_mod));
                                 // Seed del CAS global desde un HIT del cache
                                 // por-path: asi el primer build con .vxir
                                 // caliente (pero CAS frio) puebla el store
@@ -3405,7 +3034,7 @@ CompileResult compile_vx_project(
                                 if (cas && cas_key_ok)
                                     (void)cas->put(
                                         cas_key,
-                                        cas_pack_module_(vbytes, ibytes));
+                                        pack_module_artifact(vbytes, ibytes));
                                 if (verbose_cache) {
                                     std::ostringstream tmp;
                                     tmp << "[vx-cache] hit: "
@@ -4297,7 +3926,7 @@ CompileResult compile_vx_project(
             // siguiente proyecto/maquina con esta misma stdlib hace hit sin
             // recompilar, sin importar en que ruta viva.
             if (cas && cas_key_ok)
-                (void)cas->put(cas_key, cas_pack_module_(vbytes, ibytes));
+                (void)cas->put(cas_key, pack_module_artifact(vbytes, ibytes));
             //  M5.C L.18: ademas del .vxi (interfaz) + .vxir (IR
             // serializado), emitir el .vel del dep solo (sin merge) para
             // que la libreria sea distribuible standalone.  El
@@ -4595,9 +4224,8 @@ CompileResult compile_vx_project(
             res.comptime_unit_names.insert(res.comptime_unit_names.end(),
                                            pm.comptime_unit_names.begin(),
                                            pm.comptime_unit_names.end());
-            res.comptime_unit_hash ^=
-                pm.comptime_unit_hash + 0x9e3779b97f4a7c15ULL +
-                (res.comptime_unit_hash << 6) + (res.comptime_unit_hash >> 2);
+            res.comptime_unit_hash =
+                util::hash_combine(res.comptime_unit_hash, pm.comptime_unit_hash);
         }
         res.comptime_unit_not_collected.insert(
             res.comptime_unit_not_collected.end(),

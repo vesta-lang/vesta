@@ -918,8 +918,7 @@ std::vector<uint8_t> vxi_emit(const VxiModule &mod) {
     if (!depende_de_sus_deps) {
         const uint64_t resto = vxi_fnv1a(out.data() + blob_pool_start,
                                          out.size() - blob_pool_start);
-        abi_hash ^=
-            resto + 0x9E3779B97F4A7C15ULL + (abi_hash << 6) + (abi_hash >> 2);
+        abi_hash = util::hash_combine(abi_hash, resto);
     }
     patch_u64(8, abi_hash);
     patch_u64(16, mod.source_hash);
