@@ -1349,6 +1349,21 @@ void ir_print(const IrModule &mod, std::ostream &o) {
     }
     if (!mod.source_files.empty()) o << "\n";
 
+    /* Los structs con metodos y de donde viene cada uno.  En COMENTARIO: es
+     * para leerlo, y quien vuelve a parsear este texto se lo salta. */
+    for (const IrStructType &st : mod.struct_types) {
+        o << "// struct " << st.name;
+        if (!st.super_name.empty()) o << " : " << st.super_name;
+        o << "\n";
+        for (const IrMethod &m : st.methods) {
+            o << "//   " << m.name << " = " << m.ir_fn_name;
+            if (!m.inherited_from.empty())
+                o << "  (copy of " << m.inherited_from << ")";
+            o << "\n";
+        }
+    }
+    if (!mod.struct_types.empty()) o << "\n";
+
     // funciones
     for (const auto &fn : mod.functions) {
         /* Donde se escribio, si consta.  Se calla cuando no se sabe en vez de

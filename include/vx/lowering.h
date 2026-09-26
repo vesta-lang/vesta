@@ -2843,6 +2843,25 @@ class Lowering {
      * @param out Modulo IR al que anadir las vistas.
      */
     void export_overlays_to_ir(ir::IrModule &out);
+    /**
+     * @brief Lleva al modulo los structs con metodos que este modulo define,
+     *        con el origen de cada metodo (@c ir::IrStructType).
+     *
+     * Un struct derivado recibe una COPIA de cada metodo heredado; sin esto el
+     * IR solo veia funciones sueltas y no sabia que `u128____add__` es el
+     * `__add__` de `Wide128`.  Tabla aparte de las clases: ver
+     * @c ir::IrStructType.
+     *
+     * @param out Modulo IR al que anadir los structs.
+     */
+    void export_struct_types_to_ir(ir::IrModule &out);
+    /**
+     * @brief La ficha de un metodo tal como la ve el IR.  La comparten las
+     *        tablas de clases y de structs: es la misma conversion.
+     * @param m Ficha del comprobador.
+     * @return La del IR.
+     */
+    static ir::IrMethod ir_method_from(const ClassMethodInfo &m);
 
     /**
      * @brief Lower de @c this -> primer parametro del metodo en curso.

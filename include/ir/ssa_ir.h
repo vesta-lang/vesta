@@ -2824,6 +2824,33 @@ struct IrMethod {
     /// la superclase original.  El transpiler usa esto para decidir
     /// si emitir el metodo o reusar la definicion del padre.
     std::string defining_class;
+    /**
+     * @brief De que tipo base VIENE esta entrada; vacio si la declara el
+     *        propio tipo.
+     *
+     * No es lo mismo que @ref defining_class: un struct derivado recibe una
+     * COPIA de cada metodo heredado -- dentro, `this` es el derivado --, asi
+     * que el que lo emite es el derivado (@ref ir_fn_name es la copia) pero el
+     * metodo es del base.  Sin esto el IR no sabia que `u128____add__` es el
+     * `__add__` de `Wide128`.
+     */
+    std::string inherited_from;
+};
+
+/**
+ * @struct IrStructType
+ * @brief Un struct con metodos declarado en el modulo: sus metodos y de donde
+ *        viene cada uno.
+ *
+ * Tabla APARTE de @c IrModule::classes: sus consumidores -- devirtualizacion,
+ * transpilador a C -- tratan cada entrada como una clase de verdad (objeto con
+ * cabecera, vtable del runtime), y un struct no lo es.
+ */
+struct IrStructType {
+    std::string name;       ///< Nombre del struct (ya aplanado).
+    std::string super_name; ///< Struct base; vacio si no hereda.
+    /// Todos sus metodos, heredados incluidos, en el orden del layout.
+    std::vector<IrMethod> methods;
 };
 
 /**
@@ -3070,6 +3097,12 @@ struct IrModule {
     /// pregunte si dos accesos pueden aliasar -- no tiene otra forma de verlo.
     /// Vacio en modulos sin vistas.
     std::vector<IrOverlay> overlays;
+
+    /// Los structs con metodos que este modulo DEFINE, con el origen de cada
+    /// metodo (ver @c IrMethod::inherited_from).  Viaja en la cache del
+    /// modulo y se junta al fusionar: si no, un modulo servido de cache
+    /// responderia distinto que uno recien compilado.
+    std::vector<IrStructType> struct_types;
 
     /**
      * @brief Devuelve el sitio que las tablas del modulo reservaron de mas.

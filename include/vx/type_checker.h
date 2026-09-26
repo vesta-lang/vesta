@@ -557,6 +557,15 @@ struct ClassMethodInfo {
      */
     PooledName ir_symbol;
     /**
+     * @brief El struct base del que el aplanado de la herencia COPIO este
+     *        metodo; vacio si lo declara el propio tipo.
+     *
+     * Sale de @c ast::ClassMethodDecl::inherited_from y llega al IR como
+     * @c ir::IrMethod::inherited_from: es lo que dice que `u128____add__` es
+     * el `__add__` de `Wide128` aunque sea una copia.
+     */
+    PooledName inherited_from;
+    /**
      * @brief Hay mas metodos con este nombre en el mismo tipo.
      *
      * Un bit, no una consulta: es lo que hace que una llamada corriente -- que

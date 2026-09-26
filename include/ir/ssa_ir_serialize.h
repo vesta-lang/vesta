@@ -305,7 +305,11 @@ bool parse_ir_section(const uint8_t *data, size_t section_size,
 static constexpr uint32_t IR_MODULE_CACHE_MAGIC =
     0x434D5856U; /* 'V''X''M''C' */
 static constexpr uint16_t IR_MODULE_CACHE_VERSION =
-    19; // v19: de que fichero salio cada funcion y cada trozo inlinado.  Sube
+    20; // v20: + los structs con metodos y de donde viene cada metodo
+        // (IrModule::struct_types).  Solo cambia ESTE formato -- es una
+        // seccion al final, fuera de `serialize_function` --, asi que
+        // IR_SECTION_VERSION no sube.
+        // v19: de que fichero salio cada funcion y cada trozo inlinado.  Sube
         // A LA VEZ que IR_SECTION_VERSION -- ver la nota de la v15: comparten
         // `serialize_function`, y olvidar una no da error de version sino un
         // cuerpo leido con el reparto equivocado.

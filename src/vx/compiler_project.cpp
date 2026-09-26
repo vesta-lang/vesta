@@ -4397,6 +4397,10 @@ CompileResult compile_vx_project(
         // por modulo.  El merge usa @c append_raw_entries para concatenar
         // bytes + reescribir offsets en un solo paso O(total_bytes).
         merged.static_data.append_raw_entries(std::move(dep_ir.static_data));
+        /* Los structs de la dependencia, con el origen de sus metodos: cada
+         * modulo cuenta solo los que DEFINE, asi que no se repiten. */
+        for (ir::IrStructType &st : dep_ir.struct_types)
+            merged.struct_types.push_back(std::move(st));
         // Globals: merge insertando entradas del dep en el mapa del root.
         // Si una entrada ya existe en root, dep gana? No -- dep no
         // sobrescribe (root tiene prioridad).  En la practica los nombres

@@ -20,8 +20,9 @@ namespace {
  * poder buscarlas por biseccion.
  *
  * Salieron de leer los siete sitios que las reconocen, no de la documentacion:
- * `CLAUDE.md` nombra `@Asm`, `@Export`, `@Module` y `@Generic`, que ya no las
- * maneja nadie -- estan retiradas o nunca llegaron --, y ponerlas aqui seria
+ * la guia del proyecto nombra `@Asm`, `@Export`, `@Module` y `@Generic`, que
+ * ya no las maneja nadie -- estan retiradas o nunca llegaron --, y ponerlas
+ * aqui seria
  * prometer que funcionan.
  *
  * Las dos RETIRADAS (`@AllocatorOverride`, `@PanicHandler`) NO estan a

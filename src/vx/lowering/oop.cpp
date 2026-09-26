@@ -2662,32 +2662,35 @@ void Lowering::export_classes_to_ir(ir::IrModule &out) {
         // "<Class>__<name>" para el resto (destructor usa name="__dtor"
         // -> ir_fn_name="<Class>____dtor" con 4 underscores).
         icls.methods.reserve(cl.methods.size());
-        for (const auto &m : cl.methods) {
-            ir::IrMethod imeth;
-            imeth.name = m.name;
-            /* Si el metodo es heredado puro (no override), esto apunta al
-             * simbolo de quien lo DEFINE, para no emitir una referencia a un
-             * `Clase__metodo` que no existe.  El transpilador a C usa este
-             * nombre como etiqueta de funcion.  El constructor va por el mismo
-             * sitio: su simbolo tambien lo calculo el comprobador. */
-            imeth.ir_fn_name = method_symbol_of(m);
-            imeth.return_type = ir_type_from_primitive(m.return_type.kind);
-            imeth.param_types.reserve(m.param_types.size());
-            for (const auto &pt : m.param_types) {
-                imeth.param_types.push_back(ir_type_from_primitive(pt.kind));
-            }
-            imeth.vtable_index = static_cast<int32_t>(m.vtable_index);
-            imeth.is_static = m.is_static;
-            imeth.is_final = m.is_final;
-            imeth.is_constructor = m.is_constructor;
-            imeth.is_destructor = m.is_destructor;
-            imeth.is_inline = m.is_inline;
-            imeth.defining_class = m.defining_class;
-            icls.methods.push_back(std::move(imeth));
-        }
+        for (const auto &m : cl.methods)
+            icls.methods.push_back(ir_method_from(m));
 
         out.classes.push_back(std::move(icls));
     }
+}
+
+ir::IrMethod Lowering::ir_method_from(const ClassMethodInfo &m) {
+    ir::IrMethod imeth;
+    imeth.name = m.name;
+    /* Si el metodo es heredado puro (no override), esto apunta al simbolo de
+     * quien lo DEFINE, para no emitir una referencia a un `Clase__metodo` que
+     * no existe.  El transpilador a C usa este nombre como etiqueta de
+     * funcion.  El constructor va por el mismo sitio: su simbolo tambien lo
+     * calculo el comprobador. */
+    imeth.ir_fn_name = method_symbol_of(m);
+    imeth.return_type = ir_type_from_primitive(m.return_type.kind);
+    imeth.param_types.reserve(m.param_types.size());
+    for (const auto &pt : m.param_types)
+        imeth.param_types.push_back(ir_type_from_primitive(pt.kind));
+    imeth.vtable_index = static_cast<int32_t>(m.vtable_index);
+    imeth.is_static = m.is_static;
+    imeth.is_final = m.is_final;
+    imeth.is_constructor = m.is_constructor;
+    imeth.is_destructor = m.is_destructor;
+    imeth.is_inline = m.is_inline;
+    imeth.defining_class = m.defining_class;
+    imeth.inherited_from = m.inherited_from.str();
+    return imeth;
 }
 
 /**

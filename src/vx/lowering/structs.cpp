@@ -507,6 +507,28 @@ ir::IrValueId Lowering::lower_struct_method_call(ast::CallExpr *e) {
     return method_sret ? v_retbuf : dst;
 }
 
+void Lowering::export_struct_types_to_ir(ir::IrModule &out) {
+    /* Los que este modulo DEFINE son los que baja `lower_struct_methods`: los
+     * StructDecl concretos de su AST.  Los importados no entran -- sus
+     * metodos los emite su modulo, y es ese quien los cuenta --. */
+    for (const auto &decl : mod_.decls) {
+        if (!decl || decl->kind != ast::NodeKind::StructDecl) continue;
+        const auto *sd = static_cast<const ast::StructDecl *>(decl.get());
+        if (!sd->type_params.empty() || sd->is_specialization) continue;
+        const auto it = tc_.struct_layouts().find(sd->name);
+        if (it == tc_.struct_layouts().end()) continue;
+        const StructLayout &lay = it->second;
+        if (lay.methods.empty()) continue; // sin metodos no hay nada que decir
+        ir::IrStructType st;
+        st.name = lay.name;
+        st.super_name = lay.super_name;
+        st.methods.reserve(lay.methods.size());
+        for (const ClassMethodInfo &m : lay.methods)
+            st.methods.push_back(ir_method_from(m));
+        out.struct_types.push_back(std::move(st));
+    }
+}
+
 uint64_t Lowering::get_or_emit_struct_vtable(const StructLayout &lay) {
     TypeStaticBlobs &blobs = struct_blobs_[lay.name];
     if (blobs.vtable != UINT64_MAX) return blobs.vtable;

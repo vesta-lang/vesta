@@ -917,7 +917,100 @@ static void test_asm_bindings_round_trip() {
     CHECK(out2.is_public, "sin marca de privada, se lee como publica");
 }
 
+/**
+ * @brief Una seccion que se guarda SIN comprimir se vuelve a leer.
+ *
+ * Se escribe asi cuando comprimir no la encoge: vacia o muy pequena.  La
+ * lectura de ese camino tomaba la cabecera por el cuerpo y fallaba siempre;
+ * un modulo sin funciones no salia nunca de la cache.  El resto de las
+ * pruebas usan funciones que si se comprimen, y por eso no se veia.
+ */
+void test_uncompressed_section_round_trip() {
+    using namespace ir;
+    std::vector<IrFunction> none;
+    util::ByteBuffer buf;
+    emit_ir_section(none, {}, buf);
+    std::vector<IrFunction> back;
+    IrSectionReport rep;
+    CHECK(parse_ir_section(buf.data, buf.size, back, &rep),
+          "una seccion sin funciones (sin comprimir) se lee");
+    CHECK(rep.reject == IrSectionReject::None, "y sin motivo de rechazo");
+    util::byte_buffer_release(buf);
+
+    const IrModule vacio;
+    const std::vector<uint8_t> b = emit_ir_module_cache_vec(vacio);
+    IrModule l;
+    CHECK(parse_ir_module_cache(b.data(), b.size(), l),
+          "un modulo sin funciones sale de la cache");
+}
+
+/**
+ * @brief La tabla de structs con metodos cruza la cache del modulo entera, y
+ *        `adopt_cached_module` la pasa al modulo que la adopta.
+ *
+ * Sin viajar, un modulo servido de cache no sabria de donde viene cada metodo
+ * y responderia distinto que uno recien compilado.
+ */
+void test_struct_types_round_trip() {
+    using namespace ir;
+    IrModule mod;
+    IrStructType base;
+    base.name = "Wide128";
+    IrMethod add;
+    add.name = "__add__";
+    add.ir_fn_name = "Wide128____add__";
+    add.return_type = IrType::PTR;
+    add.param_types = {IrType::PTR};
+    add.defining_class = "Wide128";
+    base.methods.push_back(add);
+    mod.struct_types.push_back(base);
+
+    IrStructType der;
+    der.name = "u128";
+    der.super_name = "Wide128";
+    IrMethod copia = add;
+    copia.ir_fn_name = "u128____add__";
+    copia.defining_class = "u128";
+    copia.inherited_from = "Wide128";
+    copia.vtable_index = 3;
+    copia.is_final = true;
+    der.methods.push_back(copia);
+    mod.struct_types.push_back(der);
+
+    const std::vector<uint8_t> bytes = emit_ir_module_cache_vec(mod);
+    IrModule leido;
+    CHECK(parse_ir_module_cache(bytes.data(), bytes.size(), leido),
+          "la cache con structs se lee");
+    CHECK(leido.struct_types.size() == 2, "los dos structs cruzan");
+    if (leido.struct_types.size() == 2) {
+        const IrStructType &u = leido.struct_types[1];
+        CHECK(u.name == "u128" && u.super_name == "Wide128",
+              "nombre y base cruzan");
+        CHECK(u.methods.size() == 1, "su metodo cruza");
+        if (u.methods.size() == 1) {
+            const IrMethod &m = u.methods[0];
+            CHECK(m.ir_fn_name == "u128____add__", "la funcion que existe");
+            CHECK(m.inherited_from == "Wide128",
+                  "y de donde viene: la copia sigue sabiendo que es del base");
+            CHECK(m.param_types.size() == 1 && m.param_types[0] == IrType::PTR,
+                  "los parametros cruzan");
+            CHECK(m.vtable_index == 3 && m.is_final, "hueco y marcas cruzan");
+        }
+        CHECK(leido.struct_types[0].methods.size() == 1 &&
+                  leido.struct_types[0].methods[0].inherited_from.empty(),
+              "un metodo propio sigue sin origen");
+    }
+
+    // Y quien adopta el modulo leido se queda con la tabla.
+    IrModule destino;
+    adopt_cached_module(destino, std::move(leido));
+    CHECK(destino.struct_types.size() == 2,
+          "adopt_cached_module pasa la tabla de structs");
+}
+
 int main() {
+    test_uncompressed_section_round_trip();
+    test_struct_types_round_trip();
     test_trivial_function();
     test_asm_bindings_round_trip();
     test_complexity_dimensions();

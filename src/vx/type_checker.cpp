@@ -7704,6 +7704,7 @@ ClassMethodInfo TypeChecker::make_method_info(const ast::ClassMethodDecl &m,
     mi.is_virtual = m.is_virtual;
     mi.is_comptime = m.is_comptime;
     mi.defining_class = class_name;
+    if (!m.inherited_from.empty()) mi.inherited_from = m.inherited_from;
     mi.source_file = m.loc.file();
     mi.source_line = m.loc.line;
     mi.return_type = m.return_type ? type_from_node(m.return_type.get())

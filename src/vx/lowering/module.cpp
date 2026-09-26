@@ -707,6 +707,8 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
     // lo que el comprobador de tipos SABE de ellas, puesto donde se puede
     // preguntar.
     export_overlays_to_ir(out_module);
+    // Y los structs con metodos, con de donde viene cada uno.
+    export_struct_types_to_ir(out_module);
 
     // volcar las funciones sinteticas de spawn DESPUES de las
     // de usuario y POO.  Asi main sigue siendo la primera funcion del

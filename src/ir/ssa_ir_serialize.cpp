@@ -1173,7 +1173,15 @@ bool parse_ir_section(const uint8_t *data, size_t section_size,
      * las salidas -- ver `salir` mas abajo --; el resto son prestados. */
     util::ByteBuffer claro;
     util::byte_buffer_init(claro, &kIrSectionKind);
-    util::ByteBuffer cuerpo = section;
+    /* Sin comprimir, el cuerpo son los bytes que siguen a la cabecera -- no la
+     * seccion entera --.  Se tomaba la seccion entera, y como el cursor vuelve
+     * a cero mas abajo, se leia la cabecera como si fuera el cuerpo: "VEIR"
+     * como cuenta de ficheros.  Nunca se leia una seccion sin comprimir, que
+     * es la que se escribe cuando comprimir no encoge -- vacia o muy pequena
+     * --: un modulo sin funciones no salia NUNCA de la cache, y se
+     * recompilaba cada vez sin decirlo. */
+    util::ByteBuffer cuerpo =
+        util::byte_buffer_borrow(data + c.off, section_size - c.off);
     if ((flags & kIrFlagDeflate) != 0) {
         uint32_t sin_comprimir = 0;
         if (!read_u32(c, sin_comprimir))
@@ -1372,6 +1380,87 @@ bool deserialize_static_data(util::ByteCursor &c,
     return true;
 }
 
+/**
+ * @brief Escribe la tabla de structs con metodos (@c IrModule::struct_types).
+ * @param types La tabla.
+ * @param out   Destino.
+ */
+static void serialize_struct_types(const std::vector<IrStructType> &types,
+                                   util::ByteBuffer &out) {
+    write_u32(out, static_cast<uint32_t>(types.size()));
+    for (const IrStructType &st : types) {
+        write_str(out, st.name);
+        write_str(out, st.super_name);
+        write_u32(out, static_cast<uint32_t>(st.methods.size()));
+        for (const IrMethod &m : st.methods) {
+            write_str(out, m.name);
+            write_str(out, m.ir_fn_name);
+            write_u8(out, static_cast<uint8_t>(m.return_type));
+            write_u32(out, static_cast<uint32_t>(m.param_types.size()));
+            for (const IrType t : m.param_types)
+                write_u8(out, static_cast<uint8_t>(t));
+            write_u32(out, static_cast<uint32_t>(m.vtable_index));
+            write_u8(out, uint8_t((m.is_static ? 1u : 0u) |
+                                  (m.is_final ? 2u : 0u) |
+                                  (m.is_constructor ? 4u : 0u) |
+                                  (m.is_destructor ? 8u : 0u) |
+                                  (m.is_inline ? 16u : 0u)));
+            write_str(out, m.defining_class);
+            write_str(out, m.inherited_from);
+        }
+    }
+}
+
+/**
+ * @brief Lee la tabla que escribio @ref serialize_struct_types.
+ * @param c   Cursor.
+ * @param out Tabla a rellenar.
+ * @return false si el flujo esta truncado o trae tamanos imposibles.
+ */
+static bool deserialize_struct_types(util::ByteCursor &c,
+                                     std::vector<IrStructType> &out) {
+    out.clear();
+    uint32_t ntypes = 0;
+    if (!read_u32(c, ntypes) || ntypes > 2000000u) return false;
+    out.reserve(ntypes);
+    for (uint32_t i = 0; i < ntypes; ++i) {
+        IrStructType st;
+        uint32_t nmethods = 0;
+        if (!read_str(c, st.name) || !read_str(c, st.super_name) ||
+            !read_u32(c, nmethods) || nmethods > 2000000u)
+            return false;
+        st.methods.reserve(nmethods);
+        for (uint32_t k = 0; k < nmethods; ++k) {
+            IrMethod m;
+            uint8_t ret = 0, flags = 0;
+            uint32_t nparams = 0, vt = 0;
+            if (!read_str(c, m.name) || !read_str(c, m.ir_fn_name) ||
+                !read_u8(c, ret) || !read_u32(c, nparams) || nparams > 4096u)
+                return false;
+            m.return_type = static_cast<IrType>(ret);
+            m.param_types.reserve(nparams);
+            for (uint32_t p = 0; p < nparams; ++p) {
+                uint8_t t = 0;
+                if (!read_u8(c, t)) return false;
+                m.param_types.push_back(static_cast<IrType>(t));
+            }
+            if (!read_u32(c, vt) || !read_u8(c, flags) ||
+                !read_str(c, m.defining_class) ||
+                !read_str(c, m.inherited_from))
+                return false;
+            m.vtable_index = static_cast<int32_t>(vt);
+            m.is_static = (flags & 1u) != 0;
+            m.is_final = (flags & 2u) != 0;
+            m.is_constructor = (flags & 4u) != 0;
+            m.is_destructor = (flags & 8u) != 0;
+            m.is_inline = (flags & 16u) != 0;
+            st.methods.push_back(std::move(m));
+        }
+        out.push_back(std::move(st));
+    }
+    return true;
+}
+
 void emit_ir_module_cache(const IrModule &mod, util::ByteBuffer &out) {
     util::byte_buffer_init(out, &kIrModuleCacheKind);
     write_u32(out, IR_MODULE_CACHE_MAGIC);
@@ -1453,6 +1542,9 @@ void emit_ir_module_cache(const IrModule &mod, util::ByteBuffer &out) {
         write_u8(out, uint8_t(fx.returns_fresh ? 1u : 0u));
         write_u32(out, fx.frees_pointee);
     }
+
+    // 6) structs con metodos y de donde viene cada metodo (v20).
+    serialize_struct_types(mod.struct_types, out);
 }
 
 std::vector<uint8_t> emit_ir_module_cache_vec(const IrModule &mod) {
@@ -1571,6 +1663,10 @@ bool parse_ir_module_cache(const uint8_t *data, size_t len, IrModule &out) {
             out.register_native_import(std::move(lib), std::move(name), fx);
         }
     }
+
+    // 6) structs con metodos (v20).  Sin defensa por fin de flujo: la version
+    //    lo garantiza, y una cache que no la trae se recompila.
+    if (!deserialize_struct_types(c, out.struct_types)) return false;
     return true;
 }
 
@@ -1583,6 +1679,7 @@ void adopt_cached_module(IrModule &dst, IrModule &&src) {
     dst.static_data = std::move(src.static_data);
     dst.globals = std::move(src.globals);
     dst.native_imports = std::move(src.native_imports);
+    dst.struct_types = std::move(src.struct_types);
 }
 
 } // namespace ir
