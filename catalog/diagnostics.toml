@@ -1870,6 +1870,100 @@ es = "sin hallazgos: el linter solo habla de lo que puede demostrar"
 en = "'{0}' declares {1} and provably breaks it: {2}"
 es = "'{0}' declara {1} y esta demostrado que no lo cumple: {2}"
 
+# --- el detalle de cada veredicto de contrato (VXT100-VXT121) ---
+#
+# Lo que va en el `{2}` de VXT004 y VXW001: POR QUE se cumple, no se cumple o
+# no se puede decidir.  Iba escrito a mano en espanol dentro del verificador,
+# asi que con el compilador en ingles salia medio mensaje en cada idioma.
+
+[VXT100]
+en = "pure"
+es = "puro"
+
+[VXT101]
+en = "the function has data effects"
+es = "la funcion tiene efectos de dato"
+
+[VXT102]
+en = "unknown effects (dynamic or external call)"
+es = "efectos desconocidos (llamada dinamica o externa)"
+
+[VXT103]
+en = "does not throw"
+es = "no lanza"
+
+[VXT104]
+en = "may throw (a throw is reachable)"
+es = "puede lanzar (hay un throw alcanzable)"
+
+[VXT105]
+en = "unknown effects"
+es = "efectos desconocidos"
+
+[VXT106]
+en = "does not panic"
+es = "no hace panic"
+
+[VXT107]
+en = "may panic"
+es = "puede hacer panic"
+
+[VXT108]
+en = "partial: expected <= {0}, inferred {1} (own)"
+es = "parcial: esperado <= {0}, inferido {1} (propio)"
+
+[VXT109]
+en = "total: expected <= {0}, inferred {1}"
+es = "total: esperado <= {0}, inferido {1}"
+
+[VXT110]
+en = "{0} (possibly more: unknown effects)"
+es = "{0} (puede haber mas: efectos desconocidos)"
+
+[VXT111]
+en = "partial: expected <= {0}B, inferred {1}B (own frame)"
+es = "parcial: esperado <= {0}B, inferido {1}B (marco propio)"
+
+[VXT112]
+en = "total: not boundable (recursion or external callee)"
+es = "total: no acotable (recursion o llamada externa)"
+
+[VXT113]
+en = "total: expected <= {0}B, inferred {1}B (worst-case stack)"
+es = "total: esperado <= {0}B, inferido {1}B (peor caso de pila)"
+
+[VXT114]
+en = "trivially copyable value type"
+es = "tipo por valor trivialmente copiable"
+
+[VXT115]
+en = "it is a reference type (class), not a value type"
+es = "es un tipo por referencia (clase), no un tipo por valor"
+
+[VXT116]
+en = "it has a destructor (~Type), so it can only be moved"
+es = "tiene destructor (~Tipo), asi que solo se puede mover"
+
+[VXT117]
+en = "some field is managed (heap, GC or smart pointer)"
+es = "algun campo es gestionado (heap, GC o smart pointer)"
+
+[VXT118]
+en = "no field in the managed heap"
+es = "ningun campo en el heap gestionado"
+
+[VXT119]
+en = "some field references the managed heap"
+es = "algun campo referencia el heap gestionado"
+
+[VXT120]
+en = "expected {0}B, inferred {1}B"
+es = "esperado {0}B, inferido {1}B"
+
+[VXT121]
+en = "the function is not in the intermediate code"
+es = "la funcion no esta en el codigo intermedio"
+
 # --- lo que cuesta una frontera (VXW004) ---
 #
 # La unica familia del linter que puede CUANTIFICAR lo que pierdes: cuantas

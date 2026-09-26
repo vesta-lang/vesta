@@ -10,6 +10,7 @@
 #include <unordered_set>
 
 #include "analysis/memory/memory_access.h" // quien decide si una op toca memoria
+#include "vx/diag/diag_catalog.h" // el detalle de cada veredicto, por idioma
 #include "ir/ssa_ir.h"
 #include "ir/ir_type_info.h" // vocabulario UNICO de anchura/clase de un IrType
 #include "vx/asm/asm_analyze.h"
@@ -527,6 +528,143 @@ void compose_fingerprints(
         fps[i].stack_bytes_total = memo[i];
 }
 
+namespace {
+
+/* Los contratos por su nombre en el fuente: es sintaxis del lenguaje, igual
+ * en todos los idiomas, y cada uno se usaba en varios sitios. */
+constexpr const char *kPure = "@pure";
+constexpr const char *kNothrow = "@nothrow";
+constexpr const char *kNopanic = "@nopanic";
+constexpr const char *kAlloc = "@alloc";
+constexpr const char *kStack = "@stack";
+
+/**
+ * @brief Los contratos que una funcion declara, por su nombre.
+ * @param c Los contratos.
+ * @return Sus nombres, en orden fijo.
+ */
+std::vector<const char *> declared_contracts(const FunctionContracts &c) {
+    std::vector<const char *> out;
+    if (c.pure) out.push_back(kPure);
+    if (c.nothrow) out.push_back(kNothrow);
+    if (c.nopanic) out.push_back(kNopanic);
+    if (c.alloc_partial >= 0 || c.alloc_total >= 0) out.push_back(kAlloc);
+    if (c.stack_partial >= 0 || c.stack_total >= 0) out.push_back(kStack);
+    return out;
+}
+
+/**
+ * @brief Apunta un veredicto.
+ * @param out      Donde.
+ * @param function La funcion.
+ * @param contract El contrato, por su nombre.
+ * @param status   El veredicto.
+ * @param detail   Por que, ya en el idioma activo.
+ */
+void add_check(std::vector<ContractCheck> &out, const std::string &function,
+               const char *contract, ContractCheck::Status status,
+               std::string detail) {
+    out.push_back({function, contract, status, std::move(detail)});
+}
+
+/**
+ * @brief Un numero como argumento de un mensaje del catalogo.
+ * @param v El numero.
+ * @return Su texto.
+ */
+std::string arg(uint64_t v) { return std::to_string(v); }
+
+/**
+ * @brief Verifica los contratos de UNA funcion contra su huella.
+ *
+ * SOUND/ASIMETRICO: VIOLATED solo cuando la violacion es demostrable; si los
+ * efectos no se conocen del todo, UNVERIFIABLE.
+ *
+ * @param out  Donde se apuntan los veredictos.
+ * @param name La funcion.
+ * @param c    Lo que declara.
+ * @param fp   Su huella, ya compuesta.
+ */
+void check_function(std::vector<ContractCheck> &out, const std::string &name,
+                    const FunctionContracts &c, const FunctionFingerprint &fp) {
+    using St = ContractCheck::Status;
+    // @pure: probado puro -> OK; probado impuro (efectos conocidos) ->
+    // VIOLATED; si no se conocen los efectos -> UNVERIFIABLE.
+    if (c.pure) {
+        if (fp.pure)
+            add_check(out, name, kPure, St::OK, vx::diag::format("VXT100"));
+        else if (fp.effects_known)
+            add_check(out, name, kPure, St::VIOLATED,
+                      vx::diag::format("VXT101"));
+        else
+            add_check(out, name, kPure, St::UNVERIFIABLE,
+                      vx::diag::format("VXT102"));
+    }
+    if (c.nothrow) {
+        if (fp.effects_known && !fp.throws_total)
+            add_check(out, name, kNothrow, St::OK, vx::diag::format("VXT103"));
+        else if (fp.effects_known && fp.throws_total)
+            add_check(out, name, kNothrow, St::VIOLATED,
+                      vx::diag::format("VXT104"));
+        else
+            add_check(out, name, kNothrow, St::UNVERIFIABLE,
+                      vx::diag::format("VXT105"));
+    }
+    if (c.nopanic) {
+        if (fp.effects_known && !fp.panics_total)
+            add_check(out, name, kNopanic, St::OK, vx::diag::format("VXT106"));
+        else if (fp.effects_known && fp.panics_total)
+            add_check(out, name, kNopanic, St::VIOLATED,
+                      vx::diag::format("VXT107"));
+        else
+            add_check(out, name, kNopanic, St::UNVERIFIABLE,
+                      vx::diag::format("VXT105"));
+    }
+    // @alloc: PARCIAL = sitios PROPIOS (exacto); TOTAL = cierre alcanzable
+    // (conservador si hay efectos desconocidos).  Se declara cualquiera de las
+    // dos (o ambas).  La forma corta `@alloc(N)` fija el TOTAL.
+    if (c.alloc_partial >= 0) {
+        const uint64_t got = fp.alloc_sites;
+        const uint64_t want = static_cast<uint64_t>(c.alloc_partial);
+        add_check(out, name, kAlloc, got > want ? St::VIOLATED : St::OK,
+                  vx::diag::format("VXT108", {arg(want), arg(got)}));
+    }
+    if (c.alloc_total >= 0) {
+        const uint64_t got = fp.alloc_sites_total;
+        const uint64_t want = static_cast<uint64_t>(c.alloc_total);
+        std::string d = vx::diag::format("VXT109", {arg(want), arg(got)});
+        if (got > want)
+            add_check(out, name, kAlloc, St::VIOLATED, std::move(d));
+        else if (fp.effects_known)
+            add_check(out, name, kAlloc, St::OK, std::move(d));
+        else
+            add_check(out, name, kAlloc, St::UNVERIFIABLE,
+                      vx::diag::format("VXT110", {d}));
+    }
+    // @stack: PARCIAL = marco PROPIO (exacto, siempre verificable); TOTAL =
+    // profundidad de pila peor caso del arbol de llamadas.  Si el total no es
+    // acotable (recursion o llamada externa) queda INVERIFICABLE.  La forma
+    // corta `@stack(N)` es el TOTAL.
+    if (c.stack_partial >= 0) {
+        const uint64_t got = fp.stack_bytes;
+        const uint64_t want = static_cast<uint64_t>(c.stack_partial);
+        add_check(out, name, kStack, got > want ? St::VIOLATED : St::OK,
+                  vx::diag::format("VXT111", {arg(want), arg(got)}));
+    }
+    if (c.stack_total >= 0) {
+        const uint64_t got = fp.stack_bytes_total;
+        const uint64_t want = static_cast<uint64_t>(c.stack_total);
+        if (got == STACK_UNBOUNDED)
+            add_check(out, name, kStack, St::UNVERIFIABLE,
+                      vx::diag::format("VXT112"));
+        else
+            add_check(out, name, kStack, got > want ? St::VIOLATED : St::OK,
+                      vx::diag::format("VXT113", {arg(want), arg(got)}));
+    }
+}
+
+} // namespace
+
 std::vector<ContractCheck> verify_contracts(
     const std::vector<FunctionFingerprint> &fps,
     const FunctionContractMap &contracts) {
@@ -558,103 +696,14 @@ std::vector<ContractCheck> verify_contracts(
             /* Se verifica contra el intermedio PREVIO a optimizar, donde toda
              * funcion declarada existe: que no este es que la recogida y el
              * bajado no se ponen de acuerdo en el simbolo.  Callarlo daria el
-             * contrato por comprobado. */
-            out.push_back({name, "@contract", St::UNVERIFIABLE,
-                           "the function is not in the intermediate code"});
+             * contrato por comprobado, asi que cada contrato declarado se dice
+             * indecidible, con su nombre. */
+            const std::string why = vx::diag::format("VXT121");
+            for (const char *declared : declared_contracts(c))
+                add_check(out, name, declared, St::UNVERIFIABLE, why);
             continue;
         }
-
-        {
-            const FunctionFingerprint &fp = *it->second;
-            const std::string &etiqueta = name;
-            auto add = [&](const char *cn, St st, std::string detail) {
-                out.push_back({etiqueta, cn, st, std::move(detail)});
-            };
-
-            // @pure: probado puro -> OK; probado impuro (efectos conocidos) ->
-            // VIOLATED; si no se conocen los efectos -> UNVERIFIABLE.
-            if (c.pure) {
-                if (fp.pure)
-                    add("@pure", St::OK, "puro");
-                else if (fp.effects_known)
-                    add("@pure", St::VIOLATED,
-                        "la funcion tiene efectos de dato");
-                else
-                    add("@pure", St::UNVERIFIABLE,
-                        "efectos desconocidos (llamada dinamica/externa)");
-            }
-            // @nothrow.
-            if (c.nothrow) {
-                if (fp.effects_known && !fp.throws_total)
-                    add("@nothrow", St::OK, "no lanza");
-                else if (fp.effects_known && fp.throws_total)
-                    add("@nothrow", St::VIOLATED,
-                        "puede lanzar (throw alcanzable)");
-                else
-                    add("@nothrow", St::UNVERIFIABLE, "efectos desconocidos");
-            }
-            // @nopanic.
-            if (c.nopanic) {
-                if (fp.effects_known && !fp.panics_total)
-                    add("@nopanic", St::OK, "no hace panic");
-                else if (fp.effects_known && fp.panics_total)
-                    add("@nopanic", St::VIOLATED, "puede hacer panic");
-                else
-                    add("@nopanic", St::UNVERIFIABLE, "efectos desconocidos");
-            }
-            // @alloc: PARCIAL = sitios PROPIOS (exacto); TOTAL = cierre
-            // alcanzable (conservador si hay efectos desconocidos).  Se declara
-            // cualquiera de las dos (o ambas).  La forma corta `@alloc(N)` fija
-            // el TOTAL.
-            if (c.alloc_partial >= 0) {
-                const uint64_t got = fp.alloc_sites;
-                const uint64_t want = static_cast<uint64_t>(c.alloc_partial);
-                std::string d = "parcial: esperado <=" + std::to_string(want) +
-                                ", inferido " + std::to_string(got) +
-                                " (propio)";
-                add("@alloc", got > want ? St::VIOLATED : St::OK, std::move(d));
-            }
-            if (c.alloc_total >= 0) {
-                const uint64_t got = fp.alloc_sites_total;
-                const uint64_t want = static_cast<uint64_t>(c.alloc_total);
-                std::string d = "total: esperado <=" + std::to_string(want) +
-                                ", inferido " + std::to_string(got);
-                if (got > want)
-                    add("@alloc", St::VIOLATED, std::move(d));
-                else if (fp.effects_known)
-                    add("@alloc", St::OK, std::move(d));
-                else
-                    add("@alloc", St::UNVERIFIABLE,
-                        d + " (mas posibles: efectos desconocidos)");
-            }
-            // @stack: PARCIAL = frame PROPIO (exacto, siempre verificable);
-            // TOTAL = profundidad de pila peor caso del arbol de llamadas.  Si
-            // el total no es acotable (recursion/callee externo) queda
-            // INVERIFICABLE.  Forma corta `@stack(N)` = TOTAL.
-            if (c.stack_partial >= 0) {
-                const uint64_t got = fp.stack_bytes;
-                const uint64_t want = static_cast<uint64_t>(c.stack_partial);
-                std::string d = "parcial: esperado <=" + std::to_string(want) +
-                                "B, inferido " + std::to_string(got) +
-                                "B (frame propio)";
-                add("@stack", got > want ? St::VIOLATED : St::OK, std::move(d));
-            }
-            if (c.stack_total >= 0) {
-                const uint64_t got = fp.stack_bytes_total;
-                const uint64_t want = static_cast<uint64_t>(c.stack_total);
-                if (got == STACK_UNBOUNDED)
-                    add("@stack", St::UNVERIFIABLE,
-                        "total: no acotable (recursion o callee externo)");
-                else {
-                    std::string d =
-                        "total: esperado <=" + std::to_string(want) +
-                        "B, inferido " + std::to_string(got) +
-                        "B (peor caso de pila)";
-                    add("@stack", got > want ? St::VIOLATED : St::OK,
-                        std::move(d));
-                }
-            }
-        } // for targets
+        check_function(out, name, c, *it->second);
     }
     return out;
 }
@@ -680,40 +729,33 @@ std::vector<ContractCheck> verify_type_contracts(
         if (it == byname.end()) continue; // el tipo no llego al layout.
         const TypeFingerprint &fp = *it->second;
 
-        auto add = [&](const char *cn, St st, std::string detail) {
-            out.push_back({name, cn, st, std::move(detail)});
-        };
-
-        // @pod: value-type trivialmente copiable (sin dtor ni campos
-        // gestionados). Decidible del layout -> OK / VIOLATED (nunca
+        // @pod: tipo por valor trivialmente copiable (sin destructor ni campos
+        // gestionados).  Decidible del layout -> OK / VIOLATED (nunca
         // UNVERIFIABLE).
         if (c.pod) {
             if (fp.is_pod) {
-                add("@pod", St::OK, "value-type trivialmente copiable");
+                add_check(out, name, "@pod", St::OK,
+                          vx::diag::format("VXT114"));
             } else {
-                std::string why =
-                    fp.is_reference
-                        ? "es un tipo por referencia (clase), no un value-type"
-                    : fp.has_destructor
-                        ? "tiene destructor (~Tipo) -> carril move-only"
-                        : "tiene algun campo gestionado "
-                          "(heap/GC/smart-pointer)";
-                add("@pod", St::VIOLATED, std::move(why));
+                const char *why = fp.is_reference     ? "VXT115"
+                                  : fp.has_destructor ? "VXT116"
+                                                      : "VXT117";
+                add_check(out, name, "@pod", St::VIOLATED,
+                          vx::diag::format(why));
             }
         }
         // @no_heap: ningun campo referencia el heap gestionado.
         if (c.no_heap) {
-            add("@no_heap", fp.no_heap ? St::OK : St::VIOLATED,
-                fp.no_heap ? "sin campos en el heap gestionado"
-                           : "algun campo referencia el heap gestionado");
+            add_check(out, name, "@no_heap",
+                      fp.no_heap ? St::OK : St::VIOLATED,
+                      vx::diag::format(fp.no_heap ? "VXT118" : "VXT119"));
         }
         // @size(N): tamano EXACTO (estabilidad de ABI).  Decidible del layout.
         if (c.size >= 0) {
             const uint64_t got = fp.size_bytes;
             const uint64_t want = static_cast<uint64_t>(c.size);
-            std::string d = "esperado " + std::to_string(want) +
-                            "B, inferido " + std::to_string(got) + "B";
-            add("@size", got == want ? St::OK : St::VIOLATED, std::move(d));
+            add_check(out, name, "@size", got == want ? St::OK : St::VIOLATED,
+                      vx::diag::format("VXT120", {arg(want), arg(got)}));
         }
     }
     return out;

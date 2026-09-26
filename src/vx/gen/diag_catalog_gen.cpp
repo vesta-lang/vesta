@@ -585,6 +585,28 @@ const CatEntry kEntries[] = {
     {"VXT010", {"'{0}' is marked '{1}' on its return type: the mark grants a permission over what something POINTS TO, and a return type is nobody to grant it to -- put it on the parameter, variable or field that receives the value", "'{0}' lleva '{1}' en su tipo de retorno: la marca da un permiso sobre lo que algo APUNTA, y un tipo de retorno no es nadie a quien darselo -- ponla en el parametro, la variable o el campo que recibe el valor"}},
     {"VXT011", {"argument {0} is passed to an '{1}' parameter, which the callee writes: it needs somewhere to write to (a name, a field, an array element or a dereference), not a computed value", "el argumento {0} va a un parametro '{1}', que el llamado ESCRIBE: necesita un sitio donde escribir (un nombre, un campo, un elemento de array o un deref), no un valor calculado"}},
     {"VXT012", {"'{0}' is declared 'out' -- the caller expects to get a value back through it -- but there is a path that returns without writing it, and the caller would read whatever was in its slot; assign it on every path, or declare it 'inout' if what you want is to read what came in", "'{0}' se declara 'out' -- quien llama espera recibir un valor por ahi -- pero hay un camino que retorna sin escribirlo, y el llamante leeria lo que hubiera en su hueco; asignalo en todos los caminos, o declaralo 'inout' si lo que quieres es leer lo que venia"}},
+    {"VXT100", {"pure", "puro"}},
+    {"VXT101", {"the function has data effects", "la funcion tiene efectos de dato"}},
+    {"VXT102", {"unknown effects (dynamic or external call)", "efectos desconocidos (llamada dinamica o externa)"}},
+    {"VXT103", {"does not throw", "no lanza"}},
+    {"VXT104", {"may throw (a throw is reachable)", "puede lanzar (hay un throw alcanzable)"}},
+    {"VXT105", {"unknown effects", "efectos desconocidos"}},
+    {"VXT106", {"does not panic", "no hace panic"}},
+    {"VXT107", {"may panic", "puede hacer panic"}},
+    {"VXT108", {"partial: expected <= {0}, inferred {1} (own)", "parcial: esperado <= {0}, inferido {1} (propio)"}},
+    {"VXT109", {"total: expected <= {0}, inferred {1}", "total: esperado <= {0}, inferido {1}"}},
+    {"VXT110", {"{0} (possibly more: unknown effects)", "{0} (puede haber mas: efectos desconocidos)"}},
+    {"VXT111", {"partial: expected <= {0}B, inferred {1}B (own frame)", "parcial: esperado <= {0}B, inferido {1}B (marco propio)"}},
+    {"VXT112", {"total: not boundable (recursion or external callee)", "total: no acotable (recursion o llamada externa)"}},
+    {"VXT113", {"total: expected <= {0}B, inferred {1}B (worst-case stack)", "total: esperado <= {0}B, inferido {1}B (peor caso de pila)"}},
+    {"VXT114", {"trivially copyable value type", "tipo por valor trivialmente copiable"}},
+    {"VXT115", {"it is a reference type (class), not a value type", "es un tipo por referencia (clase), no un tipo por valor"}},
+    {"VXT116", {"it has a destructor (~Type), so it can only be moved", "tiene destructor (~Tipo), asi que solo se puede mover"}},
+    {"VXT117", {"some field is managed (heap, GC or smart pointer)", "algun campo es gestionado (heap, GC o smart pointer)"}},
+    {"VXT118", {"no field in the managed heap", "ningun campo en el heap gestionado"}},
+    {"VXT119", {"some field references the managed heap", "algun campo referencia el heap gestionado"}},
+    {"VXT120", {"expected {0}B, inferred {1}B", "esperado {0}B, inferido {1}B"}},
+    {"VXT121", {"the function is not in the intermediate code", "la funcion no esta en el codigo intermedio"}},
     {"VXW001", {"the contracts of '{0}' ({1}) are NOT being verified: {2} -- a contract is a CHECK, so one that cannot be checked promises without guarding anything: keep it as documented intent, or drop it, but do not read it as proven", "los contratos de '{0}' ({1}) NO se estan verificando: {2} -- un contrato es una COMPROBACION, asi que uno que no se puede comprobar promete sin guardar nada: dejalo como intencion documentada, o quitalo, pero no lo leas como demostrado"}},
     {"VXW002", {"'{0}' declares {1}({2}) and only {3} was proven -- tightening it makes the promise say what the code really does", "'{0}' declara {1}({2}) y solo se demostro {3} -- apretarlo hace que la promesa diga lo que el codigo hace de verdad"}},
     {"VXW003", {"'{0}' provably satisfies {1} and does not declare it -- declaring it turns today's fact into a promise the compiler will enforce", "'{0}' cumple {1} de forma demostrable y no lo declara -- declararlo convierte un hecho de hoy en una promesa que el compilador hara cumplir"}},
@@ -827,7 +849,7 @@ const CatEntry kEntries[] = {
     {"use_def.unused", {"'{2}' is never used", "'{2}' no se usa en ningun sitio"}},
     {"value_shape.none", {"it has no values with components", "no tiene valores con componentes"}},
 };
-const int kEntryCount = 806;
+const int kEntryCount = 828;
 
 } // namespace
 
