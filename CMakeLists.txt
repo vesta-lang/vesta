@@ -1744,8 +1744,8 @@ endif ()
 
 # Recorrido de un arbol de fuentes usando lo que el listado del sistema ya
 # devuelve.  Es solo cabecera, asi que no necesita enlazar nada del proyecto.
-add_executable(test_recorrer_arbol tests/util/test_recorrer_arbol.cpp)
-target_include_directories(test_recorrer_arbol PRIVATE ${VM_INCLUDES})
+add_executable(test_walk_tree tests/util/test_walk_tree.cpp)
+target_include_directories(test_walk_tree PRIVATE ${VM_INCLUDES})
 
 # El pool de hilos.  Los dos tests compilan `ThreadPool.cpp` directamente en vez
 # de enlazar `vmcore`: es lo unico que prueban, y arrastrar el runtime entero

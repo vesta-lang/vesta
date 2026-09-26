@@ -91,7 +91,7 @@ namespace fs = std::filesystem;
  * @param p Ruta a comprobar.
  * @return true si la ruta existe; false en caso contrario o si ocurre un error.
  */
-static bool file_exists(const fs::path &p) {
+inline bool file_exists(const fs::path &p) {
     std::error_code ec;
     return fs::exists(p, ec) && !ec;
 }
@@ -102,7 +102,7 @@ static bool file_exists(const fs::path &p) {
  * @param p Ruta a comprobar.
  * @return true si existe y es archivo regular; false en caso contrario.
  */
-static bool is_regular_file(const fs::path &p) {
+inline bool is_regular_file(const fs::path &p) {
     std::error_code ec;
     return fs::exists(p, ec) && !ec && fs::is_regular_file(p, ec) && !ec;
 }
@@ -115,7 +115,7 @@ static bool is_regular_file(const fs::path &p) {
  * @param s Cadena PATH a dividir.
  * @return Vector con cada entrada del PATH (sin entradas vacias).
  */
-static std::vector<std::string> split_path_env(const std::string &s) {
+inline std::vector<std::string> split_path_env(const std::string &s) {
     char sep =
 #ifdef _WIN32
         ';';
@@ -145,7 +145,7 @@ static std::vector<std::string> split_path_env(const std::string &s) {
  * @param p Ruta a normalizar.
  * @return Ruta normalizada (absoluta si es posible).
  */
-static fs::path normalize_path_safe(const fs::path &p) {
+inline fs::path normalize_path_safe(const fs::path &p) {
     try {
         if (p.is_absolute()) return fs::weakly_canonical(p);
         return fs::weakly_canonical(fs::current_path() / p);
@@ -165,7 +165,7 @@ static fs::path normalize_path_safe(const fs::path &p) {
  * @param p Ruta del fichero.
  * @return true si parece legible; false en caso contrario.
  */
-static bool can_read(const fs::path &p) {
+inline bool can_read(const fs::path &p) {
     std::error_code ec;
     if (!fs::exists(p, ec) || ec) return false;
 #ifdef _WIN32
@@ -192,7 +192,7 @@ static bool can_read(const fs::path &p) {
  * @param p Ruta del fichero a comprobar.
  * @return true si parece escribible; false en caso contrario.
  */
-static bool can_write(const fs::path &p) {
+inline bool can_write(const fs::path &p) {
     std::error_code ec;
     // Si no existe, comprobar si el directorio padre es escribible
     if (!fs::exists(p, ec) || ec) {
@@ -238,7 +238,7 @@ static bool can_write(const fs::path &p) {
  * @param s Ruta en forma de cadena.
  * @return true si el archivo existe.
  */
-static bool file_exists_str(const std::string &s) {
+inline bool file_exists_str(const std::string &s) {
     return file_exists(normalize_path_safe(fs::path(s)));
 }
 
@@ -252,7 +252,7 @@ static bool file_exists_str(const std::string &s) {
  * @param p Ruta a comprobar.
  * @return true si el fichero existe y parece ejecutable.
  */
-static bool path_exists_and_executable(const fs::path &p) {
+inline bool path_exists_and_executable(const fs::path &p) {
     std::error_code ec;
     if (!fs::exists(p, ec) || ec) return false;
     if (fs::is_directory(p, ec) || ec) return false;
@@ -299,7 +299,7 @@ static bool path_exists_and_executable(const fs::path &p) {
  * @param s Cadena a comprobar.
  * @return true si contiene separador de directorios.
  */
-static bool contains_dir_separator(const std::string &s) {
+inline bool contains_dir_separator(const std::string &s) {
 #ifdef _WIN32
     return s.find('\\') != std::string::npos ||
            s.find('/') != std::string::npos;
@@ -314,7 +314,7 @@ static bool contains_dir_separator(const std::string &s) {
  * @param cmd Nombre o ruta del ejecutable.
  * @return Ruta absoluta encontrada o std::nullopt si no existe.
  */
-static std::optional<fs::path> find_executable(const std::string &cmd) {
+inline std::optional<fs::path> find_executable(const std::string &cmd) {
     if (cmd.empty()) return std::nullopt;
 
     // Si parece una ruta (contiene separador), verifique directamente.
@@ -414,7 +414,7 @@ static std::optional<fs::path> find_executable(const std::string &cmd) {
  * }
  * @endcode
  */
-static std::optional<fs::path> get_existing_absolute_path(const fs::path &p) {
+inline std::optional<fs::path> get_existing_absolute_path(const fs::path &p) {
     std::error_code ec;
     if (!fs::exists(p, ec) || ec) return std::nullopt;
 
@@ -452,7 +452,7 @@ static std::optional<fs::path> get_existing_absolute_path(const fs::path &p) {
  * }
  * @endcode
  */
-static bool is_directory(const fs::path &p) {
+inline bool is_directory(const fs::path &p) {
     std::error_code ec;
     if (!fs::exists(p, ec) || ec) return false;
     return fs::is_directory(p, ec) && !ec;
@@ -479,7 +479,7 @@ static bool is_directory(const fs::path &p) {
  * }
  * @endcode
  */
-static std::optional<fs::path>
+inline std::optional<fs::path>
 get_existing_absolute_path_str(const std::string &s) {
     return get_existing_absolute_path(normalize_path_safe(fs::path(s)));
 }
@@ -500,7 +500,7 @@ get_existing_absolute_path_str(const std::string &s) {
  * }
  * @endcode
  */
-static bool is_directory_str(const std::string &s) {
+inline bool is_directory_str(const std::string &s) {
     return fs::is_directory(normalize_path_safe(fs::path(s)));
 }
 
@@ -523,22 +523,22 @@ static bool is_directory_str(const std::string &s) {
  * ficheros nativo (ext4, btrfs, xfs, tmpfs) informa del tipo en el listado --,
  * y en ese escenario todo el recorrido esta dominado por el propio puente.
  *
- * @param raiz Directorio de partida.  Si no se puede abrir, no se llama a
- *             @p ver ni una vez (no es un error: una raiz de busqueda puede
- *             perfectamente no existir).
- * @param ver  Se invoca por cada entrada con (ruta, es_directorio).  Cuando la
- *             entrada es un directorio, devolver @c false para no bajar a el;
- *             en un fichero el valor devuelto se ignora.  Las entradas `.` y
- *             `..` nunca se pasan.
+ * @param root  Directorio de partida.  Si no se puede abrir, no se llama a
+ *              @p visit ni una vez (no es un error: una raiz de busqueda
+ *              puede perfectamente no existir).
+ * @param visit Se invoca por cada entrada con (ruta, es_directorio).  Cuando
+ *              la entrada es un directorio, devolver @c false para no bajar a
+ *              el; en un fichero el valor devuelto se ignora.  Las entradas
+ *              `.` y `..` nunca se pasan.
  */
-static void
-recorrer_arbol(const std::string &raiz,
-               const std::function<bool(const std::string &, bool)> &ver) {
-    std::vector<std::string> pendientes;
-    pendientes.push_back(raiz);
-    while (!pendientes.empty()) {
-        std::string dir = std::move(pendientes.back());
-        pendientes.pop_back();
+inline void
+walk_tree(const std::string &root,
+          const std::function<bool(const std::string &, bool)> &visit) {
+    std::vector<std::string> pending;
+    pending.push_back(root);
+    while (!pending.empty()) {
+        std::string dir = std::move(pending.back());
+        pending.pop_back();
         // Sin barra final: las rutas se componen anadiendola nosotros.
         while (dir.size() > 1 && (dir.back() == '/' || dir.back() == '\\'))
             dir.pop_back();
@@ -547,39 +547,39 @@ recorrer_arbol(const std::string &raiz,
         HANDLE h = FindFirstFileA((dir + "\\*").c_str(), &fd);
         if (h == INVALID_HANDLE_VALUE) continue;
         do {
-            const char *nombre = fd.cFileName;
+            const char *name = fd.cFileName;
             // `.` y `..` no son entradas del arbol.
-            if (nombre[0] == '.' &&
-                (nombre[1] == '\0' || (nombre[1] == '.' && nombre[2] == '\0')))
+            if (name[0] == '.' &&
+                (name[1] == '\0' || (name[1] == '.' && name[2] == '\0')))
                 continue;
-            const bool es_dir =
+            const bool is_dir =
                 (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
-            std::string ruta = dir + "/" + nombre;
-            const bool bajar = ver(ruta, es_dir);
-            if (es_dir && bajar) pendientes.push_back(std::move(ruta));
+            std::string entry = dir + "/" + name;
+            const bool descend = visit(entry, is_dir);
+            if (is_dir && descend) pending.push_back(std::move(entry));
         } while (FindNextFileA(h, &fd));
         FindClose(h);
 #else
         DIR *d = ::opendir(dir.c_str());
         if (!d) continue;
         while (struct dirent *e = ::readdir(d)) {
-            const char *nombre = e->d_name;
-            if (nombre[0] == '.' &&
-                (nombre[1] == '\0' || (nombre[1] == '.' && nombre[2] == '\0')))
+            const char *name = e->d_name;
+            if (name[0] == '.' &&
+                (name[1] == '\0' || (name[1] == '.' && name[2] == '\0')))
                 continue;
-            std::string ruta = dir + "/" + nombre;
-            bool es_dir;
+            std::string entry = dir + "/" + name;
+            bool is_dir;
             // `d_type` viene con el listado en los sistemas de ficheros que lo
             // soportan; solo cuando no lo sabe hay que preguntar al disco.
             if (e->d_type != DT_UNKNOWN) {
-                es_dir = (e->d_type == DT_DIR);
+                is_dir = (e->d_type == DT_DIR);
             } else {
                 struct stat st;
-                if (::stat(ruta.c_str(), &st) != 0) continue;
-                es_dir = S_ISDIR(st.st_mode);
+                if (::stat(entry.c_str(), &st) != 0) continue;
+                is_dir = S_ISDIR(st.st_mode);
             }
-            const bool bajar = ver(ruta, es_dir);
-            if (es_dir && bajar) pendientes.push_back(std::move(ruta));
+            const bool descend = visit(entry, is_dir);
+            if (is_dir && descend) pending.push_back(std::move(entry));
         }
         ::closedir(d);
 #endif
@@ -590,7 +590,7 @@ recorrer_arbol(const std::string &raiz,
  * Obtener la ruta del ejecutable actual con el nombre del ejecutable includo
  * @return
  */
-static std::string get_executable_path() {
+inline std::string get_executable_path() {
 #ifdef _WIN32
     char buffer[MAX_PATH];
     DWORD len = GetModuleFileNameA(NULL, buffer, MAX_PATH);
@@ -612,25 +612,11 @@ static std::string get_executable_path() {
  * obtener nombre del ejecutable unicamente
  * @return nombre del ejecutable
  */
-static std::string get_executable_name() {
+inline std::string get_executable_name() {
     std::string path = get_executable_path();
     return std::filesystem::path(path).filename().string();
 }
 
-/**
- * @brief Escribe un fichero de forma ATOMICA: quien lo lea vera el contenido
- *        viejo o el nuevo, nunca uno a medias.
- *
- * Escribe a un temporal unico (proceso + contador, para que dos compilaciones
- * simultaneas no colisionen) y renombra encima.  El renombrado es atomico en
- * los sistemas de ficheros que usamos (NTFS, ext4, btrfs, APFS), y es lo que
- * impide que un corte a mitad de la escritura deje una cache corrupta que
- * ademas parece valida.
- *
- * @param path  Destino.
- * @param bytes Contenido.
- * @return @c true si el destino quedo escrito.
- */
 /**
  * @brief Donde van los temporales de las escrituras atomicas.
  *
@@ -644,7 +630,7 @@ static std::string get_executable_name() {
  *
  * Se resuelve UNA vez: no cambia durante la vida del proceso.
  */
-static const std::string &temp_write_dir() {
+inline const std::string &temp_write_dir() {
     // El cajon de temporales de la cache, que decide `util/cache_paths.h`.
     return util::cache_dir(util::CacheKind::Temp);
 }
@@ -661,7 +647,7 @@ static const std::string &temp_write_dir() {
  * queda al lado del destino y se acepta ensuciar ese directorio antes que
  * arriesgar una escritura a medias.
  */
-static bool same_volume(const std::string &a, const std::string &b) {
+inline bool same_volume(const std::string &a, const std::string &b) {
     std::error_code e1, e2;
 #ifdef _WIN32
     char va[MAX_PATH] = {0}, vb[MAX_PATH] = {0};
@@ -678,30 +664,56 @@ static bool same_volume(const std::string &a, const std::string &b) {
 #endif
 }
 
-static bool write_file_atomic(const std::string &path,
+/**
+ * @brief Crea un directorio la PRIMERA vez que se pide, y lo recuerda.
+ *
+ * Pedirlo en cada escritura son dos llamadas al sistema de ficheros (`stat` +
+ * `mkdir`) para saber lo que ya sabiamos: medido en una compilacion en frio,
+ * 2.030 escrituras preguntando por los mismos directorios.
+ *
+ * El memo es UNO para todo el programa porque la funcion es `inline`: con
+ * `static` cada fichero que incluyera esta cabecera tenia el suyo, y la misma
+ * pregunta se repetia una vez por fichero.
+ *
+ * @param dir   El directorio.
+ * @param force Crearlo aunque el memo diga que ya existe (alguien pudo borrar
+ *              el arbol entre dos escrituras).
+ */
+inline void ensure_dir_once(const std::string &dir, bool force) {
+    static std::mutex created_mutex;
+    static std::unordered_set<std::string> created;
+    bool create = force;
+    {
+        std::lock_guard<std::mutex> g(created_mutex);
+        if (force) created.erase(dir);
+        create = created.insert(dir).second || force;
+    }
+    if (create) {
+        std::error_code e2;
+        fs::create_directories(dir, e2);
+    }
+}
+
+/**
+ * @brief Escribe un fichero de forma ATOMICA: quien lo lea vera el contenido
+ *        viejo o el nuevo, nunca uno a medias.
+ *
+ * Escribe a un temporal unico (proceso + contador, para que dos compilaciones
+ * simultaneas no colisionen) y renombra encima.  El renombrado es atomico en
+ * los sistemas de ficheros que usamos (NTFS, ext4, btrfs, APFS), y es lo que
+ * impide que un corte a mitad de la escritura deje una cache corrupta que
+ * ademas parece valida.
+ *
+ * @param path  Destino.
+ * @param bytes Contenido.
+ * @return @c true si el destino quedo escrito.
+ */
+inline bool write_file_atomic(const std::string &path,
                               const std::vector<uint8_t> &bytes) {
-    static std::atomic<uint64_t> contador{0};
+    static std::atomic<uint64_t> counter{0};
     std::error_code ec;
-    /* El directorio, UNA vez.  Pedirlo en cada escritura son dos llamadas al
-     * sistema de ficheros (`stat` + `mkdir`) para saber lo que ya sabiamos:
-     * medido en una compilacion en frio, 2.030 escrituras preguntando por los
-     * mismos directorios. */
-    const std::string dir_padre = fs::path(path).parent_path().string();
-    auto asegurar_dir = [&](bool forzar) {
-        static std::mutex mx_dirs;
-        static std::unordered_set<std::string> hechos;
-        bool crear = forzar;
-        {
-            std::lock_guard<std::mutex> g(mx_dirs);
-            if (forzar) hechos.erase(dir_padre);
-            crear = hechos.insert(dir_padre).second || forzar;
-        }
-        if (crear) {
-            std::error_code e2;
-            fs::create_directories(dir_padre, e2);
-        }
-    };
-    asegurar_dir(false);
+    const std::string parent_dir = fs::path(path).parent_path().string();
+    ensure_dir_once(parent_dir, false);
 
     /* DONDE va el temporal.  En el directorio comun si esta en el mismo volumen
      * que el destino; si no, al lado del destino como siempre.
@@ -709,22 +721,22 @@ static bool write_file_atomic(const std::string &path,
      * La comprobacion se hace UNA vez por directorio de destino y se recuerda,
      * en la misma linea que el memo de arriba: preguntarlo en cada escritura
      * seria otra llamada al sistema por fichero, y la respuesta no cambia. */
-    static std::mutex mx_vol;
-    static std::unordered_map<std::string, bool> vol_comun;
-    bool usar_comun = false;
+    static std::mutex volume_mutex;
+    static std::unordered_map<std::string, bool> use_common_by_dir;
+    bool use_common = false;
     {
-        std::lock_guard<std::mutex> g(mx_vol);
-        auto it = vol_comun.find(dir_padre);
-        if (it != vol_comun.end()) {
-            usar_comun = it->second;
+        std::lock_guard<std::mutex> g(volume_mutex);
+        auto it = use_common_by_dir.find(parent_dir);
+        if (it != use_common_by_dir.end()) {
+            use_common = it->second;
         } else {
             std::error_code e3;
             fs::create_directories(temp_write_dir(), e3);
             // Si el directorio comun no se pudo crear, no hay nada que
             // comparar: al lado del destino, que siempre funciona.
-            usar_comun = fs::exists(temp_write_dir(), e3) &&
-                         same_volume(temp_write_dir(), dir_padre);
-            vol_comun.emplace(dir_padre, usar_comun);
+            use_common = fs::exists(temp_write_dir(), e3) &&
+                         same_volume(temp_write_dir(), parent_dir);
+            use_common_by_dir.emplace(parent_dir, use_common);
         }
     }
 
@@ -733,7 +745,7 @@ static bool write_file_atomic(const std::string &path,
      * del proceso, que es lo que despues permite decir con certeza que sobra --
      * si ese proceso ya no existe, nadie va a terminarlo. */
     std::string tmp;
-    if (usar_comun)
+    if (use_common)
         tmp = temp_write_dir() + "/" + fs::path(path).filename().string() +
               ".tmp.";
     else
@@ -744,7 +756,7 @@ static bool write_file_atomic(const std::string &path,
     tmp += std::to_string(static_cast<uint64_t>(getpid()));
 #endif
     tmp +=
-        "." + std::to_string(contador.fetch_add(1, std::memory_order_relaxed));
+        "." + std::to_string(counter.fetch_add(1, std::memory_order_relaxed));
     /* Escritura con las llamadas del SISTEMA, no con las de la biblioteca.
      *
      * `std::ofstream` mete una capa de buffer propia encima: reserva, copia los
@@ -765,7 +777,7 @@ static bool write_file_atomic(const std::string &path,
              * arriba diria que ya existe, asi que se rehace y se reintenta UNA
              * vez.  Sin esto la escritura falla en silencio y el artefacto se
              * pierde sin que nadie se entere. */
-            asegurar_dir(true);
+            ensure_dir_once(parent_dir, true);
             h = CreateFileA(tmp.c_str(), GENERIC_WRITE, 0, nullptr,
                             CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
             if (h == INVALID_HANDLE_VALUE) return false;
@@ -775,13 +787,13 @@ static bool write_file_atomic(const std::string &path,
         while (ok && off < bytes.size()) {
             // `WriteFile` toma un contador de 32 bits: los ficheros grandes van
             // en varias tandas en vez de truncarse en silencio.
-            const DWORD trozo = static_cast<DWORD>(
+            const DWORD chunk = static_cast<DWORD>(
                 std::min<size_t>(bytes.size() - off, 32u * 1024u * 1024u));
-            DWORD escritos = 0;
-            ok = WriteFile(h, bytes.data() + off, trozo, &escritos, nullptr) !=
+            DWORD written = 0;
+            ok = WriteFile(h, bytes.data() + off, chunk, &written, nullptr) !=
                      0 &&
-                 escritos == trozo;
-            off += escritos;
+                 written == chunk;
+            off += written;
         }
         CloseHandle(h);
         if (!ok) {
@@ -793,7 +805,7 @@ static bool write_file_atomic(const std::string &path,
         if (fd < 0) {
             // Ver el comentario de la rama de Windows: el memo de directorios
             // puede haber quedado obsoleto si alguien limpio el arbol.
-            asegurar_dir(true);
+            ensure_dir_once(parent_dir, true);
             fd = ::open(tmp.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
             if (fd < 0) return false;
         }
@@ -826,7 +838,7 @@ static bool write_file_atomic(const std::string &path,
          * paso funciona y el fallo se traslada AQUI, donde no habia red.  Un
          * `false` de esta funcion es un artefacto perdido, que es justo lo que
          * el reintento existe para evitar. */
-        asegurar_dir(true);
+        ensure_dir_once(parent_dir, true);
         std::error_code ec_re;
         fs::rename(tmp, path, ec_re);
         if (!ec_re) return true;
@@ -864,7 +876,7 @@ static bool write_file_atomic(const std::string &path,
  * @param path Artefacto a marcar.  En Windows no hace nada.
  * @return true si se marco (o si el sistema no tiene ese bit).
  */
-static bool mark_executable(const std::string &path) {
+inline bool mark_executable(const std::string &path) {
 #ifndef _WIN32
     std::error_code ec;
     fs::permissions(path,

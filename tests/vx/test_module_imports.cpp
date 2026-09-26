@@ -27,17 +27,17 @@
 
 namespace {
 
-int g_fallos = 0; ///< Cuantas comprobaciones han fallado.
+int g_failures = 0; ///< Cuantas comprobaciones han fallado.
 
 /**
  * @brief Comprueba una condicion y deja constancia si no se cumple.
  * @param cond Lo que tiene que ser cierto.
- * @param que  Que se estaba comprobando.
+ * @param what Que se estaba comprobando.
  */
-void check(bool cond, const char *que) {
+void check(bool cond, const char *what) {
     if (!cond) {
-        std::printf("FALLO: %s\n", que);
-        ++g_fallos;
+        std::printf("FALLO: %s\n", what);
+        ++g_failures;
     }
 }
 
@@ -141,6 +141,6 @@ int main() {
     check(deps.size() == 3 && deps[0] == 1 && deps[1] == 2 && deps[2] == 3,
           "en anchura, empezando por la directa");
 
-    if (g_fallos == 0) std::printf("test_module_imports: OK\n");
-    return g_fallos == 0 ? 0 : 1;
+    if (g_failures == 0) std::printf("test_module_imports: OK\n");
+    return g_failures == 0 ? 0 : 1;
 }

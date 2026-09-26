@@ -23,20 +23,20 @@
 
 namespace {
 
-int g_fallos = 0; ///< Cuantas comprobaciones han fallado.
+int g_failures = 0; ///< Cuantas comprobaciones han fallado.
 
 /**
  * @brief Compara dos cadenas y deja constancia si no coinciden.
  * @param got  Lo obtenido.
  * @param want Lo esperado.
- * @param que  Que se estaba comprobando.
+ * @param what Que se estaba comprobando.
  */
 void check_eq(const std::string &got, const std::string &want,
-              const char *que) {
+              const char *what) {
     if (got != want) {
-        std::printf("FALLO: %s: '%s' (esperado '%s')\n", que, got.c_str(),
+        std::printf("FALLO: %s: '%s' (esperado '%s')\n", what, got.c_str(),
                     want.c_str());
-        ++g_fallos;
+        ++g_failures;
     }
 }
 
@@ -82,6 +82,6 @@ int main() {
              "ruta sin miembro detras");
     check_eq(strip_symbol_path("x", ""), "x", "ruta vacia");
 
-    if (g_fallos == 0) std::printf("test_namespace_names: OK\n");
-    return g_fallos == 0 ? 0 : 1;
+    if (g_failures == 0) std::printf("test_namespace_names: OK\n");
+    return g_failures == 0 ? 0 : 1;
 }

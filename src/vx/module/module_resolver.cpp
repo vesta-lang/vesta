@@ -1175,7 +1175,7 @@ void ModuleGraph::build_namespace_index_() {
     };
 
     for (const auto &root : roots) {
-        ::fs::recorrer_arbol(root, [&](const std::string &ruta, bool es_dir) {
+        ::fs::walk_tree(root, [&](const std::string &ruta, bool es_dir) {
             ++n_entradas;
             /* No bajar a directorios ocultos.  Ahi es donde viven las caches
              * de la propia construccion (`.cache`), que jamas
