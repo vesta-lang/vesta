@@ -24,6 +24,7 @@
 #include "vx/c_header_gen.h"   // Fase 4 interop C: vx --emit-header
 #include "vx/borrow/borrow_ir_check.h" // la exclusividad cruzando llamadas
 #include "vx/contracts_collect.h"     // lo que el programa DECLARA
+#include "vx/helper_override.h"       // que ayudantes admiten sustituto
 #include "vx/module_checks.h"  // lo que se comprueba antes de optimizar
 #include "vx/vxdbg_emit.h"     // base de conocimiento de depuracion
 
@@ -708,55 +709,16 @@ CompileResult compile_vx_source(const std::string &source,
         // schema; hoy solo "memcpy" es multi-versionado.
         if (!fd->helper_override_target.empty()) {
             const std::string &tgt = fd->helper_override_target;
-            // CPU dispatch Inc 5a: helpers multi-versionados soportados.
-            const bool is_multiversioned =
-                (tgt == "memcpy" || tgt == "strcmp" || tgt == "strlen");
-            if (!is_multiversioned) {
-                // No-fatal: el helper objetivo no es (todavia) multi-
-                // versionado.  Avisamos pero seguimos (el resto compila).
-                res.diagnostics.warning(
-                    fd->loc,
-                    "@HelperOverride: helper '" + tgt +
-                        "' no es multi-versionado (solo 'memcpy', 'strcmp', "
-                        "'strlen' por ahora); la anotacion se ignora");
-            } else {
+            /* Si el ayudante admite sustituto y si la firma cuadra lo dice
+             * `check_helper_override`, el mismo que usa el camino de
+             * proyecto. */
+            if (check_helper_override(*fd, res.diagnostics)) {
                 if (res.aot_helper_override_syms.count(tgt)) {
                     res.ok = false;
-                    res.diagnostics.error(
-                        fd->loc, "multiples @HelperOverride(" + tgt + "): '" +
-                                     res.aot_helper_override_syms[tgt] +
-                                     "' y '" + fd->name + "'");
+                    res.diagnostics.diag(
+                        fd->loc, DiagLevel::ERR, "VX4016",
+                        {tgt, res.aot_helper_override_syms[tgt], fd->name});
                     return res;
-                }
-                // Validacion de firma compatible por helper.  No es fatal (el
-                // usuario manda), pero avisamos si no cuadra:
-                //   memcpy -> void(u8*, u8*, u64)
-                //   strcmp -> i64(u8*, i64, u8*, i64)
-                //   strlen -> i64(u8*)
-                bool ret_void =
-                    !fd->return_type || (fd->return_type->kind ==
-                                             ast::NodeKind::PrimitiveTypeNode &&
-                                         static_cast<ast::PrimitiveTypeNode *>(
-                                             fd->return_type.get())
-                                                 ->prim == PrimitiveKind::VOID);
-                bool sig_ok = true;
-                std::string expected;
-                if (tgt == "memcpy") {
-                    sig_ok = (fd->params.size() == 3 && ret_void);
-                    expected = "void(u8*, u8*, u64)";
-                } else if (tgt == "strcmp") {
-                    sig_ok = (fd->params.size() == 4 && !ret_void);
-                    expected = "i64(u8*, i64, u8*, i64)";
-                } else { // strlen
-                    sig_ok = (fd->params.size() == 1 && !ret_void);
-                    expected = "i64(u8*)";
-                }
-                if (!sig_ok) {
-                    res.diagnostics.warning(
-                        fd->loc,
-                        "@HelperOverride(" + tgt + "): firma esperada " +
-                            expected +
-                            "; la del override puede ser incompatible");
                 }
                 res.aot_helper_override_syms[tgt] = fd->name;
             }
@@ -1592,8 +1554,8 @@ CompileResult compile_vx_source(const std::string &source,
             // Volcar el error del emisor al sumidero unificado.
             SourceLoc loc;
             loc.set_file(filename);
-            res.diagnostics.error(
-                std::move(loc), std::string("emisor IR fallo: ") + eres.error);
+            res.diagnostics.diag(std::move(loc), DiagLevel::ERR, "VX4017",
+                                 {eres.error});
             res.ok = false;
             return res;
         }

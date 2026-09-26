@@ -54,6 +54,7 @@ int run_worker_from_source(std::string code, const std::string &file_name,
 #include "vx/borrow/borrow_ir_check.h" // la exclusividad, cruzando la llamada
 #include "vx/compiler.h"
 #include "vx/contracts_collect.h" // lo que el programa DECLARA
+#include "vx/helper_override.h"   // que ayudantes admiten sustituto
 #include "vx/module_checks.h" // lo que se comprueba antes de optimizar
 #include "vx/project/module_cache_key.h" // cuando un artefacto guardado sirve
 #include "vx/project/module_work.h" // lo que se lleva de cada modulo
@@ -1674,17 +1675,7 @@ CompileResult compile_vx_project(
                 auto *fd = static_cast<ast::FunctionDecl *>(decl.get());
                 if (fd->helper_override_target.empty()) continue;
                 const std::string &tgt = fd->helper_override_target;
-                const bool is_multiversioned =
-                    (tgt == "memcpy" || tgt == "strcmp" || tgt == "strlen");
-                if (!is_multiversioned) {
-                    pm.diags.warning(
-                        fd->loc,
-                        "@HelperOverride: helper '" + tgt +
-                            "' no es multi-versionado (solo 'memcpy', "
-                            "'strcmp', "
-                            "'strlen' por ahora); la anotacion se ignora");
-                    continue;
-                }
+                if (!check_helper_override(*fd, pm.diags)) continue;
                 // El nombre del simbolo: en modulos NO-root las fns top-level
                 // se manglan con prefijo `<module>__` (ver mangle_top_level_
                 // mas abajo).  Aqui aun no se ha manglado el AST (eso ocurre
@@ -1694,32 +1685,6 @@ CompileResult compile_vx_project(
                 const std::string sym_name =
                     is_root ? fd->name
                             : module_member_symbol(pm.module_name.str(), fd->name);
-                // Validacion de firma (no fatal, el usuario manda).
-                bool ret_void =
-                    !fd->return_type || (fd->return_type->kind ==
-                                             ast::NodeKind::PrimitiveTypeNode &&
-                                         static_cast<ast::PrimitiveTypeNode *>(
-                                             fd->return_type.get())
-                                                 ->prim == PrimitiveKind::VOID);
-                bool sig_ok = true;
-                std::string expected;
-                if (tgt == "memcpy") {
-                    sig_ok = (fd->params.size() == 3 && ret_void);
-                    expected = "void(u8*, u8*, u64)";
-                } else if (tgt == "strcmp") {
-                    sig_ok = (fd->params.size() == 4 && !ret_void);
-                    expected = "i64(u8*, i64, u8*, i64)";
-                } else { // strlen
-                    sig_ok = (fd->params.size() == 1 && !ret_void);
-                    expected = "i64(u8*)";
-                }
-                if (!sig_ok) {
-                    pm.diags.warning(
-                        fd->loc,
-                        "@HelperOverride(" + tgt + "): firma esperada " +
-                            expected +
-                            "; la del override puede ser incompatible");
-                }
                 // Precedencia + deteccion de conflicto.
                 auto existing = aot_helper_override_syms.find(tgt);
                 if (existing != aot_helper_override_syms.end()) {
@@ -1735,11 +1700,8 @@ CompileResult compile_vx_project(
                         // precedencia (ambos imports, o el caso imposible de
                         // dos roots) overriden el mismo target -> error.
                         res.ok = false;
-                        res.diagnostics.error(fd->loc,
-                                              "multiples @HelperOverride(" +
-                                                  tgt + ") cross-module: '" +
-                                                  existing->second + "' y '" +
-                                                  sym_name + "'");
+                        res.diagnostics.diag(fd->loc, DiagLevel::ERR, "VX4016",
+                                             {tgt, existing->second, sym_name});
                         return res;
                     }
                 } else {
@@ -3400,8 +3362,8 @@ CompileResult compile_vx_project(
         if (!eres.ok) {
             SourceLoc loc;
             loc.set_file(root_path);
-            res.diagnostics.error(
-                std::move(loc), std::string("emisor IR fallo: ") + eres.error);
+            res.diagnostics.diag(std::move(loc), DiagLevel::ERR, "VX4017",
+                                 {eres.error});
             res.ok = false;
             return res;
         }

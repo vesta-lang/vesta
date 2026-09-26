@@ -334,12 +334,7 @@ bool inject_only_import(const UnitEnv &env, ProjectModuleWork &pm,
         gen_names.insert(g.name);
     for (const auto &m : missing) {
         if (gen_names.count(m)) continue; // es un template: OK
-        std::string msg = "el modulo '";
-        msg += req.module_name;
-        msg += "' no exporta '";
-        msg += m;
-        msg += "' (es privado o no existe)";
-        pm.diags.error(req.loc, std::move(msg));
+        pm.diags.diag(req.loc, DiagLevel::ERR, "VX4010", {req.module_name, m});
     }
     // Recalcular missing real (excluyendo templates) para el
     // early-abort de abajo.
@@ -414,10 +409,8 @@ bool inject_unit_imports(const UnitEnv &env, size_t i,
     for (const auto &req : imports) {
         const size_t dep_idx = lookup.find(req);
         if (dep_idx >= work.size() || work[dep_idx].ok) continue;
-        pm.diags.error(req.loc, "no puedo usar '" +
-                                    (req.ns_path.empty() ? req.module_name
-                                                         : req.ns_path) +
-                                    "': no ha compilado");
+        pm.diags.diag(req.loc, DiagLevel::ERR, "VX4008",
+                      {req.ns_path.empty() ? req.module_name : req.ns_path});
         return false;
     }
     /* Las dependencias directas y transitivas, UNA vez: las usan el
@@ -435,6 +428,11 @@ bool inject_unit_imports(const UnitEnv &env, size_t i,
             without_foreign_internals(consumer_pkgid, transit.vxi, tstore));
     }
 
+    /* Un import que no resuelve NO corta el bucle: se dicen TODOS los que
+     * faltan de una vez.  Pero el modulo ya no vale, y seguir hasta el
+     * comprobador solo anadiria errores en cascada sobre tipos que salen
+     * `void` porque su modulo no esta. */
+    bool all_found = true;
     for (auto &req : imports) {
         const size_t dep_idx = lookup.find(req);
         if (dep_idx >= work.size()) {
@@ -448,11 +446,9 @@ bool inject_unit_imports(const UnitEnv &env, size_t i,
             /* Al saco del MODULO, que es el que el bucle de mas abajo
              * vuelca en el del proyecto: esto corre en varios hilos y el
              * saco del proyecto es uno solo. */
-            pm.diags.error(std::move(iloc),
-                           "no se encuentra el modulo '" + req.module_name +
-                               "' que pide un import; sus simbolos no se "
-                               "han importado");
-            pm.ok = false;
+            pm.diags.diag(std::move(iloc), DiagLevel::ERR, "VX4009",
+                          {req.module_name});
+            all_found = false;
             continue;
         }
         const ProjectModuleWork &dep = work[dep_idx];
@@ -494,6 +490,10 @@ bool inject_unit_imports(const UnitEnv &env, size_t i,
             return false;
         }
     }
+    /* Antes aqui se marcaba `pm.ok = false` y se seguia, y el final de la
+     * compilacion del modulo lo volvia a poner a `true`: el error quedaba en
+     * los diagnosticos pero la bandera decia que el modulo estaba bien. */
+    if (!all_found) return false;
 
     // NS.6-ext: re-apendear los metodos de `extension`/`impl` que
     // declararon los deps (directos + transitivos) al layout del tipo

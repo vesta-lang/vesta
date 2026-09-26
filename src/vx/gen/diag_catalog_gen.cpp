@@ -203,6 +203,16 @@ const CatEntry kEntries[] = {
     {"VX4005", {"they are two different packages ('{0}' and '{1}') offering the same namespace -- declare which one you want in the manifest, giving it a name of its own if both are needed", "son dos paquetes distintos ('{0}' y '{1}') que ofrecen el mismo namespace -- declara en el manifiesto cual quieres, dandole un nombre propio si hacen falta los dos"}},
     {"VX4006", {"the IR of module '{0}' was moved to disk to stay under the memory ceiling and could not be read back ({1}) -- the program cannot be built without it", "el intermedio del modulo '{0}' se bajo a disco para respetar el techo de memoria y no se ha podido recuperar ({1}) -- sin el no se puede construir el programa"}},
     {"VX4007", {"module '{0}' could not be moved to disk ('{1}'), so it stays in memory: the ceiling set by {2} is not being honoured", "no se ha podido bajar a disco el modulo '{0}' ('{1}'), asi que se queda en memoria: el techo puesto con {2} no se esta respetando"}},
+    {"VX4008", {"cannot use '{0}': it did not compile", "no se puede usar '{0}': no ha compilado"}},
+    {"VX4009", {"module '{0}' requested by an import was not found; none of its symbols were imported", "no se encuentra el modulo '{0}' que pide un import; no se ha importado ninguno de sus simbolos"}},
+    {"VX4010", {"module '{0}' does not export '{1}' (it is private or does not exist)", "el modulo '{0}' no exporta '{1}' (es privado o no existe)"}},
+    {"VX4011", {"import '{0}' is not used", "el import '{0}' no se usa"}},
+    {"VX4012", {"import '{0}' as '{1}' is not used", "el import '{0}' as '{1}' no se usa"}},
+    {"VX4013", {"symbol '{0}' imported from '{1}' is not used", "el simbolo '{0}' importado de '{1}' no se usa"}},
+    {"VX4014", {"@HelperOverride: helper '{0}' is not multi-versioned (only 'memcpy', 'strcmp' and 'strlen' are); the annotation is ignored", "@HelperOverride: el ayudante '{0}' no tiene varias versiones (solo 'memcpy', 'strcmp' y 'strlen'); la anotacion se ignora"}},
+    {"VX4015", {"@HelperOverride({0}): the expected signature is {1}; this override may not match it", "@HelperOverride({0}): la firma esperada es {1}; la de este override puede no encajar"}},
+    {"VX4016", {"@HelperOverride({0}) is declared by two modules: '{1}' and '{2}'", "@HelperOverride({0}) lo declaran dos modulos: '{1}' y '{2}'"}},
+    {"VX4017", {"the intermediate code emitter failed: {0}", "el emisor del codigo intermedio fallo: {0}"}},
     {"VX7001", {"fatal error: null pointer", "error fatal: puntero nulo"}},
     {"VX7002", {"fatal error: division by zero", "error fatal: division entre cero"}},
     {"VX7003", {"fatal error: stack overflow", "error fatal: desbordamiento de pila"}},
@@ -849,7 +859,7 @@ const CatEntry kEntries[] = {
     {"use_def.unused", {"'{2}' is never used", "'{2}' no se usa en ningun sitio"}},
     {"value_shape.none", {"it has no values with components", "no tiene valores con componentes"}},
 };
-const int kEntryCount = 828;
+const int kEntryCount = 838;
 
 } // namespace
 

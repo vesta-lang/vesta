@@ -434,6 +434,9 @@ add_library(vx_lib STATIC
     # Y leer del AST lo que el programa DECLARA, que es otra responsabilidad:
     # estaba escrito en uno de los dos caminos y el otro no lo hacia.
     contracts_collect.cpp
+    # Que ayudantes admiten `@HelperOverride` y con que firma: lo usan los
+    # dos caminos de compilacion.
+    helper_override.cpp
     # Las piezas de compilar un proyecto, cada una en su fichero.  Estaban
     # dentro de una lambda de ~1.400 lineas en compiler_project.cpp.
     # Cuando un artefacto guardado sirve para esta compilacion.

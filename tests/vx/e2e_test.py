@@ -2839,11 +2839,16 @@ def _(ctx):
                       "-o", os.path.join(d, "prog")])
     if not os.path.exists(os.path.join(d, "prog.velb")):
         ctx.fail("L.26 compile no produjo .velb", log)
+    # Por CODIGO y simbolo, no por el texto: el mensaje sale del catalogo en
+    # el idioma activo.
+    def unused_warning(sym):
+        return any("VX4013" in ln and ("'%s'" % sym) in ln
+                   for ln in log.splitlines())
     for sym in ("unused_fn", "UNUSED_CONST"):
-        if "simbolo importado '%s' de 'lib' no se usa" % sym not in log:
+        if not unused_warning(sym):
             ctx.fail("L.26: no aparecio warning para '%s'" % sym, log)
     for sym in ("used_fn", "USED_CONST"):
-        if "simbolo importado '%s' de 'lib' no se usa" % sym in log:
+        if unused_warning(sym):
             ctx.fail("L.26: warning espurio para '%s' (esta usado)" % sym)
     _, log = ctx.run([VM_EXE, "--run", os.path.join(d, "prog.velb"),
                       "--schedulers", "1", "--stats"])

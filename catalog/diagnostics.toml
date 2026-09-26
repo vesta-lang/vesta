@@ -308,6 +308,51 @@ es = "el intermedio del modulo '{0}' se bajo a disco para respetar el techo de m
 en = "module '{0}' could not be moved to disk ('{1}'), so it stays in memory: the ceiling set by {2} is not being honoured"
 es = "no se ha podido bajar a disco el modulo '{0}' ('{1}'), asi que se queda en memoria: el techo puesto con {2} no se esta respetando"
 
+# Los imports de un modulo del proyecto.  Iban escritos a mano en espanol
+# dentro de la compilacion de cada modulo.
+
+[VX4008]
+en = "cannot use '{0}': it did not compile"
+es = "no se puede usar '{0}': no ha compilado"
+
+[VX4009]
+en = "module '{0}' requested by an import was not found; none of its symbols were imported"
+es = "no se encuentra el modulo '{0}' que pide un import; no se ha importado ninguno de sus simbolos"
+
+[VX4010]
+en = "module '{0}' does not export '{1}' (it is private or does not exist)"
+es = "el modulo '{0}' no exporta '{1}' (es privado o no existe)"
+
+[VX4011]
+en = "import '{0}' is not used"
+es = "el import '{0}' no se usa"
+
+[VX4012]
+en = "import '{0}' as '{1}' is not used"
+es = "el import '{0}' as '{1}' no se usa"
+
+[VX4013]
+en = "symbol '{0}' imported from '{1}' is not used"
+es = "el simbolo '{0}' importado de '{1}' no se usa"
+
+# `@HelperOverride` resuelto entre todos los modulos del proyecto.
+
+[VX4014]
+en = "@HelperOverride: helper '{0}' is not multi-versioned (only 'memcpy', 'strcmp' and 'strlen' are); the annotation is ignored"
+es = "@HelperOverride: el ayudante '{0}' no tiene varias versiones (solo 'memcpy', 'strcmp' y 'strlen'); la anotacion se ignora"
+
+[VX4015]
+en = "@HelperOverride({0}): the expected signature is {1}; this override may not match it"
+es = "@HelperOverride({0}): la firma esperada es {1}; la de este override puede no encajar"
+
+[VX4016]
+en = "@HelperOverride({0}) is declared by two modules: '{1}' and '{2}'"
+es = "@HelperOverride({0}) lo declaran dos modulos: '{1}' y '{2}'"
+
+[VX4017]
+en = "the intermediate code emitter failed: {0}"
+es = "el emisor del codigo intermedio fallo: {0}"
+
 # --- fallos en ejecucion (VX7xxx) ---
 #
 # Un fallo que nadie captura acaba con el programa, asi que se cuenta igual que
