@@ -445,6 +445,9 @@ add_library(vx_lib STATIC
     # sus ficheros: representaciones que solo conocen estos dos.
     project/module_names.cpp
     project/module_paths.cpp
+    # Que importa cada modulo y a que modulo se refiere cada import: UNA forma
+    # de resolverlo, porque el nombre de fichero no es unico.
+    project/module_imports.cpp
     # Traductor de los tipos de Vesta a entidades de la base de conocimiento de
     # depuracion (vxdbg).  Vive en el frontend porque la correspondencia entre
     # el vocabulario de Vesta y el modelo generico solo la conoce quien declara

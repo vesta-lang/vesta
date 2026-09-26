@@ -57,6 +57,7 @@ int run_worker_from_source(std::string code, const std::string &file_name,
 #include "vx/module_checks.h" // lo que se comprueba antes de optimizar
 #include "vx/project/module_cache_key.h" // cuando un artefacto guardado sirve
 #include "vx/project/module_work.h" // lo que se lleva de cada modulo
+#include "vx/project/module_imports.h" // que importa cada modulo, y a quien
 #include "vx/project/module_artifact.h" // el artefacto en cache y su adopcion
 #include "vx/project/module_names.h" // los simbolos derivados del modulo
 #include "ir/synthetic_symbols.h" // la familia de `__module_init`
@@ -717,60 +718,6 @@ bool declares_classes(const std::vector<std::unique_ptr<ast::Node>> &decls) {
     return false;
 }
 
-/// Extrae los ImportDecl del AST en orden de declaracion.  Util para
-/// procesar los `only` imports tras tener las VxiModule de los deps.
-struct ImportRequest {
-    std::string module_name;
-    std::string local_name; // alias o module_name
-    std::vector<TypeChecker::VxiOnlyEntry> only_symbols;
-    bool is_plain = false;           // sin only -> registra namespace
-    bool only_all = false;           // `only *` -> inyecta TODOS los publicos
-    bool is_public_reexport = false; // L.23: public import
-    bool by_namespace = false;       // NS.2-full: import a.b.c; (por-namespace)
-    std::string ns_path;             // namespace original (por-namespace): para
-                                     // registrar TODOS los ficheros de un
-    // namespace PARCIAL (varios modulos = 1 ns)
-    SourceLoc loc{}; // posicion del ImportDecl (M6.a.3 diags)
-};
-
-/**
- * @brief Huella de lo que un modulo VE de uno de sus deps.
- *
- * Es lo unico que le puede afectar de el, y por eso es lo que se guarda en su
- * tabla de dependencias y lo que se recomprueba al reusar lo compilado.  Antes
- * se guardaba el `abi_hash` ENTERO del dep: anadirle una funcion publica que
- * nadie usa invalidaba a todos sus consumidores.
- *
- * Un import con `only` acota exactamente lo que se puede usar -- para nombrar
- * un tipo hay que haberlo importado --, asi que ahi la huella es la de esos
- * simbolos.  Sin `only` (import llano, `only *`, o re-export) el modulo puede
- * usar cualquier cosa del dep, y entonces lo que le afecta es su interfaz
- * entera.
- *
- * @param dep_vxi Interfaz del dep, ya parseada.
- * @param req     Como se importo.
- * @return Huella de lo que este modulo ve de @p dep_vxi.
- */
-static uint64_t huella_de_lo_usado(const VxiModule &dep_vxi,
-                                   const ImportRequest &req) {
-    if (req.is_plain || req.only_all || req.is_public_reexport ||
-        req.only_symbols.empty()) {
-        return dep_vxi.abi_hash;
-    }
-    std::vector<std::string> nombres;
-    nombres.reserve(req.only_symbols.size());
-    for (const auto &e : req.only_symbols)
-        nombres.push_back(e.name);
-    return vxi_hash_de_simbolos(dep_vxi, nombres);
-}
-
-///  NS.2-full: mapa namespace punteado -> module_name (filename) del
-/// modulo que lo declara.  Se construye desde los AST de todos los modulos
-/// del proyecto y traduce los imports por-namespace (`import a.b.c;`) al
-/// module_name del dep resuelto, para reusar toda la maquinaria de imports
-/// por-path (que ya soporta acceso cualificado multi-segmento via ns_path).
-using NsToModname = std::unordered_map<std::string, std::string>;
-
 ///  M.5: renombrar las top-level FunctionDecl y GlobalVarDecl del
 /// modulo con un prefijo `<modname>__`.  Esto evita colisiones de
 /// nombres cuando dos modulos definen una funcion con el mismo nombre
@@ -1030,188 +977,6 @@ void mangle_top_level_(ast::ModuleNode &mod, const std::string &module_name) {
     }
 }
 
-/// Los namespaces que el manifiesto declara auto-importables.
-///
-/// Es @ref NamespaceList: punteros al pozo de nombres, asi que comparar dos es
-/// comparar punteros y copiar la lista no copia texto.
-using AutoImportNs = NamespaceList;
-
-std::vector<ImportRequest>
-collect_imports_(const ast::ModuleNode &mod,
-                 const NsToModname *ns_to_modname = nullptr,
-                 const AutoImportNs *auto_imports = nullptr,
-                 const std::string &owner_dir = std::string(),
-                 const std::string &self_path = std::string()) {
-    std::vector<ImportRequest> out;
-    // NS.1 fix: en la forma statement `namespace a.b.c;` los imports quedan
-    // ANIDADOS dentro del NamespaceDecl -> recolectarlos recursivamente (si no,
-    // no se procesan y el dep no se inyecta).
-    std::vector<const ast::ImportDecl *> imports;
-    std::function<void(const std::vector<std::unique_ptr<ast::Node>> &)>
-        gather = [&](const std::vector<std::unique_ptr<ast::Node>> &decls) {
-            for (const auto &d : decls) {
-                if (!d) continue;
-                if (d->kind == ast::NodeKind::ImportDecl)
-                    imports.push_back(
-                        static_cast<const ast::ImportDecl *>(d.get()));
-                else if (d->kind == ast::NodeKind::NamespaceDecl)
-                    gather(static_cast<const ast::NamespaceDecl *>(d.get())
-                               ->decls);
-            }
-        };
-    gather(mod.decls);
-    for (const auto *im : imports) {
-        ImportRequest req;
-        req.by_namespace = im->by_namespace;
-        if (im->by_namespace) req.ns_path = im->path; // namespace parcial
-        if (im->by_namespace) {
-            // NS.2-full: import a.b.c;  El `path` es el namespace punteado.
-            // Lo traducimos al module_name (filename) del dep que lo declara,
-            // para reusar la maquinaria de imports por-path.  Si no hay mapa
-            // (o el ns no esta), dejamos el dotted (fallara el by_name lookup
-            // con diagnostico claro mas arriba/abajo).
-            req.module_name = im->path; // dotted por defecto
-            if (ns_to_modname) {
-                auto it = ns_to_modname->find(im->path);
-                if (it != ns_to_modname->end()) req.module_name = it->second;
-            }
-            req.local_name = im->alias.empty() ? req.module_name : im->alias;
-        } else {
-            // Por-path: module_name = ultimo segmento del path.
-            size_t slash = im->path.find_last_of('/');
-            req.module_name = (slash == std::string::npos)
-                                  ? im->path
-                                  : im->path.substr(slash + 1);
-            req.local_name = im->alias.empty() ? req.module_name : im->alias;
-        }
-        // Mapear OnlySymbol AST -> TypeChecker::VxiOnlyEntry.
-        req.only_symbols.reserve(im->only_symbols.size());
-        for (const auto &os : im->only_symbols) {
-            req.only_symbols.push_back({os.name, os.rename});
-        }
-        // Plain import = sin only Y sin glob.  Registra namespace en lugar de
-        // inyectar.  `only *` (glob) inyecta TODOS los publicos -> NO es plain.
-        req.only_all = im->only_all;
-        req.is_plain = im->only_symbols.empty() && !im->only_all;
-        req.is_public_reexport = im->is_public_reexport;
-        req.loc = im->loc;
-        out.push_back(std::move(req));
-    }
-    /* Y lo que el manifiesto declare auto-importable.
-     *
-     * Reservar memoria no se pide con un `import`: se escribe `new` o
-     * `malloc<T>(n)`.  Pero quien lo atiende es una PLANTILLA, y una plantilla
-     * hay que verla para instanciarla, asi que tiene que estar en el ambito de
-     * quien reserva aunque su autor no escriba nada.
-     *
-     * Que modulos son sale de un DATO -- la lista del manifiesto --, no de
-     * aqui: en el compilador no hay ningun nombre de modulo, y cualquier
-     * libreria puede declarar los suyos.
-     *
-     * Un modulo de la propia lista no se importa a si mismo: los dos nombres se
-     * comparan, asi que el asignador no se trae a si mismo y no hace falta
-     * ninguna marca aparte. */
-    /* El paquete que DECLARA la auto-importacion no se la aplica a si mismo.
-     *
-     * Y no es solo que el asignador no se importe: los modulos de los que EL
-     * depende -- los tipos, los atomicos -- tampoco pueden, porque entonces se
-     * piden unos a otros y el grafo se cierra en ciclo.  El criterio es la
-     * frontera del paquete, que es la que ya separa "quien ofrece el servicio"
-     * de "quien lo consume": dentro se escribe el `import` a mano, como
-     * cualquier otra dependencia. */
-    const bool inside_owner =
-        !owner_dir.empty() && self_path.size() > owner_dir.size() &&
-        self_path.compare(0, owner_dir.size(), owner_dir) == 0;
-    if (auto_imports != nullptr && !auto_imports->empty() && !inside_owner) {
-        for (const std::string *nsp : *auto_imports) {
-            if (nsp == nullptr || nsp->empty()) continue;
-            const std::string &ns = *nsp;
-            bool already = false;
-            for (const auto &r : out)
-                if (r.ns_path == ns || r.module_name == ns) already = true;
-            if (already) continue;
-            ImportRequest req;
-            req.by_namespace = true;
-            req.ns_path = ns;
-            req.module_name = ns;
-            req.local_name = ns;
-            /* `only *`, no llano.
-             *
-             * Hacen falta las DOS cosas y cada forma traia una sola: el llano
-             * inyecta las plantillas pero no declara sus simbolos -- el
-             * proveedor quedaba invisible --, y `only *` declara lo publico,
-             * que es lo que hace que se le encuentre.  Lo que al principio
-             * faltaba con `only *`
-             * -- que el cuerpo de la plantilla resolviera sus ayudantes -- ya
-             * no depende del modo: viajan porque una plantilla los nombra. */
-            /* EXACTAMENTE como un `import std.alloc;` escrito a mano.
-             *
-             * Nada de `only *` ademas: en un import escrito las dos cosas son
-             * EXCLUYENTES (`is_plain = sin only Y sin glob`), asi que ponerlas
-             * juntas creaba un estado que no ocurre nunca -- y el consumidor lo
-             * trataba por una rama u otra segun donde se mirara.  Lo que hace
-             * falta es el llano, que es el que registra el namespace y con el
-             * las plantillas del modulo. */
-            req.only_all = false;
-            /* Y LLANA ademas, que es la que trae las PLANTILLAS.
-             *
-             * `only *` se expande sobre la lista de SIMBOLOS del modulo, y una
-             * plantilla no esta ahi -- no emite simbolo, lo emiten sus
-             * instancias
-             * --, asi que por esa via el proveedor generico no llegaba.  Con el
-             * `import` escrito a mano si llegaba, y esa es toda la diferencia:
-             * el mismo programa compilaba o no segun si alguien habia escrito
-             * una linea que no hace falta.
-             *
-             * Se veia solo con la cache FRIA, que es lo que lo hacia tan raro:
-             * en caliente el modulo llega por otro camino y el proveedor
-             * aparece. */
-            req.is_plain = true;
-            if (ns_to_modname != nullptr) {
-                auto it = ns_to_modname->find(ns);
-                if (it != ns_to_modname->end() && !it->second.empty())
-                    /* El nombre ENTERO.  Esto decia `.front()`, y el mapa
-                     * devuelve una cadena, no una lista: eso es su primer
-                     * CARACTER, y asignar un `char` a un `std::string` compila
-                     * sin rechistar. O sea que el modulo `alloc` se registraba
-                     * con el nombre `a`, y una funcion del usuario llamada asi
-                     * chocaba con el -- solo ese nombre, lo que hacia el fallo
-                     * desconcertante --. */
-                    req.module_name = it->second;
-            }
-            /* Y el nombre local es el del MoDULO ya resuelto, como en el
-             * escrito. Dejarlo en el namespace puntuado lo registraba bajo un
-             * nombre que despues nadie busca. */
-            req.local_name = req.module_name;
-            out.push_back(std::move(req));
-        }
-    }
-    return out;
-}
-
-///  NS.2-full: construye el mapa namespace -> module_name recorriendo
-/// los AST de todos los modulos del proyecto.  Cada @c NamespaceDecl top-level
-/// (formas statement y bloque) mapea su path punteado al module_name del
-/// modulo que lo contiene.  Namespaces parciales (varios modulos, mismo ns):
-/// gana el primero registrado (MVP; el import trae ese fichero).
-NsToModname build_ns_to_modname_(const std::vector<ProjectModuleWork> &work) {
-    NsToModname out;
-    for (const auto &pm : work) {
-        if (!pm.ast) continue;
-        for (const auto &d : pm.ast->decls) {
-            if (!d || d->kind != ast::NodeKind::NamespaceDecl) continue;
-            const auto *ns = static_cast<const ast::NamespaceDecl *>(d.get());
-            if (ns->name.empty()) continue;
-            out.emplace(ns->name, pm.module_name.str());
-        }
-    }
-    return out;
-}
-
-/// Namespace PARCIAL: mapa namespace -> TODOS los module_name que lo declaran.
-/// A diferencia de @c build_ns_to_modname_ (que gana el primero), este recoge
-/// la lista completa para que `import std.types` registre los simbolos de
-/// TODOS los ficheros del namespace (base + arch-specific), no solo el primero.
 /// Recoge los nombres de tipo que menciona un nodo de tipo, a cualquier
 /// profundidad.  Un alias puede derivar de otro por debajo de un puntero, de un
 /// array o de la firma de una funcion, asi que mirar solo la raiz se dejaria
@@ -1312,25 +1077,6 @@ void ordenar_alias_por_dependencia_(
         movidos[k] = std::move(decls[huecos[k]]);
     for (size_t k = 0; k < n; ++k)
         decls[huecos[k]] = std::move(movidos[orden[k]]);
-}
-
-using NsToAllModnames =
-    std::unordered_map<std::string, std::vector<std::string>>;
-NsToAllModnames
-build_ns_to_all_modnames_(const std::vector<ProjectModuleWork> &work) {
-    NsToAllModnames out;
-    for (const auto &pm : work) {
-        if (!pm.ast) continue;
-        for (const auto &d : pm.ast->decls) {
-            if (!d || d->kind != ast::NodeKind::NamespaceDecl) continue;
-            const auto *ns = static_cast<const ast::NamespaceDecl *>(d.get());
-            if (ns->name.empty()) continue;
-            auto &v = out[ns->name];
-            if (std::find(v.begin(), v.end(), pm.module_name.str()) == v.end())
-                v.push_back(pm.module_name.str());
-        }
-    }
-    return out;
 }
 
 ///  NS.3: deriva el PackageId del proyecto.  Camina hacia arriba desde el
@@ -1438,72 +1184,6 @@ std::string asa_facts_path_for_stage(const std::string &base_facts_path,
                "." + short_name + kExt;
     }
     return base_facts_path + "." + short_name;
-}
-
-///  M.L20: calcula el nivel topologico de cada modulo.  Nivel 0 =
-/// sin imports.  Nivel N = 1 + max(niveles de sus deps).  Modulos del
-/// MISMO nivel son independientes entre si (sus interfaces solo
-/// dependen de niveles menores), por lo que pueden compilarse en
-/// paralelo.  El root siempre tiene el nivel maximo.
-/// @brief Indice del modulo al que se refiere un import, o SIZE_MAX.
-///
-/// Se resuelve por NAMESPACE COMPLETO cuando el import es por-namespace, y
-/// solo si no, por nombre de modulo.  El orden importa: el nombre de un modulo
-/// es el de su FICHERO, asi que dos ficheros homonimos en carpetas distintas
-/// (std/os/linux.vx y std/syscall/linux.vx, ambos "linux") colapsan en el mapa
-/// por nombre y quien pregunte se lleva el que no es.
-///
-/// Vive aqui, en un solo sitio, porque cualquiera que resuelva un import de
-/// otra manera reintroduce esa confusion en su rincon.
-size_t
-resolve_import_module_(const ImportRequest &req,
-                       const std::unordered_map<std::string, size_t> &by_name,
-                       const std::unordered_map<std::string, size_t> &by_ns) {
-    if (req.by_namespace && !req.ns_path.empty()) {
-        auto itn = by_ns.find(req.ns_path);
-        if (itn != by_ns.end()) return itn->second;
-    }
-    auto itd = by_name.find(req.module_name);
-    if (itd != by_name.end()) return itd->second;
-    return SIZE_MAX;
-}
-
-std::vector<int>
-compute_module_levels_(const std::vector<ProjectModuleWork> &work,
-                       const std::unordered_map<std::string, size_t> &by_name,
-                       const std::unordered_map<std::string, size_t> &by_ns,
-                       const NsToModname &ns_to_modname,
-                       const AutoImportNs &auto_imports,
-                       const std::string &auto_import_owner_dir) {
-    std::vector<int> levels(work.size(), 0);
-    // Procesamos en orden topologico (work ya esta en topo).  Para cada
-    // modulo, recogemos los imports de su AST + calculamos su nivel
-    // como 1 + max(nivel de cada dep).
-    for (size_t i = 0; i < work.size(); ++i) {
-        const auto &pm = work[i];
-        if (!pm.ast) continue;
-        int max_dep_level = -1;
-        auto imports =
-            collect_imports_(*pm.ast, &ns_to_modname, &auto_imports,
-                             auto_import_owner_dir, pm.canonical_path.str());
-        for (const auto &req : imports) {
-            // Resolver el dep por NAMESPACE COMPLETO (by_ns) cuando el import
-            // es por-namespace: `by_name` colisiona cuando dos modulos
-            // comparten el ultimo segmento (std.syscall.linux.x86_64 y
-            // ...windows.x86_64 son ambos "x86_64") -> un import de
-            // linux.x86_64 podia resolver al idx de windows.x86_64 (o a
-            // ninguno) y el nivel topo quedaba mal -> race en el compile
-            // paralelo (el consumidor compila antes que su dep real).  Igual
-            // que la resolucion de deps del propio compilador.
-            const size_t dep_idx = resolve_import_module_(req, by_name, by_ns);
-            if (dep_idx >= work.size()) continue;
-            if (static_cast<int>(levels[dep_idx]) > max_dep_level) {
-                max_dep_level = levels[dep_idx];
-            }
-        }
-        levels[i] = max_dep_level + 1; // -1 + 1 = 0 si no hay deps
-    }
-    return levels;
 }
 
 /**
@@ -1902,7 +1582,6 @@ CompileResult compile_vx_project(
 
     // 2. Mover los AST parseados del graph a estructuras de trabajo.
     std::vector<ProjectModuleWork> work(topo.size());
-    std::unordered_map<std::string, size_t> by_name; // module_name -> idx
     for (size_t i = 0; i < topo.size(); ++i) {
         const uint32_t mid = topo[i];
         const ResolvedModule *rm = graph.module(mid);
@@ -1922,7 +1601,6 @@ CompileResult compile_vx_project(
         // Cargar source de disco para el lexer (necesario para el
         // diagnostics: queremos preservar locs).
         work[i].source = read_source_(rm_mut->canonical_path);
-        by_name.emplace(rm_mut->module_name, i);
     }
 
     /* ------------------------------------------------------------------
@@ -2085,22 +1763,12 @@ CompileResult compile_vx_project(
         }
     }
 
-    // Colision de module_name (filename): dos modulos con el mismo ultimo
-    // segmento (p.ej. std.syscall.linux.x86_64 y std.syscall.windows.x86_64,
-    // ambos "x86_64") colapsan en by_name (emplace conserva el primero).  by_ns
-    // mapea el NAMESPACE COMPLETO (unico) -> idx, para resolver sin ambiguedad
-    // los imports por-namespace (`import a.b.c;`).
-    std::unordered_map<std::string, size_t> by_ns;
-    for (size_t i = 0; i < work.size(); ++i) {
-        if (!work[i].ast) continue;
-        for (const auto &d : work[i].ast->decls) {
-            if (d && d->kind == ast::NodeKind::NamespaceDecl) {
-                auto *nd = static_cast<ast::NamespaceDecl *>(d.get());
-                by_ns.emplace(nd->name, i);
-                break;
-            }
-        }
-    }
+    /* Donde esta cada modulo y como se resuelve un import: por namespace
+     * completo, que es unico, y solo si no por nombre de fichero, que no lo
+     * es.  Se construye aqui, con todos los AST y antes de fusionar los
+     * namespaces parciales. */
+    const ModuleLookup lookup =
+        build_module_lookup(work, auto_imports, auto_import_owner_dir);
 
     // Simbolos que el parser dejo fuera por @Target, agregados de TODOS los
     // modulos del build.  Usar uno de ellos no es "no existe": existe para
@@ -2119,13 +1787,6 @@ CompileResult compile_vx_project(
             }
         }
     }
-
-    //  NS.2-full: mapa namespace -> module_name para traducir los
-    // imports por-namespace (`import a.b.c;`) al module_name del dep.
-    const NsToModname ns_to_modname = build_ns_to_modname_(work);
-    // Namespace parcial: todos los module_name por namespace (para registrar
-    // los simbolos de TODOS los ficheros de un `namespace X;` compartido).
-    const NsToAllModnames ns_to_all_modnames = build_ns_to_all_modnames_(work);
 
     // NS.parcial fix: un mismo `namespace X;` declarado por VARIOS ficheros
     // (p.ej. std.types = types.vx base + types/<arch>.vx) se parsea como
@@ -2149,18 +1810,14 @@ CompileResult compile_vx_project(
                 }
             return nullptr;
         };
-        for (const auto &kv : ns_to_all_modnames) {
+        for (const auto &kv : lookup.ns_to_modules) {
             if (kv.second.size() < 2) continue; // no es namespace parcial
             const std::string &ns = kv.first;
-            auto it0 = by_name.find(kv.second[0]);
-            if (it0 == by_name.end()) continue;
-            const size_t pidx = it0->second;
+            const size_t pidx = kv.second[0];
             ast::NamespaceDecl *pns = find_ns_decl(work[pidx].ast.get(), ns);
             if (!pns) continue;
             for (size_t k = 1; k < kv.second.size(); ++k) {
-                auto itk = by_name.find(kv.second[k]);
-                if (itk == by_name.end()) continue;
-                ProjectModuleWork &sec = work[itk->second];
+                ProjectModuleWork &sec = work[kv.second[k]];
                 ast::NamespaceDecl *sns = find_ns_decl(sec.ast.get(), ns);
                 if (!sns) continue;
                 for (auto &d : sns->decls)
@@ -2237,8 +1894,7 @@ CompileResult compile_vx_project(
     // safety review del TypeChecker compartido + file lock cache que
     // M5.A ya cubre via atomic write.
     const std::vector<int> module_levels =
-        compute_module_levels_(work, by_name, by_ns, ns_to_modname,
-                               auto_imports, auto_import_owner_dir);
+        compute_module_levels(work, lookup);
     int max_level = 0;
     for (int L : module_levels) {
         if (L > max_level) max_level = L;
@@ -2589,12 +2245,10 @@ CompileResult compile_vx_project(
          * se compilen en paralelo. */
         if (pm.ast && (is_root || cas)) {
             DepAbiHashes dep_hashes;
-            for (const ImportRequest &req : collect_imports_(
-                     *pm.ast, &ns_to_modname, &auto_imports,
-                     auto_import_owner_dir, pm.canonical_path.str())) {
-                auto itd = by_name.find(req.module_name);
-                if (itd != by_name.end())
-                    dep_hashes.push_back(work[itd->second].vxi.abi_hash);
+            for (const ImportRequest &req : lookup.imports_of(pm)) {
+                const size_t dep = lookup.find(req);
+                if (dep < work.size())
+                    dep_hashes.push_back(work[dep].vxi.abi_hash);
             }
             std::sort(dep_hashes.begin(), dep_hashes.end());
             const uint64_t content_key = module_content_key(
@@ -2686,18 +2340,27 @@ CompileResult compile_vx_project(
                      * huella con EL MISMO criterio con que se guardo. */
                     std::unordered_map<std::string, const ImportRequest *>
                         como_importa;
-                    std::vector<ImportRequest> imps_val;
-                    if (pm.ast) {
-                        imps_val = collect_imports_(
-                            *pm.ast, &ns_to_modname, &auto_imports,
-                            auto_import_owner_dir, pm.canonical_path.str());
-                        for (const auto &r : imps_val)
-                            como_importa.emplace(r.module_name, &r);
+                    const std::vector<ImportRequest> imps_val =
+                        lookup.imports_of(pm);
+                    /* Por el nombre del modulo RESUELTO, que es el que se
+                     * guarda en el registro (ver donde se llena `deps`). */
+                    for (const auto &r : imps_val) {
+                        const size_t idx = lookup.find(r);
+                        if (idx < work.size())
+                            como_importa.emplace(work[idx].module_name.str(),
+                                                 &r);
                     }
                     bool deps_match = true;
                     for (const auto &dep_rec : pr.module_.deps) {
-                        auto itd = by_name.find(dep_rec.name);
-                        if (itd == by_name.end()) {
+                        /* El registro solo trae el nombre; si este modulo
+                         * importa esa dependencia, su import dice CUAL es --
+                         * con dos ficheros homonimos, el nombre no --. */
+                        auto itc = como_importa.find(dep_rec.name);
+                        const size_t dep_idx =
+                            itc != como_importa.end()
+                                ? lookup.find(*itc->second)
+                                : lookup.find_by_name(dep_rec.name);
+                        if (dep_idx >= work.size()) {
                             // El dep ya no existe -> miss.
                             deps_match = false;
                             if (verbose_cache) {
@@ -2709,12 +2372,11 @@ CompileResult compile_vx_project(
                             }
                             break;
                         }
-                        auto itc = como_importa.find(dep_rec.name);
                         const uint64_t actual =
                             itc != como_importa.end()
-                                ? huella_de_lo_usado(work[itd->second].vxi,
-                                                     *itc->second)
-                                : work[itd->second].vxi.abi_hash;
+                                ? used_surface_hash(work[dep_idx].vxi,
+                                                    *itc->second)
+                                : work[dep_idx].vxi.abi_hash;
                         if (actual != dep_rec.abi_hash) {
                             deps_match = false;
                             if (verbose_cache) {
@@ -2950,9 +2612,7 @@ CompileResult compile_vx_project(
         //   - `import "x" only A, B;`   -> inyecta A, B directos en scope.
         //   - `import "x" [as alias];`  -> registra namespace para `x.A` o
         //                                   `alias.A` ( M.7).
-        auto imports =
-            collect_imports_(*pm.ast, &ns_to_modname, &auto_imports,
-                             auto_import_owner_dir, pm.canonical_path.str());
+        auto imports = lookup.imports_of(pm);
 
         // LANG.fix-3: pre-importar las .vxi de los deps TRANSITIVOS
         // antes de procesar los imports explicitos.  Si main tiene
@@ -3014,7 +2674,7 @@ CompileResult compile_vx_project(
         // arreglo del dep.  Solo se nota si el import no lleva `only`, porque
         // entonces no hay ningun simbolo concreto que echar en falta.
         for (const auto &req : imports) {
-            const size_t dep_idx = resolve_import_module_(req, by_name, by_ns);
+            const size_t dep_idx = lookup.find(req);
             if (dep_idx >= work.size() || work[dep_idx].ok) continue;
             pm.diags.error(req.loc, "no puedo usar '" +
                                         (req.ns_path.empty() ? req.module_name
@@ -3023,73 +2683,40 @@ CompileResult compile_vx_project(
             pm.ok = false;
             return;
         }
-        {
-            std::unordered_set<std::string> seen;
-            std::vector<std::string> queue;
-            for (const auto &req : imports) {
-                if (seen.insert(req.module_name).second) {
-                    queue.push_back(req.module_name);
-                }
-            }
-            for (size_t qi = 0; qi < queue.size(); ++qi) {
-                const std::string &mn = queue[qi];
-                auto itd = by_name.find(mn);
-                if (itd == by_name.end()) continue;
-                const ProjectModuleWork &transit = work[itd->second];
-                for (const auto &de : transit.vxi.deps) {
-                    if (seen.insert(de.name).second) {
-                        queue.push_back(de.name);
-                    }
-                }
-            }
-            for (auto it = queue.rbegin(); it != queue.rend(); ++it) {
-                const std::string &mn = *it;
-                auto itd = by_name.find(mn);
-                if (itd == by_name.end()) continue;
-                const ProjectModuleWork &transit = work[itd->second];
-                VxiModule tstore;
-                register_namespace_for_import(
-                    *pm.tc, mn, mn, filter_internal_(transit.vxi, tstore));
-            }
+        /* Las dependencias directas y transitivas, UNA vez: las usan el
+         * pre-registro de namespaces de aqui abajo y la inyeccion de los
+         * metodos de `impl` de mas abajo. */
+        const ModuleIndices all_deps =
+            transitive_dependencies(lookup, work, imports);
+        // Del mas profundo al mas cercano: un tipo de la dependencia de una
+        // dependencia tiene que existir antes que quien lo nombra.
+        for (size_t k = all_deps.size(); k-- > 0;) {
+            const ProjectModuleWork &transit = work[all_deps[k]];
+            const std::string &mn = transit.module_name.str();
+            VxiModule tstore;
+            register_namespace_for_import(
+                *pm.tc, mn, mn, filter_internal_(transit.vxi, tstore));
         }
 
         for (auto &req : imports) {
-            // Resolver el dep por NAMESPACE completo (unico) cuando el import
-            // es por-namespace: evita la colision de module_name corto (dos
-            // "x86_64" de linux vs windows).  Fallback a by_name (por-path).
-            size_t dep_idx = 0;
-            bool dep_found = false;
-            if (req.by_namespace && !req.ns_path.empty()) {
-                auto itns = by_ns.find(req.ns_path);
-                if (itns != by_ns.end()) {
-                    dep_idx = itns->second;
-                    dep_found = true;
-                }
-            }
-            if (!dep_found) {
-                auto itd = by_name.find(req.module_name);
-                if (itd == by_name.end()) {
-                    // Un import que no resuelve se saltaba en silencio: no se
-                    // inyectaba ninguno de sus simbolos y la compilacion
-                    // seguia como si nada, fallando mucho mas tarde y en otro
-                    // sitio -- o peor, dando un resultado equivocado.  Quien
-                    // escribio el import merece enterarse aqui.
-                    SourceLoc iloc;
-                    iloc.set_file(pm.canonical_path);
-                    /* Al saco del MODULO, que es el que el bucle de mas abajo
-                     * vuelca en el del proyecto.  Escribir directamente en el
-                     * global desde aqui es lo mismo que hacia el conjunto
-                     * comptime: esta lambda corre en varios hilos y el saco es
-                     * uno solo. */
-                    pm.diags.error(
-                        std::move(iloc),
-                        "no se encuentra el modulo '" + req.module_name +
-                            "' que pide un import; sus simbolos no se han "
-                            "importado");
-                    pm.ok = false;
-                    continue;
-                }
-                dep_idx = itd->second;
+            const size_t dep_idx = lookup.find(req);
+            if (dep_idx >= work.size()) {
+                // Un import que no resuelve se saltaba en silencio: no se
+                // inyectaba ninguno de sus simbolos y la compilacion seguia
+                // como si nada, fallando mucho mas tarde y en otro sitio -- o
+                // peor, dando un resultado equivocado.  Quien escribio el
+                // import merece enterarse aqui.
+                SourceLoc iloc;
+                iloc.set_file(pm.canonical_path);
+                /* Al saco del MODULO, que es el que el bucle de mas abajo
+                 * vuelca en el del proyecto: esto corre en varios hilos y el
+                 * saco del proyecto es uno solo. */
+                pm.diags.error(std::move(iloc),
+                               "no se encuentra el modulo '" + req.module_name +
+                                   "' que pide un import; sus simbolos no se "
+                                   "han importado");
+                pm.ok = false;
+                continue;
             }
             const ProjectModuleWork &dep = work[dep_idx];
             VxiModule dep_filtered_storage;
@@ -3102,9 +2729,9 @@ CompileResult compile_vx_project(
             // parametro se queda en `void`.
             std::vector<const VxiModule *> dep_alias_srcs;
             for (const auto &dr : dep_vxi.deps) {
-                auto itx = by_name.find(dr.name);
-                if (itx != by_name.end())
-                    dep_alias_srcs.push_back(&work[itx->second].vxi);
+                // El registro del `.vxi` solo trae el nombre.
+                const size_t src = lookup.find_by_name(dr.name);
+                if (src < work.size()) dep_alias_srcs.push_back(&work[src].vxi);
             }
             // `only *` (glob): expandir a TODOS los simbolos publicos del dep,
             // como si el usuario hubiera listado cada uno (nombre directo, sin
@@ -3136,23 +2763,22 @@ CompileResult compile_vx_project(
                 // std.types + std/types/x86_64.vx).  Sin esto, `import
                 // std.types` solo veia el primer fichero y los tipos del arch
                 // file (`std.types.uintptr`) no resolvian.
-                if (req.by_namespace && !req.ns_path.empty()) {
-                    auto ita = ns_to_all_modnames.find(req.ns_path);
-                    if (ita != ns_to_all_modnames.end()) {
-                        for (const auto &other_mn : ita->second) {
-                            if (other_mn == req.module_name) continue;
-                            auto ito = by_name.find(other_mn);
-                            if (ito == by_name.end()) continue;
-                            VxiModule other_store;
-                            const VxiModule &other_vxi = filter_internal_(
-                                work[ito->second].vxi, other_store);
-                            register_namespace_for_import(
-                                *pm.tc, req.local_name, other_mn, other_vxi);
-                            inject_generic_templates_from_vxi(
-                                *pm.tc, other_vxi, /*wanted=*/{},
-                                req.local_name, /*alias_unqualified=*/{},
-                                dep_alias_srcs);
-                        }
+                const ModuleIndices *ns_mods =
+                    req.by_namespace ? lookup.modules_of_namespace(req.ns_path)
+                                     : nullptr;
+                if (ns_mods != nullptr) {
+                    for (const size_t other : *ns_mods) {
+                        if (other == dep_idx) continue; // ya registrado
+                        const std::string &other_mn =
+                            work[other].module_name.str();
+                        VxiModule other_store;
+                        const VxiModule &other_vxi =
+                            filter_internal_(work[other].vxi, other_store);
+                        register_namespace_for_import(
+                            *pm.tc, req.local_name, other_mn, other_vxi);
+                        inject_generic_templates_from_vxi(
+                            *pm.tc, other_vxi, /*wanted=*/{}, req.local_name,
+                            /*alias_unqualified=*/{}, dep_alias_srcs);
                     }
                 }
                 // M.reexport ext: para `public import "base";` (sin only),
@@ -3255,10 +2881,12 @@ CompileResult compile_vx_project(
                 // std/types/x86_64.vx), igual que el plain-import de arriba.
                 // Sin esto, `only X` de un namespace multi-fichero fallaba con
                 // "no exporta 'X'".
-                if (!missing.empty() && req.by_namespace &&
-                    !req.ns_path.empty()) {
-                    auto ita = ns_to_all_modnames.find(req.ns_path);
-                    if (ita != ns_to_all_modnames.end()) {
+                const ModuleIndices *ns_mods =
+                    (!missing.empty() && req.by_namespace)
+                        ? lookup.modules_of_namespace(req.ns_path)
+                        : nullptr;
+                if (ns_mods != nullptr) {
+                    {
                         // `retry` = los only_symbols que aun faltan.
                         std::vector<TypeChecker::VxiOnlyEntry> retry;
                         for (const auto &os : req.only_symbols) {
@@ -3269,14 +2897,12 @@ CompileResult compile_vx_project(
                                 }
                             }
                         }
-                        for (const auto &other_mn : ita->second) {
+                        for (const size_t other : *ns_mods) {
                             if (retry.empty()) break;
-                            if (other_mn == req.module_name) continue;
-                            auto ito = by_name.find(other_mn);
-                            if (ito == by_name.end()) continue;
+                            if (other == dep_idx) continue; // ya se probo
                             VxiModule other_store;
                             const VxiModule &other_vxi = filter_internal_(
-                                work[ito->second].vxi, other_store);
+                                work[other].vxi, other_store);
                             // Mismo cualificador que arriba: los ficheros
                             // restantes del namespace parcial NO pueden dar una
                             // identidad distinta a la del primero.
@@ -3348,26 +2974,11 @@ CompileResult compile_vx_project(
         // destino en este consumidor.  Asi `obj.metodo()` resuelve cross-modulo
         // (dispatch estatico al mangled_label del .velb del dep).  Los layouts
         // de los tipos importados ya estan registrados (import loop de arriba).
-        {
-            std::unordered_set<std::string> seen;
-            std::vector<std::string> queue;
-            for (const auto &req : imports)
-                if (seen.insert(req.module_name).second)
-                    queue.push_back(req.module_name);
-            for (size_t qi = 0; qi < queue.size(); ++qi) {
-                auto itd = by_name.find(queue[qi]);
-                if (itd == by_name.end()) continue;
-                for (const auto &de : work[itd->second].vxi.deps)
-                    if (seen.insert(de.name).second) queue.push_back(de.name);
-            }
-            for (const auto &mn : queue) {
-                auto itd = by_name.find(mn);
-                if (itd == by_name.end()) continue;
-                for (const auto &em : work[itd->second].vxi.ext_methods) {
-                    pm.tc->inject_imported_ext_method(
-                        em.target_key, em.target_is_class, em.name,
-                        em.return_type, em.param_types, em.mangled_label);
-                }
+        for (const size_t dep : all_deps) {
+            for (const auto &em : work[dep].vxi.ext_methods) {
+                pm.tc->inject_imported_ext_method(
+                    em.target_key, em.target_is_class, em.name, em.return_type,
+                    em.param_types, em.mangled_label);
             }
         }
 
@@ -3590,15 +3201,18 @@ CompileResult compile_vx_project(
         // tambien debe recompilarse.
         pm.vxi.deps.clear();
         for (const auto &req : imports) {
-            auto itd = by_name.find(req.module_name);
-            if (itd == by_name.end()) continue;
-            const ProjectModuleWork &dep = work[itd->second];
+            const size_t dep_idx = lookup.find(req);
+            if (dep_idx >= work.size()) continue;
+            const ProjectModuleWork &dep = work[dep_idx];
             VxiModule::DepRecord drec;
-            drec.name = req.module_name;
+            /* El nombre del modulo RESUELTO, no el que traia el import: con
+             * dos ficheros homonimos pueden no coincidir, y al validar se
+             * busca por este. */
+            drec.name = dep.module_name.str();
             /* Lo que este modulo VE del dep, no la interfaz entera del dep:
              * anadirle algo publico que nadie usa no tiene por que invalidar a
              * quien no lo usa.  El mismo criterio se aplica al validar. */
-            drec.abi_hash = huella_de_lo_usado(dep.vxi, req);
+            drec.abi_hash = used_surface_hash(dep.vxi, req);
             pm.vxi.deps.push_back(std::move(drec));
         }
 
@@ -4042,16 +3656,14 @@ CompileResult compile_vx_project(
         const auto &root_pm = work.back();
         const auto &root_refs = root_pm.tc ? root_pm.tc->referenced_names()
                                            : std::unordered_set<std::string>{};
-        auto root_imports =
-            collect_imports_(*root_pm.ast, &ns_to_modname, &auto_imports,
-                             auto_import_owner_dir, root_pm.canonical_path.str());
+        const auto root_imports = lookup.imports_of(root_pm);
         for (const auto &req : root_imports) {
             if (req.is_plain) continue;           // namespace -> nunca shake
             if (req.is_public_reexport) continue; // re-export consume el dep
-            auto itd = by_name.find(req.module_name);
-            if (itd == by_name.end()) continue;
+            const size_t dep_idx = lookup.find(req);
+            if (dep_idx >= work.size()) continue;
             // Verificar si el dep declara clases (no shake-able).
-            const auto &dep_pm = work[itd->second];
+            const auto &dep_pm = work[dep_idx];
             /* DEL RESUMEN DEL DEP, no de su AST, que para cuando se llega aqui
              * ya se solto.  Mismo criterio y mismo resultado que mirarlo a
              * mano: lo apunta quien compila el modulo, en su propio AST.
@@ -4073,7 +3685,7 @@ CompileResult compile_vx_project(
                 }
             }
             if (all_unused && !req.only_symbols.empty()) {
-                shaken_indices.insert(itd->second);
+                shaken_indices.insert(dep_idx);
                 if (verbose_compile) {
                     std::cerr << "[tree-shake] dep '" << req.module_name
                               << "' eliminado (ninguno de "
