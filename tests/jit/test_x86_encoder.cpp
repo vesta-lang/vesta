@@ -317,6 +317,73 @@ void test_encode_setcc() {
     CHECK_BYTES(out, (std::vector<uint8_t>{0x0F, 0x94, 0xC0}));
 }
 
+/**
+ * @brief Codifica UNA instruccion en modo x86-32.
+ * @param mi La instruccion.
+ * @return Sus bytes.
+ */
+std::vector<uint8_t> encode_one_mode32(const MInstr &mi) {
+    MFunction fn = make_single_block_fn({mi});
+    X86Encoder enc;
+    enc.set_mode32(true);
+    std::vector<uint8_t> out;
+    enc.encode(fn, out);
+    return out;
+}
+
+void test_encode_byte_regs_mode32() {
+    /* En x86-32 ESP/EBP/ESI/EDI no tienen byte bajo: su indice como operando
+     * de un byte es AH/CH/DH/BH.  Codificado tal cual, `mov [edi+23], sil`
+     * salia `88 77 17` = `mov [edi+23], dh`, y guardaba el byte alto de EDX:
+     * la longitud de una cadena corta pasaba a ser su segundo caracter.  Se
+     * presta un registro con byte bajo que la instruccion no use. */
+
+    // Almacen desde ESI: se presta EAX.
+    //   xchg eax, esi ; mov [edi+23], al ; xchg eax, esi
+    CHECK_BYTES(encode_one_mode32(MInstr::make_unary(
+                    MOp::MOV, MOperand::make_mem(MReg::RDI, 23),
+                    MOperand::make_reg(MReg::RSI, 1))),
+                (std::vector<uint8_t>{0x87, 0xC6, 0x88, 0x47, 0x17, 0x87,
+                                      0xC6}));
+
+    // La direccion usa EAX: se presta ECX.
+    //   xchg ecx, esi ; mov [eax+4], cl ; xchg ecx, esi
+    CHECK_BYTES(encode_one_mode32(MInstr::make_unary(
+                    MOp::MOV, MOperand::make_mem(MReg::RAX, 4),
+                    MOperand::make_reg(MReg::RSI, 1))),
+                (std::vector<uint8_t>{0x87, 0xCE, 0x88, 0x48, 0x04, 0x87,
+                                      0xCE}));
+
+    // setcc sobre EDI: xchg no toca las banderas.
+    //   xchg eax, edi ; sete al ; xchg eax, edi
+    MInstr set;
+    set.op = MOp::SETCC;
+    set.variant = static_cast<uint8_t>(MCond::E);
+    set.dst = MOperand::make_reg(MReg::RDI, 1);
+    CHECK_BYTES(encode_one_mode32(set),
+                (std::vector<uint8_t>{0x87, 0xC7, 0x0F, 0x94, 0xC0, 0x87,
+                                      0xC7}));
+
+    // Los dos operandos sin byte bajo: cada uno con su prestado.
+    //   xchg eax, edi ; xchg ecx, esi ; mov al, cl ; xchg ecx, esi ;
+    //   xchg eax, edi
+    CHECK_BYTES(encode_one_mode32(MInstr::make_unary(
+                    MOp::MOV, MOperand::make_reg(MReg::RDI, 1),
+                    MOperand::make_reg(MReg::RSI, 1))),
+                (std::vector<uint8_t>{0x87, 0xC7, 0x87, 0xCE, 0x88, 0xC8, 0x87,
+                                      0xCE, 0x87, 0xC7}));
+
+    // En x86-64 no cambia nada: SIL se nombra con REX.
+    //   mov [rdi+23], sil -> 40 88 77 17
+    MFunction fn64 = make_single_block_fn({MInstr::make_unary(
+        MOp::MOV, MOperand::make_mem(MReg::RDI, 23),
+        MOperand::make_reg(MReg::RSI, 1))});
+    X86Encoder enc64;
+    std::vector<uint8_t> out64;
+    enc64.encode(fn64, out64);
+    CHECK_BYTES(out64, (std::vector<uint8_t>{0x40, 0x88, 0x77, 0x17}));
+}
+
 /* ===================================================================== */
 /* Tests de ejecucion: emit -> code cache -> ejecutar                     */
 /* ===================================================================== */
@@ -735,6 +802,7 @@ int main() {
     test_encode_jcc();
     test_encode_cmp();
     test_encode_setcc();
+    test_encode_byte_regs_mode32();
 
     /* Execution tests (end-to-end) */
     test_exec_return_const();

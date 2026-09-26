@@ -203,11 +203,14 @@ i32 corre() {
 	}
 
 	// (4) Escribir en el: se comprueba el numero de bytes, no solo que no diera
-	//     error, porque una escritura parcial tambien devuelve exito.
+	//     error, porque una escritura parcial tambien devuelve exito.  Y contra
+	//     la longitud CONOCIDA, no solo contra `bytes()`: en x86-32 `bytes()`
+	//     daba 120 (el segundo caracter) y `write` escribia esos 120, asi que
+	//     comparar los dos entre si no veia nada.
 	string  texto = "vx";
 	ssize_t n     = write(fd, texto.cstr(), texto.bytes());
 
-	if (n == texto.bytes()) {
+	if (n == texto.bytes() && texto.bytes() == 2) {
 		puntos++;
 	}
 

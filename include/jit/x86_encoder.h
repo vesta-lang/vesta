@@ -194,11 +194,48 @@ class X86Encoder {
     /// ensamblado interpreta los indices 4-7 como los high-bytes legacy
     /// AH/CH/DH/BH, corrompiendo el valor.  Los indices extendidos (>=8)
     /// ya fuerzan REX por su bit alto, asi que solo importan los 4-7.
-    /// En x86-32 nunca se emite REX (los high-bytes legacy son validos).
+    /// En x86-32 no hay REX, y por eso esos cuatro registros NO TIENEN byte
+    /// bajo que se pueda nombrar: ver @ref lacks_low_byte.
     bool needs_rex_for_byte_reg(uint8_t reg) const {
         if (mode32_) return false;
         return reg >= 4 && reg <= 7;
     }
+
+    /// @c true si @p reg no tiene byte bajo direccionable: ESP/EBP/ESI/EDI
+    /// en x86-32.  Su indice como operando de 8 bits es AH/CH/DH/BH, el byte
+    /// ALTO de otro registro, asi que codificarlo tal cual escribe o lee otro
+    /// valor en silencio (medido: `mov [edi], dh` guardaba la longitud de
+    /// una cadena y salia el segundo caracter).
+    bool lacks_low_byte(uint8_t reg) const {
+        return mode32_ && reg >= 4 && reg <= 7;
+    }
+
+    /**
+     * @brief El registro que @p mi usa como operando de UN byte y que no
+     *        tiene byte bajo (ver @ref lacks_low_byte).
+     * @param mi La instruccion.
+     * @return Su id, o @c MReg::NONE si no hay ninguno.
+     */
+    uint8_t byte_operand_lacking_low_byte(const MInstr &mi) const;
+
+    /**
+     * @brief Emite @p mi prestando un registro que SI tiene byte bajo en vez
+     *        de @p reg: `xchg prestado, reg`, la instruccion con los dos
+     *        intercambiados en todos sus operandos, y `xchg` de vuelta.
+     *
+     * `xchg` no toca las banderas (importa para `setcc`) ni necesita un
+     * registro libre.  El prestado es uno de EAX/ECX/EDX/EBX que la
+     * instruccion no use, para que dos operandos sin byte bajo en la misma
+     * instruccion (`mov dil, sil`) no pidan el mismo.
+     *
+     * @param fn  La funcion.
+     * @param mi  La instruccion.
+     * @param reg El registro sin byte bajo.
+     * @param out Donde se emite.
+     * @return Lo mismo que @ref emit_instr.
+     */
+    bool emit_with_lent_byte_reg(MFunction &fn, const MInstr &mi, uint8_t reg,
+                                 std::vector<uint8_t> &out);
 
     /// Construye un byte ModR/M con mod + reg + rm.
     static uint8_t modrm(uint8_t mod, uint8_t reg, uint8_t rm) {

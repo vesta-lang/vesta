@@ -55,7 +55,134 @@ inline AluEnc alu_enc_for(MOp op) noexcept {
 inline uint8_t jcc_long_opcode(MCond cc) {
     return static_cast<uint8_t>(0x80 + static_cast<uint8_t>(cc));
 }
+
+/// Id del registro "ninguno", el mismo en @c reg y en el indice empaquetado.
+constexpr uint8_t kNoReg = static_cast<uint8_t>(MReg::NONE);
+
+/**
+ * @brief @p r con @p a y @p b intercambiados.
+ * @param r El registro.
+ * @param a Uno.
+ * @param b El otro.
+ * @return @p b si era @p a, @p a si era @p b, y si no el mismo.
+ */
+uint8_t swap_reg(uint8_t r, uint8_t a, uint8_t b) {
+    if (r == a) return b;
+    if (r == b) return a;
+    return r;
+}
+
+/**
+ * @brief Un operando con @p a y @p b intercambiados en todos sus registros:
+ *        el suyo y, si es memoria, la base y el indice.
+ * @param op El operando.
+ * @param a  Uno.
+ * @param b  El otro.
+ * @return El operando reescrito.
+ */
+MOperand swap_regs_in_operand(MOperand op, uint8_t a, uint8_t b) {
+    if (op.kind == MOperandKind::REG) {
+        op.reg = swap_reg(op.reg, a, b);
+    } else if (op.kind == MOperandKind::MEM) {
+        op.reg = swap_reg(op.reg, a, b);
+        // El indice va empaquetado en `width` junto a la escala.
+        const uint8_t index = static_cast<uint8_t>(op.width >> 2);
+        if (index != kNoReg)
+            op.width = static_cast<uint8_t>((swap_reg(index, a, b) << 2) |
+                                            (op.width & 0x3));
+    }
+    return op;
+}
+
+/**
+ * @brief Si un operando nombra @p r, como registro o en su direccion.
+ * @param op El operando.
+ * @param r  El registro.
+ * @return @c true si lo usa.
+ */
+bool operand_uses_reg(const MOperand &op, uint8_t r) {
+    if (op.kind == MOperandKind::REG) return op.reg == r;
+    if (op.kind == MOperandKind::MEM)
+        return op.reg == r || static_cast<uint8_t>(op.width >> 2) == r;
+    return false;
+}
+
+/**
+ * @brief Emite `xchg a, b` entre dos registros de 32 bits.  No toca las
+ *        banderas.
+ * @param out Donde se emite.
+ * @param a   Uno.
+ * @param b   El otro.
+ */
+void emit_xchg32(std::vector<uint8_t> &out, uint8_t a, uint8_t b) {
+    out.push_back(0x87);
+    out.push_back(static_cast<uint8_t>(0xC0 | ((a & 7) << 3) | (b & 7)));
+}
 } // namespace
+
+uint8_t X86Encoder::byte_operand_lacking_low_byte(const MInstr &mi) const {
+    if (!mode32_) return kNoReg;
+    const MOperand &dst = mi.dst;
+    const MOperand &src = mi.src1;
+    switch (mi.op) {
+    case MOp::MOV: {
+        // El ancho lo da el destino si es registro, y el origen si se
+        // escribe en memoria (una ranura de derrame se escribe entera).
+        if (dst.kind == MOperandKind::REG && dst.width == 1) {
+            if (lacks_low_byte(dst.reg)) return dst.reg;
+            if (src.kind == MOperandKind::REG && lacks_low_byte(src.reg))
+                return src.reg;
+        }
+        if (dst.kind == MOperandKind::MEM && src.kind == MOperandKind::REG &&
+            src.width == 1 && !dst.is_full_slot() && lacks_low_byte(src.reg))
+            return src.reg;
+        return kNoReg;
+    }
+    case MOp::MOVZX:
+    case MOp::MOVSX:
+        if (src.kind == MOperandKind::REG && src.width == 1 &&
+            lacks_low_byte(src.reg))
+            return src.reg;
+        return kNoReg;
+    case MOp::SETCC:
+        if (dst.kind == MOperandKind::REG && lacks_low_byte(dst.reg))
+            return dst.reg;
+        return kNoReg;
+    default: return kNoReg;
+    }
+}
+
+bool X86Encoder::emit_with_lent_byte_reg(MFunction &fn, const MInstr &mi,
+                                         uint8_t reg,
+                                         std::vector<uint8_t> &out) {
+    // El prestado: uno con byte bajo que la instruccion no nombre.
+    uint8_t lender = kNoReg;
+    for (uint8_t candidate = 0; candidate < 4; ++candidate) {
+        if (operand_uses_reg(mi.dst, candidate) ||
+            operand_uses_reg(mi.src1, candidate) ||
+            operand_uses_reg(mi.src2, candidate))
+            continue;
+        lender = candidate;
+        break;
+    }
+    // ESP no se presta nunca, y sin prestado no hay forma correcta de
+    // codificarlo: se emite la trampa, como el resto de lo que no se sabe
+    // codificar aqui, en vez de otra instruccion.
+    if (lender == kNoReg || reg == static_cast<uint8_t>(MReg::RSP)) {
+        put8(out, 0xCC);
+        return true;
+    }
+    MInstr lent = mi;
+    lent.dst = swap_regs_in_operand(mi.dst, lender, reg);
+    lent.src1 = swap_regs_in_operand(mi.src1, lender, reg);
+    lent.src2 = swap_regs_in_operand(mi.src2, lender, reg);
+    emit_xchg32(out, lender, reg);
+    // Puede quedar OTRO operando sin byte bajo: lo resuelve la llamada
+    // recursiva, con otro prestado.
+    const bool ok = emit_instr(fn, lent, out);
+    emit_xchg32(out, lender, reg);
+    return ok;
+}
 
 /* ===================================================================== */
 /* encode (pasada principal + resolve)                                    */
@@ -144,6 +271,12 @@ size_t X86Encoder::encode(MFunction &fn, std::vector<uint8_t> &out) {
 
 bool X86Encoder::emit_instr(MFunction &fn, const MInstr &mi,
                             std::vector<uint8_t> &out) {
+    /* x86-32: un operando de un byte en ESP/EBP/ESI/EDI se codificaria como
+     * AH/CH/DH/BH.  Se resuelve aqui, una vez para todas las instrucciones,
+     * prestando un registro que si tiene byte bajo. */
+    const uint8_t no_low_byte = byte_operand_lacking_low_byte(mi);
+    if (no_low_byte != static_cast<uint8_t>(MReg::NONE))
+        return emit_with_lent_byte_reg(fn, mi, no_low_byte, out);
     switch (mi.op) {
     case MOp::NOP: put8(out, 0x90); return true;
     case MOp::INT3: put8(out, 0xCC); return true;
