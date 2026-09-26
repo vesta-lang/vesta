@@ -99,6 +99,7 @@ int run_worker_from_source(std::string code, const std::string &file_name,
 #include "vx/module/module_interop.h"
 #include "vx/module/module_resolver.h"
 #include "vx/module/namespace_flatten.h" // NS.2: flatten inline namespaces por modulo
+#include "vx/module/namespace_names.h" // la forma fisica de un nombre con ruta
 #include "vx/parser.h"
 // IMPORTANTE: incluir los headers de diagramas DESPUES de parser.h / lowering.h
 // para que la fwd decl @c namespace ast { struct ModuleNode; } del header
@@ -150,112 +151,6 @@ int run_worker_from_source(std::string code, const std::string &file_name,
 namespace vx {
 
 namespace {
-
-/// Convierte enum int -> ir::OptLevel.  Duplicado de compiler.cpp para
-/// no exponer la helper privada.
-ir::OptLevel opt_level_from_int_(int n) noexcept {
-    switch (n) {
-    case 0: return ir::OptLevel::O0;
-    case 1: return ir::OptLevel::O1;
-    case 2: return ir::OptLevel::O2;
-    case 3: return ir::OptLevel::O3;
-    default: return ir::OptLevel::O1;
-    }
-}
-
-/// Si la cache esta apagada.  La respuesta la da `cache_paths.h`, que es quien
-/// conoce los cajones: antes se contestaba aqui y solo valia para el de este
-/// camino, asi que la bandera dejaba vivos los otros.  @see
-/// util::cache_disabled
-bool vxi_cache_disabled_() noexcept {
-    return util::cache_disabled();
-}
-
-/// Escribe @p bytes al fichero @p path (binary).  Devuelve true si OK.
-/// Crea el directorio padre si no existe.
-bool write_file_(const std::string &path, const std::vector<uint8_t> &bytes) {
-    try {
-        std::filesystem::create_directories(
-            std::filesystem::path(path).parent_path());
-    } catch (...) { /* ignorar; el ofstream tambien fallara */
-    }
-    std::ofstream f(path, std::ios::binary);
-    if (!f.is_open()) return false;
-    if (!bytes.empty()) {
-        f.write(reinterpret_cast<const char *>(bytes.data()),
-                static_cast<std::streamsize>(bytes.size()));
-    }
-    return f.good();
-}
-
-///  M5.A L.17: escritura atomica de fichero.  Escribe a un .tmp
-/// unico (PID + tid + counter para evitar colisiones de procesos
-/// concurrentes) y hace rename al destino.  En la mayoria de sistemas
-/// (Windows NTFS, Linux ext4/btrfs, macOS APFS) el rename es atomic:
-/// el destino o tiene el contenido viejo o el nuevo, nunca un parcial.
-/// Esto cierra L.17: dos compilaciones simultaneas del mismo proyecto
-/// no corrompen los archivos de cache compartidos (.vxi, .vxir, .velb).
-bool write_file_atomic_(const std::string &path,
-                        const std::vector<uint8_t> &bytes) {
-    namespace fs = std::filesystem;
-    static std::atomic<uint64_t> tmp_counter{0};
-    try {
-        fs::create_directories(fs::path(path).parent_path());
-    } catch (...) { /* ignorar */
-    }
-    // Sufijo unico por proceso + thread + counter.  Asi multiples
-    // compilaciones concurrentes nunca colisionan en el tmp.
-    std::ostringstream suffix;
-    suffix << ".tmp."
-#ifdef _WIN32
-           << static_cast<uint64_t>(GetCurrentProcessId())
-#else
-           << static_cast<uint64_t>(getpid())
-#endif
-           << "." << tmp_counter.fetch_add(1, std::memory_order_relaxed);
-    const std::string tmp_path = path + suffix.str();
-    {
-        std::ofstream f(tmp_path, std::ios::binary);
-        if (!f.is_open()) return false;
-        if (!bytes.empty()) {
-            f.write(reinterpret_cast<const char *>(bytes.data()),
-                    static_cast<std::streamsize>(bytes.size()));
-        }
-        if (!f.good()) {
-            f.close();
-            std::error_code ec;
-            fs::remove(tmp_path, ec);
-            return false;
-        }
-        f.close();
-    }
-    // rename atomico (Windows: MoveFileExA con MOVEFILE_REPLACE_EXISTING;
-    // POSIX: rename(2)).  std::filesystem::rename hace lo correcto en
-    // ambos.  Si el destino existe, lo reemplaza atomicamente.
-    std::error_code ec;
-    fs::rename(tmp_path, path, ec);
-    if (ec) {
-        // Fallback: en Windows hay race rara donde MoveFileEx falla con
-        // ERROR_ACCESS_DENIED si otro proceso tiene el destino abierto.
-        // Intentar copy + delete como segundo recurso.
-        fs::copy_file(tmp_path, path, fs::copy_options::overwrite_existing, ec);
-        fs::remove(tmp_path, ec);
-        return !ec;
-    }
-    return true;
-}
-
-/// Lee el fichero entero a bytes.  Devuelve true si OK.
-bool read_file_bytes_(const std::string &path, std::vector<uint8_t> &out) {
-    std::ifstream f(path, std::ios::binary | std::ios::ate);
-    if (!f.is_open()) return false;
-    const std::streamsize sz = f.tellg();
-    if (sz < 0) return false;
-    f.seekg(0, std::ios::beg);
-    out.resize(static_cast<size_t>(sz));
-    if (sz > 0) f.read(reinterpret_cast<char *>(out.data()), sz);
-    return f.good();
-}
 
 /**
  * @brief Guarda junto al modulo lo que el ASA supo de el AL BAJARLO.
@@ -875,28 +770,6 @@ static uint64_t huella_de_lo_usado(const VxiModule &dep_vxi,
 /// module_name del dep resuelto, para reusar toda la maquinaria de imports
 /// por-path (que ya soporta acceso cualificado multi-segmento via ns_path).
 using NsToModname = std::unordered_map<std::string, std::string>;
-
-/// `a.b.c` -> `a__b__c`: el mismo aplanado que usa el mangling de namespaces.
-///
-/// Sirve para CUALIFICAR los simbolos que entran por un import por-namespace.
-/// Hacerlo con el nombre de FICHERO era el origen de que un mismo tipo tuviera
-/// varias identidades: `std.types` lo declaran `types.vx`, `types/arm64.vx` y
-/// `types/x86_64.vx`, y el resolver devuelve el PRIMERO que encuentra el
-/// escaneo del disco.  Segun cual ganase, el mismo `uintptr` entraba como
-/// `arm64__uintptr` o como `std__types__uintptr` y luego no unificaba consigo
-/// mismo.  El namespace es el mismo para todos los ficheros que lo declaran,
-/// asi que cualificar por el da UNA identidad estable.
-inline std::string flatten_ns_(const std::string &dotted) {
-    std::string out;
-    out.reserve(dotted.size() + 8);
-    for (const char c : dotted) {
-        if (c == '.')
-            out += "__";
-        else
-            out.push_back(c);
-    }
-    return out;
-}
 
 ///  M.5: renombrar las top-level FunctionDecl y GlobalVarDecl del
 /// modulo con un prefijo `<modname>__`.  Esto evita colisiones de
@@ -2348,7 +2221,7 @@ CompileResult compile_vx_project(
     //     directo desde .vxir.  Speedup esperado: 5-20x en builds
     //     incrementales con cache hit.
     //   - Cache desactivable via env VX_NO_CACHE=1.
-    const bool cache_enabled = !vxi_cache_disabled_();
+    const bool cache_enabled = !util::cache_disabled();
     const bool verbose_cache = util::flag_on(util::FlagId::VerboseCache);
     //  M.L21: progreso/feedback al usuario durante compile de
     // proyectos grandes.  Activado via @c VX_VERBOSE_COMPILE=1 .
@@ -2543,7 +2416,7 @@ CompileResult compile_vx_project(
                      * regla vive en un sitio, no en dos que puedan divergir. */
                     const std::string flat =
                         ns.empty() ? fd->name
-                                   : flatten_ns_(ns) + "__" + fd->name;
+                                   : namespace_member_symbol(ns, fd->name);
                     if (!fd->hook_point.empty())
                         root_hooks.push_back({fd, flat});
                     if (fd->is_no_instrument)
@@ -2772,7 +2645,7 @@ CompileResult compile_vx_project(
             const std::string &vp = paths.vxi;
             const std::string &ip = paths.vxir;
             std::vector<uint8_t> vbytes;
-            if (read_file_bytes_(vp, vbytes)) {
+            if (util::read_whole_file(vp, vbytes)) {
                 auto pr = vxi_parse(vbytes.data(), vbytes.size());
                 // v13: un artefacto atado a OTRO objetivo no sirve.  Solo los
                 // modulos que usan @Target llevan objetivo (el resto va con el
@@ -2860,7 +2733,7 @@ CompileResult compile_vx_project(
                     if (deps_match) {
                         // Hash match -> intentar cargar tambien el .vxir.
                         std::vector<uint8_t> ibytes;
-                        if (read_file_bytes_(ip, ibytes) && !ibytes.empty()) {
+                        if (util::read_whole_file(ip, ibytes) && !ibytes.empty()) {
                             // BugFix M.vxir-sd: cargar el modulo COMPLETO
                             // (functions + static_data + globals).  El formato
                             // viejo (solo functions) perdia el static_data del
@@ -2879,7 +2752,7 @@ CompileResult compile_vx_project(
                             bool par_coherente = true;
                             {
                                 std::vector<uint8_t> vb2;
-                                if (!read_file_bytes_(vp, vb2)) {
+                                if (!util::read_whole_file(vp, vb2)) {
                                     par_coherente = false;
                                 } else {
                                     auto pr2 =
@@ -3300,7 +3173,7 @@ CompileResult compile_vx_project(
                     // parcial todos sus ficheros deben dar la MISMA identidad.
                     const std::string qual =
                         (req.by_namespace && !req.ns_path.empty())
-                            ? flatten_ns_(req.ns_path)
+                            ? namespace_symbol_path(req.ns_path)
                             : req.module_name;
                     auto missing = import_vxi_into_typechecker_with_missing(
                         *pm.tc, dep_vxi, synth_only, qual, req.loc);
@@ -3360,10 +3233,17 @@ CompileResult compile_vx_project(
                                                   dep_alias_srcs);
                 // M2.d: inyeccion directa via only.  M6.a.3: usar la variante
                 // que devuelve los missing para emitir diagnostico claro.
-                // Cualificar por NAMESPACE, no por fichero (ver flatten_ns_).
+                /* Cualificar por NAMESPACE, no por fichero.  Hacerlo con el
+                 * nombre de FICHERO era el origen de que un mismo tipo tuviera
+                 * varias identidades: `std.types` lo declaran `types.vx`,
+                 * `types/arm64.vx` y `types/x86_64.vx`, y el resolver devuelve
+                 * el PRIMERO que encuentra el escaneo del disco -- el mismo
+                 * `uintptr` entraba como `arm64__uintptr` o como
+                 * `std__types__uintptr` y no unificaba consigo mismo --.  El
+                 * namespace es el mismo para todos sus ficheros. */
                 const std::string qual =
                     (req.by_namespace && !req.ns_path.empty())
-                        ? flatten_ns_(req.ns_path)
+                        ? namespace_symbol_path(req.ns_path)
                         : req.module_name;
                 auto missing = import_vxi_into_typechecker_with_missing(
                     *pm.tc, dep_vxi, req.only_symbols, qual, req.loc);
@@ -3776,8 +3656,8 @@ CompileResult compile_vx_project(
             // slots `code.s_*` al merge.  emit_ir_section (solo functions)
             // los perdia.
             auto ibytes = ir::emit_ir_module_cache_vec(pm.ir);
-            (void)write_file_atomic_(ip, ibytes);
-            (void)write_file_atomic_(vp, vbytes);
+            (void)::fs::write_file_atomic(ip, ibytes);
+            (void)::fs::write_file_atomic(vp, vbytes);
             /* Y queda apuntado que el intermedio de este modulo, TAL COMO ESTA
              * AHORA, ya esta en disco.  Es lo que permite que desalojarlo mas
              * tarde no cueste ni una escritura mas: el fichero que la cache
@@ -3827,7 +3707,7 @@ CompileResult compile_vx_project(
              * -- no entra en la huella. */
             if (util::flag_present(util::FlagId::DepVel)) {
                 ir::EmitOptions dep_emit_opts;
-                dep_emit_opts.opt_level = opt_level_from_int_(opts.opt_level);
+                dep_emit_opts.opt_level = ir::opt_level_from_int(opts.opt_level);
                 dep_emit_opts.emit_debug = opts.emit_debug;
                 // emit_stackmaps en su default (true): VSMP siempre presente.
                 dep_emit_opts.module_name = pm.module_name.str();
@@ -3839,7 +3719,7 @@ CompileResult compile_vx_project(
                 if (dep_eres.ok) {
                     std::vector<uint8_t> velb_bytes(dep_eres.vel_text.begin(),
                                                     dep_eres.vel_text.end());
-                    (void)write_file_atomic_(dvel_path, velb_bytes);
+                    (void)::fs::write_file_atomic(dvel_path, velb_bytes);
                 }
                 if (verbose_cache) {
                     std::ostringstream tmp;
@@ -4898,7 +4778,7 @@ CompileResult compile_vx_project(
          * suma al coste del optimizador sin que nadie sepa que son dos. */
         util::CronoTramo t_("phase:ir_optimize (inlined copy)",
                             util::flag_on(util::FlagId::Times));
-        ir::ir_optimize(para_inline, opt_level_from_int_(opts.opt_level),
+        ir::ir_optimize(para_inline, ir::opt_level_from_int(opts.opt_level),
                         /*allow_inline=*/true);
         ir::emit_ir_module_cache(para_inline,
                                  res.ir_module_cache_bytes_inlined.buf);
@@ -4941,7 +4821,7 @@ CompileResult compile_vx_project(
                             util::flag_on(util::FlagId::Times));
         /* Con el almacen si se pidio el momento de EN MEDIO.  Ver la nota en
          * el camino de fichero suelto. */
-        ir::ir_optimize(merged, opt_level_from_int_(opts.opt_level),
+        ir::ir_optimize(merged, ir::opt_level_from_int(opts.opt_level),
                         /*allow_inline=*/!opts.emit_ir_preopt,
                         wants_stage_(opts, analysis::asa::kStageDuringOpt)
                             ? &facts
@@ -5118,7 +4998,7 @@ CompileResult compile_vx_project(
 
     // 6. Emitir .vel desde el IR mergeado.
     ir::EmitOptions emit_opts;
-    emit_opts.opt_level = opt_level_from_int_(opts.opt_level);
+    emit_opts.opt_level = ir::opt_level_from_int(opts.opt_level);
     emit_opts.emit_comments = true;
     emit_opts.emit_debug = opts.emit_debug;
     // emit_opts.emit_stackmaps queda en su default (true): VSMP siempre.

@@ -498,6 +498,9 @@ add_library(vx_lib STATIC
     module/module_resolver.cpp
     module/module_interop.cpp
     module/namespace_flatten.cpp
+    # El nombre fisico de lo declarado en un namespace (`a.b.f` -> `a__b__f`):
+    # una representacion, en un solo sitio.
+    module/namespace_names.cpp
     # Indice semantico por-declaracion (hash de contenido + grafo de deps):
     # sustrato de la compilacion incremental granular y distribuida.
     semantic_index.cpp

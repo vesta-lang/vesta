@@ -23,6 +23,7 @@
 
 #include "vx/module/namespace_flatten.h"
 #include "ir/synthetic_symbols.h" // el nombre de los cuerpos de macro
+#include "vx/module/namespace_names.h" // la forma fisica del nombre
 
 #include <functional>
 #include <unordered_map>
@@ -34,45 +35,13 @@ namespace vx {
 
 namespace {
 
-///  NS.1: convierte un path de namespace PUNTEADO (`std.collections`) a su
-/// forma MANGLED con separador `__` (`std__collections`).  Los nombres de un
-/// solo segmento (M.7.c) quedan intactos.  Se usa SOLO al construir el prefijo
-/// fisico de mangling; el nombre HUMANO (para resolucion / acceso qualified)
-/// conserva los puntos.
-std::string mangle_ns_path_(const std::string &dotted) {
-    if (dotted.find('.') == std::string::npos) return dotted;
-    std::string out;
-    out.reserve(dotted.size() + 4);
-    for (char c : dotted) {
-        if (c == '.')
-            out += "__";
-        else
-            out += c;
-    }
-    return out;
-}
-
-/// Quita el prefijo `<full_path>__` de un nombre mangled para obtener su nombre
-/// publico local.  Si el nombre NO lleva ese prefijo (e.g. `main`, que no se
-/// manglea, o un `__reservado`), lo devuelve TAL CUAL -- evita el substr
-/// fuera-de-rango cuando un simbolo escapa al mangling (bug NS.1: la forma
-/// statement `namespace a.b.c;` arrastra `main` al namespace).
-std::string strip_ns_prefix_(const std::string &name,
-                             const std::string &full_path) {
-    if (full_path.empty()) return name;
-    const std::string pre = full_path + "__";
-    if (name.size() > pre.size() && name.compare(0, pre.size(), pre) == 0)
-        return name.substr(pre.size());
-    return name;
-}
-
 /// Aplica el prefix `<ns_path>__` a un nombre si NO empieza con `__`
 /// (identificadores reservados) y no es `main` (entry point unico).
 std::string mangle_name_(const std::string &ns_path, const std::string &name) {
     if (name.empty()) return name;
     if (name.size() >= 2 && name[0] == '_' && name[1] == '_') return name;
     if (name == "main") return name;
-    return ns_path + "__" + name;
+    return qualified_symbol(ns_path, name);
 }
 
 /// Walker recursivo que reescribe IdentExpr / NamedTypeNode / NewExpr
@@ -695,7 +664,8 @@ void mangle_decls_(std::vector<std::unique_ptr<ast::Node>> &decls,
     for (auto &d : decls) {
         if (!d || d->kind != ast::NodeKind::NamespaceDecl) continue;
         auto *nd = static_cast<ast::NamespaceDecl *>(d.get());
-        mangle_decls_(nd->decls, ns_path + "__" + mangle_ns_path_(nd->name),
+        mangle_decls_(nd->decls,
+                      qualified_symbol(ns_path, namespace_symbol_path(nd->name)),
                       rename_map);
     }
     mangle_decls_apply_(decls, ns_path, rename_map);
@@ -754,7 +724,7 @@ void collect_renames_(
             // tambien entran al mapa, porque el padre puede nombrarlos.
             auto *nd = static_cast<ast::NamespaceDecl *>(d.get());
             const std::string nested_path =
-                ns_path + "__" + mangle_ns_path_(nd->name);
+                qualified_symbol(ns_path, namespace_symbol_path(nd->name));
             collect_renames_(nd->decls, nested_path, rename_map);
             // El namespace decl mismo no se renombra; se procesa al
             // aplanar en collect_and_flatten_.
@@ -843,7 +813,7 @@ void collect_and_flatten_(std::vector<std::unique_ptr<ast::Node>> &in_decls,
             // El path completo del prefix de mangling es ya `ui__controls`.
             auto *nd = static_cast<ast::NamespaceDecl *>(d.get());
             const std::string nested_path =
-                full_path + "__" + mangle_ns_path_(nd->name);
+                qualified_symbol(full_path, namespace_symbol_path(nd->name));
             // El namespace anidado se trata como un namespace SEPARADO
             // accesible via `ui.controls.X` (anidamiento de simbolos).
             // En MVP solo soportamos un nivel (ui.X); los simbolos del
@@ -865,7 +835,7 @@ void collect_and_flatten_(std::vector<std::unique_ptr<ast::Node>> &in_decls,
                 // es `<nested_name>__<sym_name>`.  E.g. `controls__Button`.
                 FlattenedNamespace::Sym child = sym;
                 child.public_name =
-                    mangle_ns_path_(nd->name) + "__" + sym.public_name;
+                    namespace_member_symbol(nd->name, sym.public_name);
                 out_ns.symbols.push_back(std::move(child));
             }
             continue;
@@ -876,7 +846,7 @@ void collect_and_flatten_(std::vector<std::unique_ptr<ast::Node>> &in_decls,
             auto *fd = static_cast<ast::FunctionDecl *>(d.get());
             FlattenedNamespace::Sym sym;
             sym.kind = FlattenedNamespace::Sym::Function;
-            sym.public_name = strip_ns_prefix_(fd->name, full_path);
+            sym.public_name = strip_symbol_path(fd->name, full_path);
             sym.mangled_label = fd->name;
             out_ns.symbols.push_back(std::move(sym));
             out_decls.push_back(std::move(d));
@@ -886,7 +856,7 @@ void collect_and_flatten_(std::vector<std::unique_ptr<ast::Node>> &in_decls,
             auto *sd = static_cast<ast::StructDecl *>(d.get());
             FlattenedNamespace::Sym sym;
             sym.kind = FlattenedNamespace::Sym::Type;
-            sym.public_name = strip_ns_prefix_(sd->name, full_path);
+            sym.public_name = strip_symbol_path(sd->name, full_path);
             sym.mangled_label = sd->name;
             out_ns.symbols.push_back(std::move(sym));
             out_decls.push_back(std::move(d));
@@ -896,7 +866,7 @@ void collect_and_flatten_(std::vector<std::unique_ptr<ast::Node>> &in_decls,
             auto *cd = static_cast<ast::ClassDecl *>(d.get());
             FlattenedNamespace::Sym sym;
             sym.kind = FlattenedNamespace::Sym::Type;
-            sym.public_name = strip_ns_prefix_(cd->name, full_path);
+            sym.public_name = strip_symbol_path(cd->name, full_path);
             sym.mangled_label = cd->name;
             out_ns.symbols.push_back(std::move(sym));
             out_decls.push_back(std::move(d));
@@ -906,7 +876,7 @@ void collect_and_flatten_(std::vector<std::unique_ptr<ast::Node>> &in_decls,
             auto *ed = static_cast<ast::EnumDecl *>(d.get());
             FlattenedNamespace::Sym sym;
             sym.kind = FlattenedNamespace::Sym::Type;
-            sym.public_name = strip_ns_prefix_(ed->name, full_path);
+            sym.public_name = strip_symbol_path(ed->name, full_path);
             sym.mangled_label = ed->name;
             out_ns.symbols.push_back(std::move(sym));
             out_decls.push_back(std::move(d));
@@ -916,7 +886,7 @@ void collect_and_flatten_(std::vector<std::unique_ptr<ast::Node>> &in_decls,
             auto *td = static_cast<ast::TypeAliasDecl *>(d.get());
             FlattenedNamespace::Sym sym;
             sym.kind = FlattenedNamespace::Sym::Type;
-            sym.public_name = strip_ns_prefix_(td->name, full_path);
+            sym.public_name = strip_symbol_path(td->name, full_path);
             sym.mangled_label = td->name;
             out_ns.symbols.push_back(std::move(sym));
             out_decls.push_back(std::move(d));
@@ -926,7 +896,7 @@ void collect_and_flatten_(std::vector<std::unique_ptr<ast::Node>> &in_decls,
             auto *gd = static_cast<ast::GlobalVarDecl *>(d.get());
             FlattenedNamespace::Sym sym;
             sym.kind = FlattenedNamespace::Sym::Variable;
-            sym.public_name = strip_ns_prefix_(gd->name, full_path);
+            sym.public_name = strip_symbol_path(gd->name, full_path);
             sym.mangled_label = gd->name;
             out_ns.symbols.push_back(std::move(sym));
             out_decls.push_back(std::move(d));
@@ -937,7 +907,7 @@ void collect_and_flatten_(std::vector<std::unique_ptr<ast::Node>> &in_decls,
             FlattenedNamespace::Sym sym;
             sym.kind =
                 FlattenedNamespace::Sym::Type; // concepto = simbolo tipo-like
-            sym.public_name = strip_ns_prefix_(cd->name, full_path);
+            sym.public_name = strip_symbol_path(cd->name, full_path);
             sym.mangled_label = cd->name;
             out_ns.symbols.push_back(std::move(sym));
             out_decls.push_back(std::move(d));
@@ -971,7 +941,7 @@ std::vector<FlattenedNamespace> flatten_namespaces(ast::ModuleNode &mod) {
     for (auto &d : mod.decls) {
         if (!d || d->kind != ast::NodeKind::NamespaceDecl) continue;
         auto *nd = static_cast<ast::NamespaceDecl *>(d.get());
-        const std::string prefix = mangle_ns_path_(nd->name);
+        const std::string prefix = namespace_symbol_path(nd->name);
         collect_renames_(nd->decls, prefix, renames_by_ns[prefix]);
     }
 
@@ -983,7 +953,7 @@ std::vector<FlattenedNamespace> flatten_namespaces(ast::ModuleNode &mod) {
             // El prefijo FISICO usa la forma mangled (std.collections ->
             // std__collections); el nombre HUMANO (ns.name / local_ns_name)
             // conserva los puntos para la resolucion / acceso qualified.
-            const std::string mangled_prefix = mangle_ns_path_(nd->name);
+            const std::string mangled_prefix = namespace_symbol_path(nd->name);
             // El mapa es el de la RUTA, no el del bloque: ya trae lo que los
             // demas bloques de este mismo namespace declararon.
             std::unordered_map<std::string, std::string> &rename_map =

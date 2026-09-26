@@ -17,7 +17,8 @@
 #include "analysis/asa/fact_file.h"
 
 #include <cstdio>
-#include "util/fs_utils.h"
+#include "util/fs_utils.h"   // la escritura atomica
+#include "util/file_read.h"  // leer un fichero entero
 #include "vx/source_hash.h"
 #include "vx/module/vxi_format.h" // para vxi_compiler_version_hash() (L.15)
 
@@ -85,59 +86,6 @@ bool read_u64_le(const uint8_t *data, size_t size, size_t &off, uint64_t &v) {
         v |= static_cast<uint64_t>(data[off + i]) << (i * 8);
     }
     off += 8;
-    return true;
-}
-
-bool read_file_bytes_internal(const std::string &path,
-                              std::vector<uint8_t> &out) {
-    std::ifstream f(path, std::ios::binary | std::ios::ate);
-    if (!f.is_open()) return false;
-    const std::streamsize sz = f.tellg();
-    if (sz < 0) return false;
-    f.seekg(0, std::ios::beg);
-    out.resize(static_cast<size_t>(sz));
-    if (sz > 0) f.read(reinterpret_cast<char *>(out.data()), sz);
-    return f.good();
-}
-
-bool write_file_atomic_internal(const std::string &path,
-                                const std::vector<uint8_t> &bytes) {
-    namespace fs = std::filesystem;
-    static std::atomic<uint64_t> tmp_counter{0};
-    try {
-        fs::create_directories(fs::path(path).parent_path());
-    } catch (...) { /* ignorar */
-    }
-    std::ostringstream suffix;
-    suffix << ".tmp."
-#ifdef _WIN32
-           << static_cast<uint64_t>(GetCurrentProcessId())
-#else
-           << static_cast<uint64_t>(getpid())
-#endif
-           << "." << tmp_counter.fetch_add(1, std::memory_order_relaxed);
-    const std::string tmp_path = path + suffix.str();
-    {
-        std::ofstream f(tmp_path, std::ios::binary);
-        if (!f.is_open()) return false;
-        if (!bytes.empty()) {
-            f.write(reinterpret_cast<const char *>(bytes.data()),
-                    static_cast<std::streamsize>(bytes.size()));
-        }
-        if (!f.good()) {
-            f.close();
-            std::error_code ec;
-            fs::remove(tmp_path, ec);
-            return false;
-        }
-    }
-    std::error_code ec;
-    fs::rename(tmp_path, path, ec);
-    if (ec) {
-        fs::copy_file(tmp_path, path, fs::copy_options::overwrite_existing, ec);
-        fs::remove(tmp_path, ec);
-        return !ec;
-    }
     return true;
 }
 
@@ -248,7 +196,7 @@ bool project_cache_load(const std::string &cache_path, uint32_t &out_opts_hash,
     out_velb.clear();
 
     std::vector<uint8_t> buf;
-    if (!read_file_bytes_internal(cache_path, buf)) return false;
+    if (!util::read_whole_file(cache_path, buf)) return false;
     if (buf.size() < 24)
         return false; // header v2: magic+ver+pad+opts+cvh+dep_count
 
@@ -321,7 +269,7 @@ bool project_cache_save(const std::string &cache_path, uint32_t opts_hash,
     write_u32_le(buf, static_cast<uint32_t>(velb.size()));
     buf.insert(buf.end(), velb.begin(), velb.end());
 
-    return write_file_atomic_internal(cache_path, buf);
+    return ::fs::write_file_atomic(cache_path, buf);
 }
 
 bool project_cache_validate(const std::vector<ProjectCacheDep> &cached_deps,
@@ -331,7 +279,7 @@ bool project_cache_validate(const std::vector<ProjectCacheDep> &cached_deps,
     // existe o la huella difiere, cache miss.
     for (const auto &d : cached_deps) {
         std::vector<uint8_t> bytes;
-        if (!read_file_bytes_internal(d.path, bytes)) return false;
+        if (!util::read_whole_file(d.path, bytes)) return false;
         const uint64_t h = hash_de_tokens(
             std::string(reinterpret_cast<const char *>(bytes.data()),
                         bytes.size()),
@@ -395,7 +343,8 @@ bool project_cache_load_vxdbg(const std::string &cache_path,
     out_map_hex.clear();
     out_spans_hex.clear();
     std::vector<uint8_t> bytes;
-    if (!fs::read_file_bytes(vxdbg_side_path(cache_path), bytes)) return false;
+    if (!util::read_whole_file(vxdbg_side_path(cache_path), bytes))
+        return false;
     const std::string body(bytes.begin(), bytes.end());
     const size_t nl = body.find('\n');
     if (nl == std::string::npos) return false;

@@ -19,6 +19,7 @@
  */
 #include "vxdbg/pack_store.h"
 #include "util/fs_utils.h"
+#include "util/file_read.h" // leer el paquete entero para estropearlo
 
 #include <cstdio>
 #include <thread>
@@ -146,7 +147,7 @@ int main() {
         for (const auto &e : stdfs::directory_iterator(raiz + "/packs", ec))
             if (e.is_regular_file(ec)) ruta = e.path().string();
         std::vector<uint8_t> bytes;
-        fs::read_file_bytes(ruta, bytes);
+        util::read_whole_file(ruta, bytes);
         // Se toca un byte DEL INDICE (justo antes de la cola de 20 bytes), que
         // es el caso peligroso: el cuerpo esta intacto, asi que sin la suma de
         // comprobacion el almacen serviria un nodo por otro tan campante.

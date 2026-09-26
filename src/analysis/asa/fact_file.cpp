@@ -16,6 +16,7 @@
 
 #include "util/fnv.h"
 #include "util/fs_utils.h"
+#include "util/file_read.h" // leer un fichero entero, por el camino corto
 #include "util/serialize.h"
 
 #include <algorithm>
@@ -833,7 +834,7 @@ ReadResult read_facts_file(const std::string &path, uint64_t fingerprint,
         r.reason = ReadReason::NoFile;
         return r;
     }
-    if (!::fs::read_file_bytes(path, bytes)) {
+    if (!util::read_whole_file(path, bytes)) {
         r.reason = ReadReason::ReadFailed;
         return r;
     }

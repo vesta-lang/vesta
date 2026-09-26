@@ -31,6 +31,8 @@
 #include "vx/type_checker.h"
 #include "vx/types.h"
 #include "vx/module/vxi_format.h"
+#include "vx/module/namespace_names.h" // la forma fisica de un nombre con ruta
+#include "vx/project/module_names.h"   // la de un miembro de un modulo
 #include "vx/diagnostic.h" // #cross-module-generics: re-parse de templates
 #include "vx/lexer.h"
 #include "vx/generics/generic_clone.h" // rename_idents: helpers del modulo de la plantilla
@@ -52,18 +54,9 @@ namespace vx {
 /// corto).  Asi que si ya lo lleva, es que viene cualificado y se respeta.
 static std::string qualify_once_(const std::string &ns_path,
                                  const std::string &name) {
-    if (name.find("__") != std::string::npos) return name; // ya cualificado
-    std::string out;
-    out.reserve(ns_path.size() + name.size() + 4);
-    for (const char c : ns_path) {
-        if (c == 0x2E)
-            out += "__";
-        else
-            out.push_back(c);
-    }
-    out += "__";
-    out += name;
-    return out;
+    if (name.find(kSymbolPathSeparator) != std::string::npos)
+        return name; // ya cualificado
+    return namespace_member_symbol(ns_path, name);
 }
 
 /**
@@ -1658,10 +1651,7 @@ void export_typechecker_to_vxi(const TypeChecker &tc, uint64_t source_hash,
             return false;
         };
         if (!set_key(target_src)) {
-            std::string mangled = target_src;
-            for (size_t p = mangled.find('.'); p != std::string::npos;
-                 p = mangled.find('.'))
-                mangled.replace(p, 1, "__");
+            const std::string mangled = namespace_symbol_path(target_src);
             if (mangled == target_src || !set_key(mangled)) {
                 const Type rt = tc.resolve_type_string(target_src);
                 if (rt.kind == PrimitiveKind::STRUCT ||
@@ -2024,7 +2014,7 @@ void inject_generic_templates_from_vxi(
             // `comptime const` se inlinea en el uso, no enlaza contra nada, asi
             // que no hace falta que coincida con el mangling real del modulo.
             const std::string mangled =
-                ir::template_symbol(ns_prefix + "__" + sym.name);
+                ir::template_symbol(qualified_symbol(ns_prefix, sym.name));
             TypeChecker::ComptimeConst c;
             c.type = tc.resolve_type_string(sym.underlying_type);
             if (sym.has_blob_ref) {
@@ -2160,10 +2150,7 @@ void inject_generic_templates_from_vxi(
                 break;
             }
         if (cns.empty()) continue;
-        std::string ns_m;
-        for (char c : cns)
-            ns_m += (c == 0x2E) ? std::string("__") : std::string(1, c);
-        concept_rename[cnm] = ns_m + "__" + cnm;
+        concept_rename[cnm] = namespace_member_symbol(cns, cnm);
     }
     // Aplica el mapa a las restricciones de una decl ya inyectada.
     auto rename_bounds = [&](std::vector<ast::TypeBound> &bounds) {
@@ -2250,10 +2237,7 @@ void inject_generic_templates_from_vxi(
                 break;
             }
         if (!tpl_ns.empty()) {
-            std::string ns_m;
-            for (char c : tpl_ns)
-                ns_m += (c == '.') ? std::string("__") : std::string(1, c);
-            const std::string mangled_full = ns_m + "__" + nm;
+            const std::string mangled_full = namespace_member_symbol(tpl_ns, nm);
             set_decl_name(decl.get(), mangled_full);
             // El nombre corto tiene que seguir llevando a la plantilla: un
             // `import std.numeric;` mete `add` en el scope, y sin este puente
@@ -2871,7 +2855,7 @@ void register_namespace_for_import(TypeChecker &tc,
         Type t = tc.resolve_type_string(name);
         if (t.kind != PrimitiveKind::VOID || name == "void") return t;
         // Si la resolucion plana fallo, intentar con mangling.
-        const std::string mangled = module_name + "__" + name;
+        const std::string mangled = module_member_symbol(module_name, name);
         return tc.resolve_type_string(mangled);
     };
 
@@ -2952,13 +2936,9 @@ void register_namespace_for_import(TypeChecker &tc,
         // su label real en el dep es `X__Tipo` (ns-mangled por flatten); usamos
         // ESE como clave local para que fields/fns que lo referencian por
         // `X__Tipo` resuelvan directo, y para que `__new_X__Tipo` coincida.
-        std::string ns_mangled_prefix;
-        for (char c : s.ns_path)
-            ns_mangled_prefix +=
-                (c == '.') ? std::string("__") : std::string(1, c);
-        const std::string mangled = s.ns_path.empty()
-                                        ? (module_name + "__" + s.name)
-                                        : (ns_mangled_prefix + "__" + s.name);
+        const std::string mangled =
+            s.ns_path.empty() ? module_member_symbol(module_name, s.name)
+                              : namespace_member_symbol(s.ns_path, s.name);
         switch (s.kind) {
         case VxiSymbolKind::TYPEDEF_ALIAS:
         case VxiSymbolKind::TYPEDEF_NEW: {
@@ -3148,7 +3128,7 @@ void register_namespace_for_import(TypeChecker &tc,
             TypeChecker::ImportedNamespace::Sym sym;
             sym.kind = 1; // Variable / Constant
             sym.mangled_label = s.mangled_label.empty()
-                                    ? (module_name + "__" + s.name)
+                                    ? module_member_symbol(module_name, s.name)
                                     : s.mangled_label;
             sym.var_type = t;
             sym.has_const_value = s.is_const && s.has_init_value;
@@ -3253,7 +3233,7 @@ void register_namespace_for_import(TypeChecker &tc,
             TypeChecker::ImportedNamespace::Sym sym;
             sym.kind = 1;
             sym.mangled_label = s.mangled_label.empty()
-                                    ? (module_name + "__" + s.name)
+                                    ? module_member_symbol(module_name, s.name)
                                     : s.mangled_label;
             sym.var_type = t;
             sym.has_const_value = s.is_const && s.has_init_value;

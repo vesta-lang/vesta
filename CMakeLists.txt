@@ -1941,13 +1941,16 @@ target_include_directories(test_vxdbg_core PRIVATE ${VM_INCLUDES})
 # ni `read_whole_file`.  En Linux si, y el test no enlazaba -- rompiendo el
 # objetivo `all`, del que cuelga el paso previo de CPack: el instalador no se
 # podia ni generar por culpa de un test.
-# Lo que `src/vxdbg/store.cpp` arrastra, nombrado UNA vez.
+# Lo que arrastra leer y escribir ficheros por los duenos de siempre --
+# `util::read_whole_file` y la escritura atomica, que deja sus temporales en la
+# cache --, nombrado UNA vez.  Lo usan el almacen de vxdbg y el fichero de
+# hechos del ASA.
 #
 # Lo traian TRES listas escritas a mano y solo una estaba completa: las otras
 # dos compilaban el mismo `store.cpp` sin sus dependencias y rompian el enlace
 # -- y con el `all`, del que cuelga el instalador --.  Dos listas de lo mismo
 # acaban separandose siempre; el sintoma es este.
-set(VESTA_VXDBG_STORE_DEPS
+set(VESTA_FILE_IO_DEPS
         src/util/file_read.cpp
         src/util/env_flags.cpp
         # La escritura atomica deja sus temporales en el cajon `tmp` de la
@@ -1959,7 +1962,7 @@ set(VESTA_VXDBG_STORE_DEPS
 
 # Y por la misma razon hace falta ntdll en Windows: `read_whole_file` abre por
 # NtOpenFile, asi que quien compile ese fichero tiene que enlazarlo.
-function(vesta_vxdbg_store_link objetivo)
+function(vesta_file_io_link objetivo)
     if (WIN32)
         target_link_libraries(${objetivo} PRIVATE ntdll)
     endif ()
@@ -1968,11 +1971,11 @@ endfunction()
 add_executable(test_vxdbg_store tests/vxdbg/test_vxdbg_store.cpp
                                 src/vxdbg/ids.cpp
                                 src/util/serialize.cpp
-                                ${VESTA_VXDBG_STORE_DEPS}
+                                ${VESTA_FILE_IO_DEPS}
                                 src/vxdbg/store.cpp
                                 src/vxdbg/pack_store.cpp)
 target_include_directories(test_vxdbg_store PRIVATE ${VM_INCLUDES})
-vesta_vxdbg_store_link(test_vxdbg_store)
+vesta_file_io_link(test_vxdbg_store)
 
 # Serializacion de cada nodo.  Comprueba, sobre todo, que la identidad de un
 # nodo ES su serializacion: si dos iguales dieran huellas distintas no se
@@ -1981,7 +1984,7 @@ vesta_vxdbg_store_link(test_vxdbg_store)
 add_executable(test_vxdbg_codec tests/vxdbg/test_vxdbg_codec.cpp
                                 src/vxdbg/ids.cpp
                                 src/util/serialize.cpp
-                                ${VESTA_VXDBG_STORE_DEPS}
+                                ${VESTA_FILE_IO_DEPS}
                                 src/vxdbg/store.cpp
                                 src/vxdbg/lowering_map.cpp
                                 src/vxdbg/codec_source.cpp
@@ -1989,7 +1992,7 @@ add_executable(test_vxdbg_codec tests/vxdbg/test_vxdbg_codec.cpp
                                 src/vxdbg/semantic_resolve.cpp
                                 src/vxdbg/roots.cpp)
 target_include_directories(test_vxdbg_codec PRIVATE ${VM_INCLUDES} src/vxdbg)
-vesta_vxdbg_store_link(test_vxdbg_codec)
+vesta_file_io_link(test_vxdbg_codec)
 
 # El recorrido completo: de una direccion a una explicacion.  Cada capa esta
 # probada por su cuenta, pero eso no dice si el camino entero funciona -- es
@@ -2011,7 +2014,7 @@ set_target_properties(test_vxdbg_frontend PROPERTIES
 add_executable(test_vxdbg_resolve tests/vxdbg/test_vxdbg_resolve.cpp
                                   src/vxdbg/ids.cpp
                                   src/util/serialize.cpp
-                                  ${VESTA_VXDBG_STORE_DEPS}
+                                  ${VESTA_FILE_IO_DEPS}
                                   src/vxdbg/store.cpp
                                   src/vxdbg/lowering_map.cpp
                                   src/vxdbg/backend_meta.cpp
@@ -2023,7 +2026,7 @@ add_executable(test_vxdbg_resolve tests/vxdbg/test_vxdbg_resolve.cpp
                                   src/vxdbg/roots.cpp
                                   src/vxdbg/resolver.cpp)
 target_include_directories(test_vxdbg_resolve PRIVATE ${VM_INCLUDES} src/vxdbg)
-vesta_vxdbg_store_link(test_vxdbg_resolve)
+vesta_file_io_link(test_vxdbg_resolve)
 
 # Que una convencion de llamada DECLARADA se cumpla de verdad al llamar desde
 # el interprete: no que 'no revento', sino QUE REGISTRO llego con QUE valor.
@@ -2431,15 +2434,12 @@ target_include_directories(test_locset_indice PRIVATE ${VM_INCLUDES})
 add_executable(test_asa_fact_file_lnx tests/analysis/test_asa_fact_file_lnx.cpp
                                       src/analysis/asa/fact_file.cpp
                                       src/analysis/asa/fact_store.cpp
-                                      src/util/env_flags.cpp
-                                      # Idem: el reparto de la cache, que la
-                                      # escritura atomica consulta.
-                                      src/util/cache_paths.cpp
-                                      # `env_flags` guarda su buffer relido en
-                                      # una ranura por hilo.
-                                      ${VESTA_ALLOC_THREAD_SLOT_SRC}
+                                      # Leer el fichero de hechos y escribirlo
+                                      # de forma atomica.
+                                      ${VESTA_FILE_IO_DEPS}
                                       src/util/serialize.cpp)
 target_include_directories(test_asa_fact_file_lnx PRIVATE ${VM_INCLUDES})
+vesta_file_io_link(test_asa_fact_file_lnx)
 
 add_executable(test_asa_fact_file_robusto tests/analysis/test_asa_fact_file_robusto.cpp)
 target_include_directories(test_asa_fact_file_robusto PRIVATE ${VM_INCLUDES})

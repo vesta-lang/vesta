@@ -842,31 +842,6 @@ static bool write_file_atomic(const std::string &path,
 }
 
 /**
- * @brief Lee un fichero entero a bytes.
- * @param path Ruta.
- * @param out  Destino; queda vacio si no se pudo leer.
- * @return @c true si se leyo entero.
- */
-static bool read_file_bytes(const std::string &path,
-                            std::vector<uint8_t> &out) {
-    out.clear();
-    std::ifstream f(path, std::ios::binary | std::ios::ate);
-    if (!f.is_open()) return false;
-    const std::streamoff tam = f.tellg();
-    if (tam < 0) return false;
-    out.resize(static_cast<size_t>(tam));
-    if (out.empty()) return true;
-    f.seekg(0);
-    f.read(reinterpret_cast<char *>(out.data()),
-           static_cast<std::streamsize>(out.size()));
-    if (!f) {
-        out.clear();
-        return false;
-    }
-    return true;
-}
-
-/**
  * @brief Le pone el bit de ejecucion a un artefacto recien escrito.
  *
  * Los emisores abren el fichero con @c fopen(path,"wb"), que en POSIX lo crea

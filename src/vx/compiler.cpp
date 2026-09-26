@@ -257,16 +257,6 @@ compute_type_fingerprints_(const TypeChecker &tc) {
     return out;
 }
 
-static ir::OptLevel opt_level_from_int(int n) noexcept {
-    switch (n) {
-    case 0: return ir::OptLevel::O0;
-    case 1: return ir::OptLevel::O1;
-    case 2: return ir::OptLevel::O2;
-    case 3: return ir::OptLevel::O3;
-    default: return ir::OptLevel::O1;
-    }
-}
-
 /**
  * @brief Dice si @p name acaba en @p suffix como nombre COMPLETO de funcion.
  *
@@ -1094,7 +1084,7 @@ CompileResult compile_vx_source(const std::string &source,
          * se lleva parte de los agregados antes de que nadie los mire, asi que
          * observar solo despues hace creer que el programa no los tenia. */
         analysis::asa::volcar_formas(irmod_opt, "pre-opt");
-        ir::ir_optimize(irmod_opt, opt_level_from_int(opts.opt_level));
+        ir::ir_optimize(irmod_opt, ir::opt_level_from_int(opts.opt_level));
         if (opts.dump_ir) {
             std::ostringstream ir_oss;
             ir_oss << "// ============================================\n";
@@ -1212,7 +1202,7 @@ CompileResult compile_vx_source(const std::string &source,
     // hace DCE / copy prop / etc segun opt_level y el regalloc lineal
     // asigna r0..r15 a los IrValue.
     ir::EmitOptions emit_opts;
-    emit_opts.opt_level = opt_level_from_int(opts.opt_level);
+    emit_opts.opt_level = ir::opt_level_from_int(opts.opt_level);
     emit_opts.emit_comments = true;
     emit_opts.emit_debug = opts.emit_debug;
     // emit_opts.emit_stackmaps queda en su default (true): los stackmaps
@@ -1310,7 +1300,7 @@ CompileResult compile_vx_source(const std::string &source,
         traer_asignador_del_lenguaje(irmod_for_section, opts, filename);
         if (opts.emit_ir_inlined && opts.emit_ir_preopt) {
             ir::IrModule con_inline = irmod_for_section;
-            ir::ir_optimize(con_inline, opt_level_from_int(opts.opt_level),
+            ir::ir_optimize(con_inline, ir::opt_level_from_int(opts.opt_level),
                             /*allow_inline=*/true);
             ir::emit_ir_module_cache(con_inline,
                                      res.ir_module_cache_bytes_inlined.buf);
@@ -1406,7 +1396,7 @@ CompileResult compile_vx_source(const std::string &source,
          * pase averigua y acto seguido deshace -- el desenrollador sabe
          * cuantas vueltas da el bucle justo antes de reescribirlo -- no esta
          * ni antes ni despues, asi que si no se recoge aqui no se recoge. */
-        ir::ir_optimize(irmod_for_section, opt_level_from_int(opts.opt_level),
+        ir::ir_optimize(irmod_for_section, ir::opt_level_from_int(opts.opt_level),
                         /*allow_inline=*/!opts.emit_ir_preopt,
                         opts.asa.wants_stage(analysis::asa::kStageDuringOpt) ? &res.facts
                                                                     : nullptr);
