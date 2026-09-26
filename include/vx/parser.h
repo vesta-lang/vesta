@@ -947,6 +947,15 @@ class Parser {
     /// (base clonado + N punteros) en @c pending_extra_decls_.  @c base es el
     /// tipo especificador SIN los punteros del primer declarador.
     void parse_c_typedef_ptr_aliases_(const ast::TypeNode *base);
+    /**
+     * @brief Declara el TAG de un `typedef struct/union/enum Tag {...} Name`
+     *        como alias de @p name: en C son el mismo tipo.
+     * @param tag  El tag escrito; vacio si no lo habia (no hace nada).
+     * @param loc  Donde se escribio.
+     * @param name El nombre del typedef.  Si coincide con el tag, nada.
+     */
+    void declare_c_tag_alias_(const std::string &tag, const SourceLoc &loc,
+                              const std::string &name);
 
     /// Consume un sufijo de array C-style `[N][M]...` (uni o multidimensional,
     /// dimension opcional para `[]`) tras el nombre de un campo/variable y

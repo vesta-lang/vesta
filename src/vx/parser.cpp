@@ -4698,6 +4698,21 @@ Parser::wrap_c_array_dims_(std::unique_ptr<ast::TypeNode> base) {
     return base;
 }
 
+void Parser::declare_c_tag_alias_(const std::string &tag, const SourceLoc &loc,
+                                  const std::string &name) {
+    if (tag.empty() || tag == name) return;
+    auto target = std::make_unique<ast::NamedTypeNode>();
+    target->loc = loc;
+    target->name = name;
+    auto a = std::make_unique<ast::TypeAliasDecl>();
+    a->loc = loc;
+    a->is_using_form = false;
+    a->name = tag;
+    a->aliased = std::move(target);
+    apply_pending_visibility(a.get());
+    pending_extra_decls_.push_back(std::move(a));
+}
+
 void Parser::parse_c_typedef_ptr_aliases_(const ast::TypeNode *base) {
     // Se entra con current_ == ','.  Cada iteracion: `, [*]* NOMBRE`.
     while (current_.kind == TokenKind::COMMA) {
@@ -4807,13 +4822,22 @@ Parser::parse_typedef_struct_or_enum(bool leading_typedef) {
         return incomplete;
     }
 
-    // Tag opcional (ignorado; el name real va al final).  En un enum C-style
-    // el tag puede ir seguido de `{` o de `:` (tipo base): `typedef enum Tag :
-    // int { ... } Name;`.
+    /* Tag opcional; el nombre real va al final.  En un enum C-style el tag
+     * puede ir seguido de `{` o de `:` (tipo base): `typedef enum Tag : int {
+     * ... } Name;`.
+     *
+     * En C `struct Tag` y `Name` son el MISMO tipo, y el cuerpo suele usar el
+     * tag para apuntarse a si mismo (`struct _NT_TIB * Self;`).  Se ignoraba:
+     * el tag no era un tipo, y el campo se quedaba en `void*` sin una queja.
+     * Se guarda y, cerrado el typedef, se declara `Tag = Name`. */
+    std::string tag;
+    SourceLoc tag_loc;
     if (current_.kind == TokenKind::IDENTIFIER &&
         (lex_.peek_at(0).kind == TokenKind::LBRACE ||
          (is_enum && lex_.peek_at(0).kind == TokenKind::COLON))) {
-        (void)consume(); // skip tag
+        tag_loc = current_.loc;
+        tag = consume().lexeme;
+        declared_aliases_.insert(tag);
     }
 
     // Tipo base opcional del enum C-style: `typedef enum : u8 { ... } Name;`.
@@ -4867,6 +4891,7 @@ Parser::parse_typedef_struct_or_enum(bool leading_typedef) {
             return nullptr;
         }
         s->name = consume().lexeme;
+        declare_c_tag_alias_(tag, tag_loc, s->name);
         // `typedef struct {...} FOO, *PFOO;`: alias de puntero a la estructura.
         if (current_.kind == TokenKind::COMMA) {
             auto base = std::make_unique<ast::NamedTypeNode>();
@@ -4919,6 +4944,7 @@ Parser::parse_typedef_struct_or_enum(bool leading_typedef) {
         return nullptr;
     }
     e->name = consume().lexeme;
+    declare_c_tag_alias_(tag, tag_loc, e->name);
     // `typedef enum {...} FOO, *PFOO;`: alias de puntero al enum.
     if (current_.kind == TokenKind::COMMA) {
         auto base = std::make_unique<ast::NamedTypeNode>();

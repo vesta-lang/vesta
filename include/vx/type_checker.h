@@ -44,6 +44,7 @@
 #include "vx/generics/generic_infer.h"     // de donde sale cada type-param
 #include "vx/generics/instance_registry.h" // el reparto de instanciaciones
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <functional> // std::function, en la firma de un parametro de abajo
 #include <string>
@@ -3422,6 +3423,35 @@ class TypeChecker {
      * @c void (tamano 0) en silencio (return types, @c sizeof<T>, ...).
      */
     std::string first_unresolved_type(const ast::TypeNode *tn) const;
+
+    /**
+     * @brief Si @p tn nombra un tipo que no existe, lo DICE (VX2136) donde se
+     *        escribio.
+     *
+     * La UNICA puerta para variables, parametros y campos: un tipo desconocido
+     * se volvia `void` en silencio, el programa compilaba, y el error salia en
+     * el primer uso hablando de un `void` que nadie escribio.  No se llama en
+     * plantillas, donde una `T` sin resolver es legitima.
+     *
+     * @param tn   El tipo escrito.
+     * @param loc  Donde se escribio.
+     * @param name Que se declaraba con el (variable, parametro o campo).
+     * @return true si el tipo no existe (y ya se informo).
+     */
+    bool reject_unknown_type_(const ast::TypeNode *tn, const SourceLoc &loc,
+                              const std::string &name);
+
+    /**
+     * @brief Si @p name es una PLANTILLA generica (struct, enum o funcion).
+     *
+     * El criterio lo usan la deduccion de argumentos (`Caja c = expr;`) y la
+     * comprobacion de tipos desconocidos, que tiene que saltarse ese caso:
+     * uno solo, para que no puedan discrepar.
+     *
+     * @param name Nombre escrito.
+     * @return true si es una plantilla.
+     */
+    bool names_generic_template_(const std::string &name) const;
 
     /**
      * @brief Verifica si una asignacion entre tipos CLASS es valida

@@ -4313,6 +4313,20 @@ std::string TypeChecker::first_unresolved_type(const ast::TypeNode *tn) const {
     }
 }
 
+bool TypeChecker::names_generic_template_(const std::string &name) const {
+    return is_generic_struct_template(name) || is_generic_enum_template(name) ||
+           generic_templates_.count(name) > 0;
+}
+
+bool TypeChecker::reject_unknown_type_(const ast::TypeNode *tn,
+                                       const SourceLoc &loc,
+                                       const std::string &name) {
+    const std::string bad = first_unresolved_type(tn);
+    if (bad.empty()) return false;
+    diags_.diag(loc, DiagLevel::ERR, "VX2136", {bad, name});
+    return true;
+}
+
 /**
  * @brief Le pone su SIMBOLO a cada metodo del layout, de una vez y para todos.
  *
@@ -5238,6 +5252,7 @@ void TypeChecker::collect_globals() {
                     continue;
                 }
                 Type ft = type_from_node(f.type.get());
+                if (reject_unknown_type_(f.type.get(), f.loc, f.name)) continue;
                 // La direccion del campo, por la MISMA puerta que la de un
                 // parametro o una variable.  Un struct y un overlay comparten
                 // este camino, asi que los dos la reciben a la vez.
@@ -6191,6 +6206,7 @@ void TypeChecker::collect_globals() {
                     continue;
                 }
                 Type ft = type_from_node(f.type.get());
+                if (reject_unknown_type_(f.type.get(), f.loc, f.name)) continue;
                 check_param_dir_(f.name, f.dir, f.loc, ft);
                 if (ft.kind == PrimitiveKind::COUNT) {
                     diags_.error(f.loc, "tipo invalido en campo '" + f.name +
@@ -6988,6 +7004,8 @@ void TypeChecker::collect_globals() {
                     continue; // no anñade param_type.
                 }
                 Type pt = type_from_node(p->type.get());
+                if (fn->type_params.empty())
+                    reject_unknown_type_(p->type.get(), p->loc, p->name);
                 /* En una PLANTILLA, un parametro escrito con variables no
                  * resuelve a nada -- `T` no es un tipo hasta que se instancia
                  * --, y lo que salia era el tipo VACIO.  Eso mentia dos veces:
@@ -7646,6 +7664,8 @@ void TypeChecker::record_method_params(const ast::ClassMethodDecl &m,
     for (size_t pi = 0; pi < m.params.size(); ++pi) {
         const auto &p = m.params[pi];
         Type pt = type_from_node(p->type.get());
+        if (m.method_type_params.empty())
+            reject_unknown_type_(p->type.get(), p->loc, p->name);
         // Un metodo no es un caso aparte: misma pregunta y mismo sitio que en
         // una funcion suelta, incluido apuntar cual se convirtio.
         note_param_dir_(*p, pt, mi.param_by_ref_mask, mi.param_types.size());
@@ -9701,6 +9721,18 @@ void TypeChecker::check_var_decl(ast::VarDeclStmt *vd) {
         }
     } else {
         s.type = type_from_node(vd->type.get());
+        /* Un tipo que no existe se DICE aqui, donde se escribio.  Salvo el
+         * nombre de una PLANTILLA sin argumentos con inicializador (`Caja c =
+         * expr;`): sus argumentos se deducen del inicializador mas abajo. */
+        const bool deduced_from_init =
+            vd->init && vd->type->kind == ast::NodeKind::NamedTypeNode &&
+            static_cast<const ast::NamedTypeNode *>(vd->type.get())
+                ->type_args.empty() &&
+            names_generic_template_(
+                static_cast<const ast::NamedTypeNode *>(vd->type.get())->name);
+        if (!deduced_from_init &&
+            reject_unknown_type_(vd->type.get(), vd->loc, vd->name))
+            return;
     }
     /* Y la direccion, si la lleva.  Por el MISMO sitio que la de un parametro:
      * en una variable la marca ya no dice que hace una funcion -- no hay
@@ -10021,9 +10053,7 @@ void TypeChecker::check_var_decl(ast::VarDeclStmt *vd) {
         // escrito.
         if (vd->type && vd->type->kind == ast::NodeKind::NamedTypeNode) {
             auto *nt = static_cast<ast::NamedTypeNode *>(vd->type.get());
-            const bool is_template = is_generic_struct_template(nt->name) ||
-                                     is_generic_enum_template(nt->name) ||
-                                     generic_templates_.count(nt->name) > 0;
+            const bool is_template = names_generic_template_(nt->name);
             if (nt->type_args.empty() && is_template &&
                 (t.kind == PrimitiveKind::STRUCT ||
                  t.kind == PrimitiveKind::CLASS) &&

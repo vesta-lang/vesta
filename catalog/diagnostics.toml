@@ -3638,6 +3638,14 @@ es = "ninguna '{1}' toma un '{0}' de primer parametro, pero si las hay para: {2}
 en = "'{1}' does take a '{2}', and the receiver is the OWNER of it: an owner is not a borrow, and no cast turns one into the other -- lend it: `{3}(receiver).{1}(...)`.  It is not done for you because that is the operation with the rules (exclusivity, not escaping), and the dot must not skip what the free call checks"
 es = "'{1}' si toma un '{2}', y el receptor es el DUENYO de eso: un duenyo no es un prestamo, y ningun cast convierte uno en otro -- prestalo: `{3}(receptor).{1}(...)`.  No se hace solo porque esa es la operacion que tiene reglas (exclusividad, que no escape), y el punto no puede saltarse lo que la llamada libre comprueba"
 
+# Una variable declarada con un tipo que no existe.  Se callaba: el tipo se
+# volvia `void`, compilaba con salida cero, y el primer error salia en el USO
+# hablando de un `void` que nadie escribio.  {0} el tipo escrito, {1} la
+# variable.
+["VX2136"]
+en = "unknown type '{0}' in the declaration of '{1}'"
+es = "tipo desconocido '{0}' en la declaracion de '{1}'"
+
 # Dos huecos son dos receptores, y solo hay uno.  No se elige en silencio cual
 # de los dos: se dice.
 ["VX2072"]

@@ -188,6 +188,7 @@ const CatEntry kEntries[] = {
     {"VX2133", {"the chain of definitions was too long to follow", "la cadena de definiciones era demasiado larga para seguirla"}},
     {"VX2134", {"[fnaddr] addresses={0} crossing={1} (native-call={2} inline-asm={3} store={4} return={5} via-callee={6})", "[fnaddr] direcciones={0} cruzan={1} (llamada-nativa={2} asm={3} almacen={4} retorno={5} por-callee={6})"}},
     {"VX2135", {"the default value of field '{0}' of '{1}' could not be lowered, so the field would be left at zero", "el valor por defecto del campo '{0}' de '{1}' no se ha podido bajar, asi que el campo quedaria a cero"}},
+    {"VX2136", {"unknown type '{0}' in the declaration of '{1}'", "tipo desconocido '{0}' en la declaracion de '{1}'"}},
     {"VX3001", {"{0} of {1} bytes is outside {2}: the object reserves [0, {3}) and the access is [{4}, {5})", "{0} de {1} bytes fuera de {2}: el objeto reserva [0, {3}) y el acceso es [{4}, {5})"}},
     {"VX3002", {"write", "escritura"}},
     {"VX3003", {"read", "lectura"}},
@@ -826,7 +827,7 @@ const CatEntry kEntries[] = {
     {"use_def.unused", {"'{2}' is never used", "'{2}' no se usa en ningun sitio"}},
     {"value_shape.none", {"it has no values with components", "no tiene valores con componentes"}},
 };
-const int kEntryCount = 805;
+const int kEntryCount = 806;
 
 } // namespace
 
