@@ -228,6 +228,7 @@ FunctionFingerprint compute_fingerprint(const ir::IrFunction &fn,
                                         const std::string &arch) {
     FunctionFingerprint fp;
     fp.function = fn.name;
+    fp.key = util::InternedName::from_interned(fn.name_key());
 
     fp.pure_local = true; // hasta encontrar un op impuro.
     /* El mismo recorrido lleva los DOS ejes.  Todo lo que rompe la pureza la
@@ -336,8 +337,7 @@ compute_module_fingerprints(const ir::IrModule &mod, const std::string &arch) {
 
 void compose_fingerprints(
     std::vector<FunctionFingerprint> &fps,
-    const std::unordered_map<std::string, FunctionContracts> *contracts,
-    const ir::IrModule *mod) {
+    const FunctionContractMap *contracts, const ir::IrModule *mod) {
     const size_t n = fps.size();
     if (n == 0) return;
     std::unordered_map<std::string, uint32_t> idx;
@@ -353,21 +353,11 @@ void compose_fingerprints(
     auto frame_para_total = [&](uint32_t v) -> uint64_t {
         const auto &f = fps[v];
         if (f.frame_opaque && contracts) {
-            // El contrato se declara con el nombre SIMPLE (`atomic_cas64`)
-            // pero el IR trae la fn mangled por modulo (`atomic__atomic_
-            // cas64`).  Se prueba el completo y luego el simple (ultimo `__`).
-            const FunctionContracts *c = nullptr;
-            auto it = contracts->find(f.function);
+            // El contrato va con el simbolo con el que la funcion baja, asi
+            // que se busca por el nombre exacto de la huella.
+            const auto it = contracts->find(f.key);
             if (it != contracts->end()) {
-                c = &it->second;
-            } else {
-                const size_t p = f.function.rfind("__");
-                if (p != std::string::npos) {
-                    auto it2 = contracts->find(f.function.substr(p + 2));
-                    if (it2 != contracts->end()) c = &it2->second;
-                }
-            }
-            if (c) {
+                const FunctionContracts *c = &it->second;
                 if (c->stack_partial >= 0)
                     return static_cast<uint64_t>(c->stack_partial);
                 if (c->stack_total >= 0)
@@ -539,84 +529,44 @@ void compose_fingerprints(
 
 std::vector<ContractCheck> verify_contracts(
     const std::vector<FunctionFingerprint> &fps,
-    const std::unordered_map<std::string, FunctionContracts> &contracts) {
+    const FunctionContractMap &contracts) {
     std::vector<ContractCheck> out;
     if (contracts.empty()) return out;
-    // Nombre SIMPLE (ultimo segmento): el IR puede venir mangled por namespace
-    // (ns__f) o cualificado (ns.f); el contrato se declara con el nombre
-    // simple.
-    auto simple = [](const std::string &q) -> std::string {
-        size_t p = q.rfind("__");
-        if (p != std::string::npos) return q.substr(p + 2);
-        p = q.rfind('.');
-        return (p == std::string::npos) ? q : q.substr(p + 1);
-    };
-    // Indice por nombre COMPLETO y por nombre simple.  Los contratos de un
-    // METODO se declaran como `Tipo__metodo` -- el nombre simple no vale como
-    // clave porque dos tipos pueden tener un metodo homonimo --, mientras que
-    // los de una funcion libre se declaran con el nombre simple aunque el IR la
-    // traiga mangled por namespace.  Indexando por los dos, una sola busqueda
-    // cubre ambos.  ANTES solo se indexaba el simple: `simple("S__mal")` da
-    // "mal", la clave del contrato es "S__mal", la busqueda fallaba y el
-    // `continue` se tragaba el contrato EN SILENCIO -- o sea que ningun
-    // @pure/@alloc/@stack/@nothrow/@nopanic sobre un metodo se verificaba
-    // nunca.
-    std::unordered_map<std::string, const FunctionFingerprint *> byname;
-    byname.reserve(fps.size() * 4 + 1);
-    for (const auto &f : fps) {
-        byname.emplace(f.function, &f);
-        byname.emplace(simple(f.function), &f);
-    }
+    /* Indice por el simbolo exacto.  El contrato se recogio con el mismo
+     * simbolo con el que la funcion baja (ver `collect_function_contracts`),
+     * asi que no hace falta adivinar: ni el nombre simple de una funcion con
+     * namespace, ni el sufijo de un metodo.  Aquellas heuristicas no
+     * encontraban el metodo SOBRECARGADO -- baja con su discriminante detras
+     * -- y el contrato se descartaba sin decir nada.  Cada instanciacion de
+     * una plantilla es una funcion con su propio simbolo y su propia copia
+     * del contrato, asi que se verifica por separado sin caso especial. */
+    util::NamedMap<util::InternedName, const FunctionFingerprint *,
+                   scratch::FunctionContractMap, util::InternedNameHash>
+        byname;
+    byname.reserve(fps.size() + 1);
+    for (const auto &f : fps)
+        byname.emplace(f.key, &f);
 
     using St = ContractCheck::Status;
     for (const auto &kv : contracts) {
-        const std::string &name = kv.first;
+        const std::string &name = kv.first.str();
         const FunctionContracts &c = kv.second;
         if (!c.any()) continue;
 
-        // Reunir TODAS las huellas a las que aplica el contrato.  Casi siempre
-        // es una, pero el contrato de un metodo de PLANTILLA es una promesa
-        // para CADA instanciacion, asi que hay que comprobarlo contra todas:
-        // si `atomic<T>::swap` declara @alloc(0) y `atomic<f64>::swap` aloca,
-        // eso es un incumplimiento aunque `atomic<i64>::swap` cumpla.
-        std::vector<const FunctionFingerprint *> targets;
-        auto it = byname.find(name);
-        if (it != byname.end()) {
-            targets.push_back(it->second);
-        } else {
-            // El metodo DENTRO de un namespace: la clave es `Tipo__metodo` y el
-            // IR trae `ns__Tipo__metodo`.  Por sufijo, y solo si el resultado
-            // es unico (si no, seria adivinar).
-            //
-            // Un metodo de PLANTILLA no necesita nada especial aqui: la
-            // monomorphizacion COPIA los contratos a cada instanciacion, asi
-            // que `atomic<T>::swap` se verifica como `atomic_i64__swap` por la
-            // via exacta -- una vez por instanciacion, que es justo lo que
-            // promete el contrato.
-            const std::string suf = "__" + name;
-            const FunctionFingerprint *uniq = nullptr;
-            for (const auto &f : fps) {
-                if (f.function.size() > suf.size() &&
-                    f.function.compare(f.function.size() - suf.size(),
-                                       suf.size(), suf) == 0) {
-                    if (uniq) {
-                        uniq = nullptr;
-                        break;
-                    } // ambiguo
-                    uniq = &f;
-                }
-            }
-            if (uniq) targets.push_back(uniq);
+        const auto it = byname.find(kv.first);
+        if (it == byname.end()) {
+            /* Se verifica contra el intermedio PREVIO a optimizar, donde toda
+             * funcion declarada existe: que no este es que la recogida y el
+             * bajado no se ponen de acuerdo en el simbolo.  Callarlo daria el
+             * contrato por comprobado. */
+            out.push_back({name, "@contract", St::UNVERIFIABLE,
+                           "the function is not in the intermediate code"});
+            continue;
         }
-        if (targets.empty()) continue; // no llego al IR (inline/DCE).
 
-        for (const FunctionFingerprint *fpp : targets) {
-            const FunctionFingerprint &fp = *fpp;
-
-            // Con varias instanciaciones, el informe dice CUAL falla:
-            // "atomic__swap" a secas no distinguiria el i64 del f64.
-            const std::string etiqueta =
-                (targets.size() > 1) ? (name + " [" + fp.function + "]") : name;
+        {
+            const FunctionFingerprint &fp = *it->second;
+            const std::string &etiqueta = name;
             auto add = [&](const char *cn, St st, std::string detail) {
                 out.push_back({etiqueta, cn, st, std::move(detail)});
             };

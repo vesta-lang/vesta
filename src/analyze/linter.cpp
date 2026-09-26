@@ -150,7 +150,7 @@ std::string readable(const std::string &mangled) {
  */
 void family_loose_contracts(const LintInput &in, vx::Diagnostics &diags) {
     for (const auto &kv : in.contracts) {
-        const std::string &fn = kv.first;
+        const std::string &fn = kv.first.str();
         const FunctionContracts &c = kv.second;
         if (!c.any()) continue;
         /* Si ni siquiera se pudo mirar, de esto se encarga la otra familia.  Un
@@ -237,7 +237,8 @@ void family_opaque_boundary_cost(const LintInput &in, vx::Diagnostics &diags) {
         if (fn.is_native || fn.blocks.empty()) continue;
         /* Con contrato declarado se encarga el compilador (VXW001): una
          * implementacion, y ese si hace falta en cada construccion. */
-        auto c = in.contracts.find(fn.name);
+        auto c = in.contracts.find(
+            util::InternedName::from_interned(fn.name_key()));
         if (c != in.contracts.end() && c->second.any()) continue;
 
         const auto q = in.facts.find("fingerprint.effects_not_visible",

@@ -51,8 +51,7 @@ struct PreOptInput {
     /// Los contratos de huella ya recogidos.  Los trae quien llama porque cada
     /// camino los junta a su modo: el suelto de su unico AST, el de proyecto
     /// acumulando los de cada modulo.
-    const std::unordered_map<std::string, analyze::FunctionContracts>
-        *contracts = nullptr;
+    const analyze::FunctionContractMap *contracts = nullptr;
     /// Los contratos de TIPO (`@pod`/`@no_heap`/`@size`) y la huella de cada
     /// tipo.  Los trae quien llama, y no todos pueden: salen de los layouts del
     /// comprobador de tipos, y en una compilacion de proyecto hay UNO POR

@@ -903,6 +903,21 @@ void close_layout_methods(std::vector<ClassMethodInfo> &methods,
  *
  * @param m El metodo.
  */
+/**
+ * @brief El SIMBOLO con el que se emite una funcion libre.
+ *
+ * Con sobrecarga varias comparten nombre y el comprobador les pone una etiqueta
+ * con sus parametros (@c mangled_label); vacia -- el caso normal -- quiere
+ * decir que el simbolo se llama igual que la funcion.  La regla la usan el
+ * bajado y la recogida de contratos: una, para que no puedan discrepar.
+ *
+ * @param fd La declaracion.
+ * @return Su simbolo.
+ */
+inline const std::string &function_symbol_of(const ast::FunctionDecl &fd) {
+    return fd.mangled_label.empty() ? fd.name : fd.mangled_label;
+}
+
 inline const std::string &method_symbol_of(const ClassMethodInfo &m) {
     if (m.ir_symbol.empty())
         method_symbol_missing(m.is_constructor ? std::string("ctor") : m.name,
@@ -1346,6 +1361,30 @@ class TypeChecker {
     const std::unordered_map<std::string, StructLayout> &
     struct_layouts() const noexcept {
         return struct_layouts_;
+    }
+
+    /**
+     * @brief La ficha del metodo que ocupa el hueco @p slot del tipo @p owner.
+     *
+     * En los DOS mapas, porque quien pregunta no siempre sabe en cual esta: los
+     * metodos de un `impl` se bajan por el camino del struct aunque el tipo sea
+     * una clase.  La usan el bajado (para nombrar lo que emite) y la recogida
+     * de contratos (para saber con que simbolo va cada uno): el dueno es el
+     * comprobador, que es quien monto los layouts.
+     *
+     * @param owner Clave del layout.
+     * @param slot  El hueco que el comprobador dejo apuntado.
+     * @return La ficha, o nulo si no hay layout o el hueco no lleva a nadie.
+     */
+    const ClassMethodInfo *method_at_slot(const std::string &owner,
+                                          uint32_t slot) const {
+        const auto it_s = struct_layouts_.find(owner);
+        if (it_s != struct_layouts_.end())
+            return picked_method(it_s->second, slot);
+        const auto it_c = class_layouts_.find(owner);
+        if (it_c != class_layouts_.end())
+            return picked_method(it_c->second, slot);
+        return nullptr;
     }
 
     /**

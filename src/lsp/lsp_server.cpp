@@ -1784,14 +1784,20 @@ void LspServer::handle_hover(const nlohmann::json &msg) {
         // que un lector necesita saber antes de llamarla.
         const analyze::FunctionContracts *fc = nullptr;
         {
-            auto it = an.result.contracts.find(word);
+            // La palabra es un nombre del fuente: internarla no crece el pozo
+            // con nada que no estuviera ya.
+            auto it =
+                an.result.contracts.find(util::InternedName::intern(word));
             if (it != an.result.contracts.end()) {
                 fc = &it->second;
             } else {
-                // Los metodos viven con el nombre de su clase por delante.
+                // Las claves son SIMBOLOS: un metodo lleva el nombre de su
+                // clase por delante y una funcion con namespace, el de este.
+                // Desde el cursor solo se sabe la palabra, asi que el hover
+                // se queda con el primero que acabe en ella.
                 const std::string suffix = "__" + word;
                 for (const auto &entry : an.result.contracts) {
-                    const std::string &n = entry.first;
+                    const std::string &n = entry.first.str();
                     if (n.size() >= suffix.size() &&
                         n.compare(n.size() - suffix.size(), suffix.size(),
                                   suffix) == 0) {

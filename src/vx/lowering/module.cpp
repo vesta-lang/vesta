@@ -1042,7 +1042,7 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
          * sobrecarga varias comparten nombre y el comprobador les pone una
          * etiqueta con sus parametros.  Vacia -- el caso normal -- quiere
          * decir que el simbolo se llama igual que la funcion. */
-        fn.name = fd->mangled_label.empty() ? fd->name : fd->mangled_label;
+        fn.name = function_symbol_of(*fd);
     }
     // Igual que con los metodos: el vinculo se anota donde se crea el nombre.
     // Sin esto, un fallo dentro de una funcion libre salia con el nombre a

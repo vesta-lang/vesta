@@ -24,6 +24,8 @@
 #ifndef VESTA_ANALYZE_FINGERPRINT_H
 #define VESTA_ANALYZE_FINGERPRINT_H
 
+#include "util/name_pool.h"   // la clave de los contratos es el simbolo internado
+#include "util/named_alloc.h" // y su mapa lleva nombre en el contador
 #include "vx/diagnostic.h" // los veredictos salen como diagnosticos del catalogo
 
 #include <cstdint>
@@ -49,6 +51,9 @@ constexpr uint64_t STACK_UNBOUNDED = UINT64_MAX;
  */
 struct FunctionFingerprint {
     std::string function; ///< nombre de la funcion.
+    /// El mismo nombre, internado: el de la funcion del intermedio, que ya lo
+    /// tiene, y es por el que se buscan sus contratos sin volver a internar.
+    util::InternedName key;
 
     // -- Locales (solo esta funcion, sin componer) --------------------------
     uint32_t alloc_sites =
@@ -135,6 +140,22 @@ compute_module_fingerprints(const ir::IrModule &mod,
 
 struct FunctionContracts; // definido abajo.
 
+namespace scratch {
+struct FunctionContractMap;
+} // namespace scratch
+
+/**
+ * Los contratos de huella de un modulo, por el SIMBOLO DEFINITIVO de cada
+ * funcion -- el nombre con el que baja al intermedio, ya internado --.  Una
+ * sola clave para quien los recoge y quien los busca: antes cada lado armaba
+ * la suya (`Tipo__metodo` a mano al recoger; dos heuristicas de sufijo
+ * distintas al buscar), y el contrato de un metodo SOBRECARGADO, que baja con
+ * su discriminante detras, no lo encontraba nadie y se descartaba sin decirlo.
+ */
+using FunctionContractMap =
+    util::NamedMap<util::InternedName, FunctionContracts,
+                   scratch::FunctionContractMap, util::InternedNameHash>;
+
 /**
  * @brief Compone los totales interprocedurales in-place: llena los campos
  *        `*_total`, `recursive` y `effects_known` recorriendo el callgraph
@@ -161,8 +182,7 @@ struct FunctionContracts; // definido abajo.
  */
 void compose_fingerprints(
     std::vector<FunctionFingerprint> &fps,
-    const std::unordered_map<std::string, FunctionContracts> *contracts =
-        nullptr,
+    const FunctionContractMap *contracts = nullptr,
     const ir::IrModule *mod = nullptr);
 
 /**
@@ -173,7 +193,7 @@ void compose_fingerprints(
  * puramente de compile-time (modo @c --analyze) que ni el JIT ni el AOT ni la
  * serializacion del IR necesitan; mantener @c IrFunction esbelto evita
  * hincharlo.  Viajan en el @c CompileResult (una instancia, sin serializar) y
- * se verifican por NOMBRE.
+ * se verifican por el simbolo definitivo (ver @ref FunctionContractMap).
  */
 struct FunctionContracts {
     bool pure = false;    ///< @pure.
@@ -221,7 +241,7 @@ struct ContractCheck {
  */
 std::vector<ContractCheck> verify_contracts(
     const std::vector<FunctionFingerprint> &fps,
-    const std::unordered_map<std::string, FunctionContracts> &contracts);
+    const FunctionContractMap &contracts);
 
 /// Lo que salio de mirar los veredictos.
 struct ContractReport {

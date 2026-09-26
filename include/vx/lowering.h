@@ -2548,13 +2548,7 @@ class Lowering {
      */
     const ClassMethodInfo *layout_method(const std::string &owner,
                                          uint32_t slot) const {
-        const auto it_s = tc_.struct_layouts().find(owner);
-        if (it_s != tc_.struct_layouts().end())
-            return picked_method(it_s->second, slot);
-        const auto it_c = tc_.class_layouts().find(owner);
-        if (it_c != tc_.class_layouts().end())
-            return picked_method(it_c->second, slot);
-        return nullptr;
+        return tc_.method_at_slot(owner, slot);
     }
 
     /**

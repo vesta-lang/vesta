@@ -3741,7 +3741,7 @@ CompileResult compile_vx_project(
              * modulo del cache no lo parseara, asi que esta es la unica
              * ocasion de averiguarlo.  Ver `VxiHeader::module_flags`. */
             pm.vxi.declares_classes = pm.has_classes;
-            collect_function_contracts(pm.ast->decls, pm.contracts);
+            collect_function_contracts(pm.ast->decls, *pm.tc, pm.contracts);
         }
 
         // ---- M3: persistir .vxi + .vxir a disco para futuro cache ----

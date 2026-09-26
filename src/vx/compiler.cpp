@@ -1265,7 +1265,7 @@ CompileResult compile_vx_source(const std::string &source,
         // contra la huella del IR PRE-opt (@c irmod, donde TODAS las funciones
         // existen -> enforcement completo; semantica source-level: source<=N =>
         // efectivo<=N, sound).  Sound/asimetrico: solo error si es demostrable.
-        collect_function_contracts(mod->decls, res.contracts);
+        collect_function_contracts(mod->decls, tc, res.contracts);
         /* Los contratos de TIPO y la huella de cada tipo.  La huella se calcula
          * SIEMPRE (el informe de `--analyze` la ensena); comprobarla es lo que
          * depende de que haya contratos. */

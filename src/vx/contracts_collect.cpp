@@ -4,20 +4,27 @@
  */
 #include "vx/contracts_collect.h"
 
+#include "vx/type_checker.h" // el simbolo de cada metodo lo sabe el comprobador
+
 namespace vx {
 
 void collect_function_contracts(
-    const std::vector<std::unique_ptr<ast::Node>> &decls,
-    std::unordered_map<std::string, analyze::FunctionContracts> &out) {
+    const std::vector<std::unique_ptr<ast::Node>> &decls, const TypeChecker &tc,
+    analyze::FunctionContractMap &out) {
     for (const auto &d : decls) {
         if (!d) continue;
         if (d->kind == ast::NodeKind::NamespaceDecl) {
             collect_function_contracts(
-                static_cast<const ast::NamespaceDecl *>(d.get())->decls, out);
+                static_cast<const ast::NamespaceDecl *>(d.get())->decls, tc,
+                out);
             continue;
         }
         if (d->kind == ast::NodeKind::FunctionDecl) {
             const auto *fd = static_cast<const ast::FunctionDecl *>(d.get());
+            /* Ni una plantilla ni una funcion comptime bajan con su simbolo
+             * de ejecucion: la primera no baja (lo hacen sus instancias) y la
+             * segunda baja como macro, que no corre en el programa. */
+            if (!fd->type_params.empty() || fd->is_comptime) continue;
             analyze::FunctionContracts c;
             c.pure = fd->contract_pure;
             c.nothrow = fd->contract_nothrow;
@@ -26,7 +33,8 @@ void collect_function_contracts(
             c.alloc_partial = fd->contract_alloc_partial;
             c.stack_total = fd->contract_stack;
             c.stack_partial = fd->contract_stack_partial;
-            if (c.any()) out[fd->name] = c;
+            if (c.any())
+                out[util::InternedName::intern(function_symbol_of(*fd))] = c;
         }
         /* Los metodos de struct y de clase, por UN camino: cada rama solo dice
          * de donde salen y con que nombre de tipo; recogerlos se escribe una
@@ -47,10 +55,11 @@ void collect_function_contracts(
             }
         }
         if (ms == nullptr) continue;
-        /* Un metodo baja a una `IrFunction` llamada `Tipo__metodo`, asi que se
-         * registra con ESA clave -- la que vera el analizador. */
+        /* Con el simbolo que el comprobador le dio al cerrar el layout, que es
+         * el mismo con el que el bajado emite el cuerpo.  Un metodo generico
+         * no baja (lo hacen sus instancias), igual que una plantilla. */
         for (const auto &m : *ms) {
-            if (!m) continue;
+            if (!m || !m->method_type_params.empty()) continue;
             analyze::FunctionContracts c;
             c.pure = m->contract_pure;
             c.nothrow = m->contract_nothrow;
@@ -59,7 +68,15 @@ void collect_function_contracts(
             c.alloc_partial = m->contract_alloc_partial;
             c.stack_total = m->contract_stack;
             c.stack_partial = m->contract_stack_partial;
-            if (c.any()) out[*type_name + "__" + m->name] = c;
+            if (!c.any()) continue;
+            const ClassMethodInfo *mi = tc.method_at_slot(*type_name,
+                                                          m->layout_slot);
+            /* Sin ficha no hay simbolo que dar; se guarda con el nombre que
+             * se escribio para que la verificacion, al no encontrarlo, lo
+             * DIGA en vez de que el contrato desaparezca aqui. */
+            const std::string &symbol =
+                mi != nullptr ? method_symbol_of(*mi) : m->name;
+            out[util::InternedName::intern(symbol)] = c;
         }
     }
 }

@@ -25,26 +25,30 @@
 
 namespace vx {
 
+class TypeChecker;
+
 /**
  * @brief Recoge los contratos de HUELLA (`@pure`/`@nothrow`/`@nopanic`/
  *        `@alloc`/`@stack`) declarados en un AST.
  *
- * Recorre los namespaces y toma tambien los METODOS de struct y clase, con la
- * clave con la que bajan (`Tipo__metodo`), que es la que el analizador vera: un
- * tipo cuya API son metodos podia DECLARAR sus contratos y nadie los
- * verificaba.
+ * Recorre los namespaces y toma tambien los METODOS de struct y clase.  Cada
+ * contrato se guarda con el simbolo con el que su funcion baja al intermedio,
+ * y ese simbolo no se arma aqui: el de una funcion libre lo lleva la propia
+ * declaracion, y el de un metodo lo calculo el comprobador al cerrar el layout
+ * -- con el discriminante de una sobrecarga incluido --.  Armarlo a mano era
+ * dar otra clave que la del bajado.
  *
  * Los TEMPLATES genericos se saltan: no producen intermedio -- solo lo hacen
- * sus instanciaciones --, y su clave casaria por sufijo con la de cada una,
- * reportando dos veces el mismo incumplimiento.  La monomorfizacion copia los
- * contratos, asi que cada instanciacion se verifica por su cuenta.
+ * sus instanciaciones --.  La monomorfizacion copia los contratos, asi que
+ * cada instanciacion se verifica por su cuenta.
  *
  * @param decls Declaraciones del modulo.
- * @param out   Mapa por nombre, al que se anade.
+ * @param tc    El comprobador que las vio, dueno de los layouts.
+ * @param out   Mapa por simbolo, al que se anade.
  */
 void collect_function_contracts(
-    const std::vector<std::unique_ptr<ast::Node>> &decls,
-    std::unordered_map<std::string, analyze::FunctionContracts> &out);
+    const std::vector<std::unique_ptr<ast::Node>> &decls, const TypeChecker &tc,
+    analyze::FunctionContractMap &out);
 
 /**
  * @brief Recoge los contratos de TIPO (`@pod`/`@no_heap`/`@size`) declarados

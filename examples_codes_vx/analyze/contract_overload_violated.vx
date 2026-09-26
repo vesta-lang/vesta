@@ -1,0 +1,27 @@
+// Un contrato sobre un metodo SOBRECARGADO se comprueba igual que sobre uno
+// que no lo esta.  La sobrecarga baja con su discriminante detras del nombre
+// (`S__mal_i64`), y buscarla por `Tipo__metodo` no la encontraba: el @pure se
+// descartaba sin decir nada y el programa compilaba como si se cumpliera.
+//
+// Tiene que FALLAR con VXT004: `mal(i64)` escribe un global.
+namespace contratos;
+
+i64 total = 0_i64;
+
+struct S {
+	i64 v;
+
+	@pure
+	public i64 mal(i64 x) {
+		total = total + x;
+		return x;
+	}
+
+	public i64 mal(f64 x) => 1;
+}
+
+i32 main() {
+	S s;
+	s.v = 1;
+	return (i32)s.mal(2);
+}

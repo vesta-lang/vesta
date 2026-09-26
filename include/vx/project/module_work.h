@@ -88,7 +88,7 @@ struct ProjectModuleWork {
     std::string inject_arg;
     /// Los contratos de huella declarados en su fuente, ya con la clave con la
     /// que el analizador vera la funcion.
-    std::unordered_map<std::string, analyze::FunctionContracts> contracts;
+    analyze::FunctionContractMap contracts;
     ///@}
 
     /**

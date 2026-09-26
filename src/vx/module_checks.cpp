@@ -30,13 +30,12 @@ bool run_pre_opt_checks(const PreOptInput &in, Diagnostics &diags) {
         auto fps = analyze::compute_module_fingerprints(mod, fp_arch);
         /* Con el modulo delante: lo que las importaciones DECLAREN de una
          * nativa cuenta, en vez de volver opaco el cierre entero. */
-        auto contracts_copy = *in.contracts;
-        analyze::compose_fingerprints(fps, &contracts_copy, &mod);
+        analyze::compose_fingerprints(fps, in.contracts, &mod);
         /* Los tres veredictos por UNA puerta.  Aqui hubo copias del criterio
          * que se quedaban con el incumplimiento y descartaban el indecidible
          * sin decir nada. */
         const analyze::ContractReport rep = analyze::report_contract_checks(
-            analyze::verify_contracts(fps, contracts_copy), file, diags);
+            analyze::verify_contracts(fps, *in.contracts), file, diags);
         if (rep.violated != 0) return false;
     }
 

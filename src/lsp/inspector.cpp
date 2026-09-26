@@ -1785,7 +1785,8 @@ nlohmann::json Inspector::function_report(const std::string &uri) {
         }
 
         // Lo DECLARADO, solo lo que se declaro.
-        auto itc = an.result.contracts.find(cr.function);
+        auto itc =
+            an.result.contracts.find(util::InternedName::intern(cr.function));
         if (itc != an.result.contracts.end() && itc->second.any()) {
             const analyze::FunctionContracts &c = itc->second;
             nlohmann::json d;

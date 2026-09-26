@@ -645,11 +645,11 @@ struct CompileResult {
     util::OwnedBytes ir_module_cache_bytes{&ir::kIrModuleCacheKind};
 
     /// Contratos de huella (@pure/@nothrow/@nopanic/@alloc/@stack) declarados
-    /// por el usuario, por nombre de funcion.  Se llevan aqui (no en el IR)
+    /// por el usuario, por simbolo de funcion.  Se llevan aqui (no en el IR)
     /// porque son metadata compile-time que el codegen no necesita.  El modo
     /// --analyze los verifica contra la huella inferida.  Ver
-    /// @c analyze::FunctionContracts.
-    std::unordered_map<std::string, analyze::FunctionContracts> contracts;
+    /// @c analyze::FunctionContractMap.
+    analyze::FunctionContractMap contracts;
 
     /// Contratos de TIPO (@pod/@no_heap/@size) declarados sobre struct/clase/
     /// enum, por nombre de tipo.  Verificados contra @c type_fingerprints.

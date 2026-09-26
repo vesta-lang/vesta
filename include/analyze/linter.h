@@ -69,9 +69,9 @@ namespace analyze {
 struct LintInput {
     const ir::IrModule &mod; ///< el codigo que de verdad va a existir.
     const analysis::asa::FactStore &facts; ///< lo que se sabe de el.
-    /// Lo que el programador DECLARo, por nombre de funcion.  Vacio si el
+    /// Lo que el programador DECLARo, por simbolo de funcion.  Vacio si el
     /// camino de compilacion no los recogio.
-    const std::unordered_map<std::string, FunctionContracts> &contracts;
+    const FunctionContractMap &contracts;
     /// Desde donde se pregunta: un hallazgo puede valer en un objetivo y no en
     /// otro, y el hecho ya lo dice.
     analysis::asa::Scope here;
