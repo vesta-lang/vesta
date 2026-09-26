@@ -220,22 +220,26 @@ int main() {
 
     std::printf("Los tramos de fuente\n");
     comprobar(!stats.span_map.empty(), "se emite el mapa de tramos");
-    comprobar(!stats.spans.empty(), "con tramos dentro");
     {
+        /* Se lee el mapa que se GUARDO, por su huella: lo que importa es lo
+         * que queda en el almacen, no una copia que la emision devolvia
+         * aparte (y que nadie mas miraba). */
+        vxdbg::SpanMap sm;
+        comprobar(vxdbg::load_node(store, stats.span_map, sm),
+                  "  y se lee del almacen");
+        comprobar(!sm.extents.empty(), "  con tramos dentro");
         // Un tramo sirve de algo solo si trae columna: con la linea sola no se
         // distingue cual de las cosas que caben en ella fallo.
         bool con_columna = false;
-        for (const auto &sp : stats.spans)
+        for (const auto &sp : sm.extents)
             if (sp.column > 0 && sp.length > 0) con_columna = true;
         comprobar(con_columna, "  y al menos uno dice columna y longitud");
-
-        vxdbg::SpanMap sm;
-        for (const auto &sp : stats.spans)
-            sm.add(sp);
-        const auto encontrado =
-            sm.find(stats.spans[0].symbol, stats.spans[0].line);
-        comprobar(encontrado.line == stats.spans[0].line,
-                  "  y se encuentran por funcion y linea");
+        if (!sm.extents.empty()) {
+            const vxdbg::SourceExtent primero = sm.extents[0];
+            const auto encontrado = sm.find(primero.symbol, primero.line);
+            comprobar(encontrado.line == primero.line,
+                      "  y se encuentran por funcion y linea");
+        }
         comprobar(sm.find("NoExisteTalFuncion", 1).line == 0,
                   "  sin inventarse los que no estan");
     }

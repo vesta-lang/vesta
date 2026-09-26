@@ -52,6 +52,7 @@
 #include "vxdbg/ids.h"
 #include "vxdbg/node.h"
 #include "vxdbg/store.h"
+#include "util/named_alloc.h" // util::NamedVector
 
 #include <string>
 #include <utility>
@@ -71,6 +72,25 @@ struct BuildTag {};
  * informacion de depuracion.
  */
 using BuildId = NodeId<BuildTag>;
+
+/**
+ * @brief Un simbolo del artefacto y la entidad del lenguaje de la que salio.
+ *
+ * Tiene nombre y no es un `std::pair`: se lee en el almacen, en el emisor y en
+ * el proyecto, y `.first`/`.second` no decian cual era cual.  El simbolo va
+ * como TEXTO: el mapa se ordena por el y se guarda asi en disco.
+ */
+struct SymbolLink {
+    std::string symbol;      ///< Etiqueta tal como queda en el codigo.
+    LanguageEntityId entity; ///< La declaracion de la que salio.
+};
+
+namespace scratch {
+struct SymbolLinks; ///< Los pares simbolo -> entidad de un artefacto.
+} // namespace scratch
+
+/// Los pares simbolo -> entidad de un artefacto.
+using SymbolLinks = util::NamedVector<SymbolLink, scratch::SymbolLinks>;
 
 /**
  * @brief Que simbolos de un artefacto corresponden a que entidades.
@@ -105,7 +125,7 @@ struct ArtifactMap {
      * Ahora se anade al final y se ordena UNA vez, cuando alguien lo necesita.
      * `mutable` porque ordenar no cambia lo que el mapa DICE, solo como esta
      * puesto, y quien busca tiene un `const`. */
-    mutable std::vector<std::pair<std::string, LanguageEntityId>> symbols;
+    mutable SymbolLinks symbols;
 
     /**
      * @brief Mapas de OTROS modulos que este artefacto contiene.

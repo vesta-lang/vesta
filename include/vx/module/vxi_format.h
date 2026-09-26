@@ -34,6 +34,8 @@
 #include <string>
 #include <vector>
 
+#include "vx/comptime/comptime_unit_names.h" // los nombres del conjunto comptime
+
 namespace vx {
 
 /// Magic del fichero `.vxi` (4 bytes ASCII "VXI").
@@ -456,7 +458,7 @@ struct VxiModule {
     uint64_t comptime_unit_hash = 0;
     /// @brief v18: los NOMBRES que forman el conjunto.  Son el criterio de
     /// pertenencia al emitirlo; deducirlos del texto seria adivinar.
-    std::vector<std::string> comptime_unit_names;
+    ComptimeUnitNames comptime_unit_names;
     /// @brief v18: lo que se vio y NO se llevo, para poder decirlo.  Sin esto,
     /// un modulo cacheado callaria lo que dejo fuera.
     std::vector<std::string> comptime_unit_not_collected;

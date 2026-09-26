@@ -712,9 +712,9 @@ std::vector<uint8_t> vxi_emit(const VxiModule &mod) {
         static_cast<uint32_t>(mod.comptime_unit_source.size());
     std::vector<std::pair<uint32_t, uint32_t>> ct_name_offs;
     ct_name_offs.reserve(mod.comptime_unit_names.size());
-    for (const auto &n : mod.comptime_unit_names)
-        ct_name_offs.emplace_back(pool.intern(n),
-                                  static_cast<uint32_t>(n.size()));
+    for (const util::InternedName &n : mod.comptime_unit_names)
+        ct_name_offs.emplace_back(pool.intern(n.str()),
+                                  static_cast<uint32_t>(n.str().size()));
     std::vector<std::pair<uint32_t, uint32_t>> ct_notcol_offs;
     ct_notcol_offs.reserve(mod.comptime_unit_not_collected.size());
     for (const auto &n : mod.comptime_unit_not_collected)
@@ -1715,12 +1715,15 @@ VxiParseResult vxi_parse(const uint8_t *data, size_t size) {
         r.error_message = "fuente del conjunto comptime fuera de bounds";
         return r;
     }
+    /* Las dos listas tienen la misma forma en el fichero, pero no el mismo
+     * tipo en memoria: los nombres se INTERNAN al leerlos. */
     for (int cual = 0; cual < 2; ++cual) {
         const uint32_t n = cual == 0 ? ct_names_count_hdr : ct_notcol_count_hdr;
         const uint32_t base = cual == 0 ? ct_names_off_hdr : ct_notcol_off_hdr;
-        auto &destino = cual == 0 ? r.module_.comptime_unit_names
-                                  : r.module_.comptime_unit_not_collected;
-        destino.reserve(n);
+        if (cual == 0)
+            r.module_.comptime_unit_names.reserve(n);
+        else
+            r.module_.comptime_unit_not_collected.reserve(n);
         for (uint32_t i = 0; i < n; ++i) {
             size_t e = base + i * 8u;
             uint32_t n_off = 0, n_len = 0;
@@ -1735,7 +1738,12 @@ VxiParseResult vxi_parse(const uint8_t *data, size_t size) {
                                   "bounds";
                 return r;
             }
-            destino.push_back(std::move(nombre));
+            if (cual == 0)
+                r.module_.comptime_unit_names.push_back(
+                    util::InternedName::intern(nombre));
+            else
+                r.module_.comptime_unit_not_collected.push_back(
+                    std::move(nombre));
         }
     }
 

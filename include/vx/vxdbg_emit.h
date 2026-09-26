@@ -78,15 +78,13 @@ struct VxdbgEmitStats {
     /// Los pares (simbolo, entidad) que se ligaron.  Los expone porque un
     /// ejecutable puede juntar varios modulos y su mapa tiene que cubrirlos a
     /// todos: una direccion suya puede caer en cualquiera.
-    std::vector<std::pair<std::string, vxdbg::LanguageEntityId>> symbol_links;
+    vxdbg::SymbolLinks symbol_links;
     /// Huella del mapa de simbolos.  Con ella y el identificador de la
     /// compilacion se entra al grafo desde una direccion de ejecucion.
     vxdbg::ContentHash artifact_map;
     /// Huella del mapa de TRAMOS de fuente.  Va aparte del de simbolos porque
     /// cambia con cualquier reformateo del fuente mientras que el otro no.
     vxdbg::ContentHash span_map;
-    /// Los tramos, para que quien junte varios modulos pueda componer el suyo.
-    std::vector<vxdbg::SourceExtent> spans;
 };
 
 /**

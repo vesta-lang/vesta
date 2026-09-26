@@ -46,7 +46,7 @@ struct ProjectModuleWork {
     /// compilacion puede servirlo del cache y entonces no habra AST.
     std::string comptime_unit_source;
     uint64_t comptime_unit_hash = 0;
-    std::vector<std::string> comptime_unit_names;
+    ComptimeUnitNames comptime_unit_names;
     std::vector<std::string> comptime_unit_not_collected;
     std::unique_ptr<ast::ModuleNode> ast;
     std::unique_ptr<TypeChecker> tc;
@@ -56,9 +56,7 @@ struct ProjectModuleWork {
     /// Los pares (simbolo, entidad) del grafo de depuracion de ESTE modulo.  Se
     /// juntan al final: el ejecutable contiene todos los modulos, asi que su
     /// mapa tiene que cubrirlos a todos.
-    std::vector<std::pair<std::string, vxdbg::LanguageEntityId>> vxdbg_symbols;
-    /// Y sus tramos de fuente, que se juntan igual.
-    std::vector<vxdbg::SourceExtent> vxdbg_spans;
+    vxdbg::SymbolLinks vxdbg_symbols;
     ///  M.L20-full: Diagnostics local del modulo.  Cuando se
     /// paraleliza el compile (VX_PARALLEL_COMPILE=1), cada thread
     /// usa este diags propio en lugar del res.diagnostics compartido,

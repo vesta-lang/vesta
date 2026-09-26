@@ -246,9 +246,9 @@ StoredNode encode(const ArtifactMap &n) {
      * -- ver `ArtifactMap::add` --, asi que se pone aqui, una vez. */
     n.normalize();
     w.u32(static_cast<uint32_t>(n.symbols.size()));
-    for (const auto &kv : n.symbols) {
-        w.str(kv.first);
-        w.id(kv.second);
+    for (const SymbolLink &link : n.symbols) {
+        w.str(link.symbol);
+        w.id(link.entity);
     }
     // v2: los mapas de los modulos que contiene, citados por su huella.
     w.u32(static_cast<uint32_t>(n.modules.size()));
@@ -284,7 +284,7 @@ bool decode(const StoredNode &s, ArtifactMap &out) {
         // sin pagar una ordenacion que casi siempre sobra.  Si viniera
         // desordenado, la busqueda binaria no encontraria algun simbolo --
         // fallo de omision, nunca de dar el equivocado.
-        out.symbols.emplace_back(std::move(sym), r.id<LanguageEntityTag>());
+        out.symbols.push_back({std::move(sym), r.id<LanguageEntityTag>()});
     }
     out.modules.clear();
     // Un mapa v1 se acaba aqui: no tenia la lista, y eso significa que no cita

@@ -20,6 +20,25 @@
 
 namespace vxdbg {
 
+namespace {
+
+/// @brief Orden del mapa: por el texto del simbolo.
+bool symbol_less(const SymbolLink &a, const SymbolLink &b) {
+    return a.symbol < b.symbol;
+}
+
+/// @brief Si @p a y @p b son el mismo simbolo.
+bool same_symbol(const SymbolLink &a, const SymbolLink &b) {
+    return a.symbol == b.symbol;
+}
+
+/// @brief Si @p a va antes que el simbolo @p b (busqueda binaria).
+bool symbol_before(const SymbolLink &a, const std::string &b) {
+    return a.symbol < b;
+}
+
+} // namespace
+
 void ArtifactMap::normalize() const {
     if (sorted_) return;
     /* ESTABLE, y no `sort` a secas: entre dos entradas del mismo simbolo tiene
@@ -28,19 +47,10 @@ void ArtifactMap::normalize() const {
      * otra vez, quien lo construyo se contradice y se queda la primera".  Con
      * un orden inestable ganaria una cualquiera, y eso cambia el fichero
      * segun como caiga. */
-    std::stable_sort(symbols.begin(), symbols.end(),
-                     [](const std::pair<std::string, LanguageEntityId> &a,
-                        const std::pair<std::string, LanguageEntityId> &b) {
-                         return a.first < b.first;
-                     });
+    std::stable_sort(symbols.begin(), symbols.end(), symbol_less);
     // Ya adyacentes los repetidos, se queda el primero de cada tanda.
-    symbols.erase(
-        std::unique(symbols.begin(), symbols.end(),
-                    [](const std::pair<std::string, LanguageEntityId> &a,
-                       const std::pair<std::string, LanguageEntityId> &b) {
-                        return a.first == b.first;
-                    }),
-        symbols.end());
+    symbols.erase(std::unique(symbols.begin(), symbols.end(), same_symbol),
+                  symbols.end());
     sorted_ = true;
 }
 
@@ -49,12 +59,10 @@ LanguageEntityId ArtifactMap::find(const std::string &symbol) const {
     // construir ningun indice al leer, que es lo que hace que resolver una
     // traza no cueste mas que la traza.
     normalize();
-    auto it =
-        std::lower_bound(symbols.begin(), symbols.end(), symbol,
-                         [](const std::pair<std::string, LanguageEntityId> &a,
-                            const std::string &b) { return a.first < b; });
-    if (it == symbols.end() || it->first != symbol) return {};
-    return it->second;
+    auto it = std::lower_bound(symbols.begin(), symbols.end(), symbol,
+                               symbol_before);
+    if (it == symbols.end() || it->symbol != symbol) return {};
+    return it->entity;
 }
 
 void ArtifactMap::add(std::string symbol, LanguageEntityId entity) {
@@ -66,7 +74,7 @@ void ArtifactMap::add(std::string symbol, LanguageEntityId entity) {
      * Un simbolo corresponde a UNA entidad, y si llega otra vez se queda la
      * primera; eso ahora lo resuelve `normalize` con un orden ESTABLE, no esta
      * funcion. */
-    symbols.emplace_back(std::move(symbol), entity);
+    symbols.push_back({std::move(symbol), entity});
     sorted_ = false;
 }
 

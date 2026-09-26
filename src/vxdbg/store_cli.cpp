@@ -175,13 +175,12 @@ std::map<ContentHash, std::string> load_artifact_paths(const std::string &dir) {
 
 /// Lo que comparten al principio todas las claves: el modulo del que salen.
 /// Vacio si no comparten nada, que tambien es informacion.
-std::string common_prefix(
-    const std::vector<std::pair<std::string, LanguageEntityId>> &syms) {
+std::string common_prefix(const SymbolLinks &syms) {
     if (syms.empty()) return std::string();
-    std::string pre = syms.front().first;
-    for (const auto &s : syms) {
+    std::string pre = syms.front().symbol;
+    for (const SymbolLink &s : syms) {
         size_t i = 0;
-        while (i < pre.size() && i < s.first.size() && pre[i] == s.first[i])
+        while (i < pre.size() && i < s.symbol.size() && pre[i] == s.symbol[i])
             ++i;
         pre.resize(i);
         if (pre.empty()) break;
@@ -214,7 +213,7 @@ std::string node_label(const StoredNode &node) {
         if (!pre.empty())
             s += "   " + pre;
         else if (!m.symbols.empty())
-            s += "   p.ej. " + m.symbols.front().first;
+            s += "   p.ej. " + m.symbols.front().symbol;
         return s;
     }
     if (node.header.kind == NodeKind::File) {

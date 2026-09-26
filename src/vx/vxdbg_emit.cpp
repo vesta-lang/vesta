@@ -699,9 +699,6 @@ bool emit_vxdbg_source(
         sm.build(std::move(spans));
         vxdbg::ContentHash hs;
         if (vxdbg::store_node(store, sm, hs)) stats.span_map = hs;
-        // Y despues de guardarlos, se los lleva: nadie mas mira `sm`, asi que
-        // copiar el vector entero seria reservar otra vez todos los nombres.
-        stats.spans = std::move(sm.extents);
     }
     return true;
 }

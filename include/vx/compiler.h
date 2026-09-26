@@ -35,6 +35,7 @@
 
 #include "ir/ssa_ir_serialize.h" // los buffers del intermedio y su clase
 #include "vx/builtin_names.h"    // que builtin cubre un `@Provides`
+#include "vx/comptime/comptime_unit_names.h" // los nombres del conjunto comptime
 #include "vx/diagnostic.h"
 #include "port/port_options.h"
 #include "analyze/fingerprint.h"     // FunctionContracts
@@ -781,7 +782,7 @@ struct CompileResult {
     /// recolector (comptime + `@Macro` + sus dependencias).  Es el criterio de
     /// pertenencia: sin el habria que adivinarlo del texto, y una busqueda de
     /// subcadena acierta por accidente.
-    std::vector<std::string> comptime_unit_names;
+    ComptimeUnitNames comptime_unit_names;
     /**
      * @brief Declaraciones comptime que el recolector VIO y NO se llevo.
      *

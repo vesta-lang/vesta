@@ -2988,8 +2988,9 @@ CompileResult compile_vx_project(
                 pm.comptime_unit_hash = cu.content_hash;
                 for (const auto *lista :
                      {&cu.comptime_fns, &cu.macros, &cu.helper_deps})
-                    pm.comptime_unit_names.insert(pm.comptime_unit_names.end(),
-                                                  lista->begin(), lista->end());
+                    for (const std::string &n : *lista)
+                        pm.comptime_unit_names.push_back(
+                            util::InternedName::intern(n));
                 pm.comptime_unit_not_collected.insert(
                     pm.comptime_unit_not_collected.end(),
                     cu.not_collected.begin(), cu.not_collected.end());
@@ -3637,8 +3638,7 @@ CompileResult compile_vx_project(
                 std::cerr << "[vxdbg] no se pudo emitir " << pm.canonical_path.str()
                           << ": " << dbg_err << "\n";
             }
-            pm.vxdbg_symbols = st.symbol_links;
-            pm.vxdbg_spans = st.spans;
+            pm.vxdbg_symbols = std::move(st.symbol_links);
             /* La huella del mapa de este modulo viaja en su `.vxi`.  Es lo que
              * permite que, cuando el modulo se sirva desde cache y no se baje,
              * siga aportando su grafo al artefacto: sin esto sus simbolos no
@@ -5156,8 +5156,12 @@ CompileResult compile_vx_project(
          * filtro o cualquier otra cosa, sin recompilar el compilador. */
         if (!res.comptime_unit_names.empty() &&
             !util::flag_on(util::FlagId::NoFiltroComptime)) {
-            std::unordered_set<std::string> del_conjunto(
-                res.comptime_unit_names.begin(), res.comptime_unit_names.end());
+            /* Por IDENTIDAD: los nombres vienen internados, y el de cada
+             * funcion se pregunta con `name_key()`, ya internado tambien. */
+            const util::NamedSet<util::InternedName, scratch::ComptimeUnitNames,
+                                 util::InternedNameHash>
+                del_conjunto(res.comptime_unit_names.begin(),
+                             res.comptime_unit_names.end());
             /* Indice por nombre para no recorrer el modulo por cada callee. */
             std::unordered_map<std::string, const ir::IrFunction *> por_nombre;
             por_nombre.reserve(merged.functions.size());
@@ -5182,9 +5186,11 @@ CompileResult compile_vx_project(
                 const bool sintetica = ir::is_macro_symbol(f.name) ||
                                        ir::is_ctblock_symbol(f.name) ||
                                        ir::is_module_init(f.name);
-                const std::string desnudo = ir::macro_base_name(f.name);
-                if (sintetica || del_conjunto.count(f.name) ||
-                    del_conjunto.count(desnudo)) {
+                /* Una macro ya entra por `sintetica`: buscar tambien su nombre
+                 * sin prefijo no cambiaba nada, y se quito. */
+                if (sintetica ||
+                    del_conjunto.count(
+                        util::InternedName::from_interned(f.name_key())) != 0) {
                     if (dentro.insert(f.name).second)
                         pendientes.push_back(f.name);
                 }
@@ -5343,8 +5349,8 @@ CompileResult compile_vx_project(
              * --, asi que citarlo es lo que impide que el grafo se quede sin
              * raiz.  Lo traen los dos casos: el que se acaba de bajar y el que
              * vino de su cache, porque la huella viaja en el `.vxi`. */
-            for (const auto &kv : pm.vxdbg_symbols)
-                map.add(kv.first, kv.second);
+            for (const vxdbg::SymbolLink &link : pm.vxdbg_symbols)
+                map.add(link.symbol, link.entity);
             const vxdbg::ContentHash mm{pm.vxi.vxdbg_map_lo,
                                         pm.vxi.vxdbg_map_hi};
             if (!mm.empty()) map.modules.push_back(mm);

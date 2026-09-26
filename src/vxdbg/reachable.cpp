@@ -39,8 +39,8 @@ ReachStatus references_of_artifact_map(const StoredNode &node,
                                        std::vector<ContentHash> &out) {
     ArtifactMap map;
     if (!decode(node, map)) return ReachStatus::Undecodable;
-    for (const auto &sym : map.symbols)
-        push_if_set(sym.second, out);
+    for (const SymbolLink &link : map.symbols)
+        push_if_set(link.entity, out);
     // Y los mapas de los modulos que contiene, que son otros ArtifactMap: por
     // ahi se llega al grafo de un modulo que vino de su cache y no se
     // re-emitio.
