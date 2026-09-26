@@ -448,6 +448,20 @@ add_library(vx_lib STATIC
     # Que importa cada modulo y a que modulo se refiere cada import: UNA forma
     # de resolverlo, porque el nombre de fichero no es unico.
     project/module_imports.cpp
+    # Compilar UN modulo del proyecto: el orden de los pasos y sus cortes.
+    unit/compile_unit.cpp
+    # Sus claves de cache, servirlo de la cache y guardarlo en ella.
+    unit/unit_cache.cpp
+    # El prefijo de modulo, el aplanado de namespaces y el conjunto comptime.
+    unit/unit_prepare.cpp
+    # El comprobador de tipos del modulo y todo lo que importa.
+    unit/unit_imports.cpp
+    # La comprobacion de tipos y los imports del raiz que no se usan.
+    unit/unit_check.cpp
+    # La bajada a IR, con lo que el raiz teje, y el grafo de depuracion.
+    unit/unit_lower.cpp
+    # La interfaz (`.vxi`) del modulo ya compilado.
+    unit/unit_interface.cpp
     # Traductor de los tipos de Vesta a entidades de la base de conocimiento de
     # depuracion (vxdbg).  Vive en el frontend porque la correspondencia entre
     # el vocabulario de Vesta y el modelo generico solo la conoce quien declara

@@ -65,6 +65,7 @@
 
 #include "util/fnv.h" // la semilla y el primo, en UN sitio
 #include "vx/module/vxi_format.h"
+#include "vx/parser.h" // el objetivo de @Target (get_aot_condcomp_target)
 #include "vx/types.h" // normalize_abi_regs: la forma canonica, en UN sitio
 
 #include <algorithm>
@@ -1886,6 +1887,15 @@ VxiParseResult vxi_parse(const uint8_t *data, size_t size) {
 // target_matches_ en parser.cpp).  Si divergieran, un .vxi quedaria atado a un
 // nombre que la evaluacion de @Target no reconoce y la comparacion fallaria
 // siempre -- cache inutil en vez de cache correcto.
+std::string vxi_active_target() {
+    std::string os;
+    std::string arch;
+    get_aot_condcomp_target(os, arch);
+    if (os.empty()) os = vxi_host_os_name();
+    if (arch.empty()) arch = vxi_host_arch_name();
+    return os + "|" + arch;
+}
+
 const char *vxi_host_os_name() noexcept {
 #if defined(_WIN32)
     return "windows";

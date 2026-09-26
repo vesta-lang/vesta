@@ -97,6 +97,19 @@ const char *vxi_host_os_name() noexcept;
 /// de @Target.  Mismo papel que @c vxi_host_os_name.
 const char *vxi_host_arch_name() noexcept;
 
+/**
+ * @brief El objetivo ACTIVO tal como se guarda en @c VxiModule::target:
+ *        `os|arch`.
+ *
+ * Misma fuente de verdad que `@Target`: el objetivo cruzado si lo hay, y el
+ * anfitrion si no.  Lo usan quien ata un `.vxi` a su objetivo y quien valida
+ * al leerlo; estaba escrito en los dos, y dos lecturas distintas del objetivo
+ * desincronizarian artefacto y compilacion.
+ *
+ * @return La cadena del objetivo.
+ */
+std::string vxi_active_target();
+
 /// Kind del payload dentro de un BlobHeader (.vxi v4).  Asignaciones
 /// estables (persisten en disco).  Cualquier kind desconocido = saltar.
 enum class VxiBlobKind : uint32_t {
