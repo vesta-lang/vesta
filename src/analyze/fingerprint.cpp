@@ -11,6 +11,7 @@
 
 #include "analysis/memory/memory_access.h" // quien decide si una op toca memoria
 #include "vx/diag/diag_catalog.h" // el detalle de cada veredicto, por idioma
+#include "vx/module/namespace_flatten.h" // el nombre que escribio el usuario
 #include "ir/ssa_ir.h"
 #include "ir/ir_type_info.h" // vocabulario UNICO de anchura/clase de un IrType
 #include "vx/asm/asm_analyze.h"
@@ -537,6 +538,9 @@ constexpr const char *kNothrow = "@nothrow";
 constexpr const char *kNopanic = "@nopanic";
 constexpr const char *kAlloc = "@alloc";
 constexpr const char *kStack = "@stack";
+constexpr const char *kPod = "@pod";
+constexpr const char *kNoHeap = "@no_heap";
+constexpr const char *kSize = "@size";
 
 /**
  * @brief Los contratos que una funcion declara, por su nombre.
@@ -561,10 +565,15 @@ std::vector<const char *> declared_contracts(const FunctionContracts &c) {
  * @param status   El veredicto.
  * @param detail   Por que, ya en el idioma activo.
  */
-void add_check(std::vector<ContractCheck> &out, const std::string &function,
+void add_check(std::vector<ContractCheck> &out, util::InternedName function,
                const char *contract, ContractCheck::Status status,
                std::string detail) {
-    out.push_back({function, contract, status, std::move(detail)});
+    ContractCheck ck;
+    ck.function = function;
+    ck.contract = contract;
+    ck.status = status;
+    ck.detail = std::move(detail);
+    out.push_back(std::move(ck));
 }
 
 /**
@@ -585,7 +594,7 @@ std::string arg(uint64_t v) { return std::to_string(v); }
  * @param c    Lo que declara.
  * @param fp   Su huella, ya compuesta.
  */
-void check_function(std::vector<ContractCheck> &out, const std::string &name,
+void check_function(std::vector<ContractCheck> &out, util::InternedName name,
                     const FunctionContracts &c, const FunctionFingerprint &fp) {
     using St = ContractCheck::Status;
     // @pure: probado puro -> OK; probado impuro (efectos conocidos) ->
@@ -687,10 +696,11 @@ std::vector<ContractCheck> verify_contracts(
 
     using St = ContractCheck::Status;
     for (const auto &kv : contracts) {
-        const std::string &name = kv.first.str();
+        const util::InternedName name = kv.first;
         const FunctionContracts &c = kv.second;
         if (!c.any()) continue;
 
+        const size_t first = out.size();
         const auto it = byname.find(kv.first);
         if (it == byname.end()) {
             /* Se verifica contra el intermedio PREVIO a optimizar, donde toda
@@ -701,9 +711,14 @@ std::vector<ContractCheck> verify_contracts(
             const std::string why = vx::diag::format("VXT121");
             for (const char *declared : declared_contracts(c))
                 add_check(out, name, declared, St::UNVERIFIABLE, why);
-            continue;
+        } else {
+            check_function(out, name, c, *it->second);
         }
-        check_function(out, name, c, *it->second);
+        // Los veredictos de esta funcion llevan como se ensena y donde esta.
+        for (size_t k = first; k < out.size(); ++k) {
+            out[k].shown = c.shown;
+            out[k].where = c.where;
+        }
     }
     return out;
 }
@@ -728,25 +743,28 @@ std::vector<ContractCheck> verify_type_contracts(
         auto it = byname.find(name);
         if (it == byname.end()) continue; // el tipo no llego al layout.
         const TypeFingerprint &fp = *it->second;
+        // Una vez por tipo con contratos: los veredictos llevan el nombre
+        // internado, no una copia por veredicto.
+        const util::InternedName type_key = util::InternedName::intern(name);
 
         // @pod: tipo por valor trivialmente copiable (sin destructor ni campos
         // gestionados).  Decidible del layout -> OK / VIOLATED (nunca
         // UNVERIFIABLE).
         if (c.pod) {
             if (fp.is_pod) {
-                add_check(out, name, "@pod", St::OK,
+                add_check(out, type_key, kPod, St::OK,
                           vx::diag::format("VXT114"));
             } else {
                 const char *why = fp.is_reference     ? "VXT115"
                                   : fp.has_destructor ? "VXT116"
                                                       : "VXT117";
-                add_check(out, name, "@pod", St::VIOLATED,
+                add_check(out, type_key, kPod, St::VIOLATED,
                           vx::diag::format(why));
             }
         }
         // @no_heap: ningun campo referencia el heap gestionado.
         if (c.no_heap) {
-            add_check(out, name, "@no_heap",
+            add_check(out, type_key, kNoHeap,
                       fp.no_heap ? St::OK : St::VIOLATED,
                       vx::diag::format(fp.no_heap ? "VXT118" : "VXT119"));
         }
@@ -754,7 +772,7 @@ std::vector<ContractCheck> verify_type_contracts(
         if (c.size >= 0) {
             const uint64_t got = fp.size_bytes;
             const uint64_t want = static_cast<uint64_t>(c.size);
-            add_check(out, name, "@size", got == want ? St::OK : St::VIOLATED,
+            add_check(out, type_key, kSize, got == want ? St::OK : St::VIOLATED,
                       vx::diag::format("VXT120", {arg(want), arg(got)}));
         }
     }
@@ -800,8 +818,15 @@ ContractReport report_contract_checks(const std::vector<ContractCheck> &checks,
                                       vx::Diagnostics &diags) {
     ContractReport r;
     for (const ContractCheck &ck : checks) {
-        vx::SourceLoc loc;
-        loc.set_file(file);
+        /* Donde se declaro, si se sabe; si no, el fichero. */
+        vx::SourceLoc loc = ck.where;
+        if (loc.file().empty()) loc.set_file(file);
+        /* El simbolo IDENTIFICA la funcion; al usuario se le ensena lo que
+         * escribio.  Si quien recogio el contrato no lo dejo apuntado, la
+         * inversa del aplanado es lo mejor que se puede reconstruir. */
+        const std::string shown = ck.shown.empty()
+                                      ? vx::demangle_symbol(ck.function.str())
+                                      : ck.shown.str();
         switch (ck.status) {
         case ContractCheck::VIOLATED:
             /* Demostrado que no se cumple: es un error del programa, y por eso
@@ -809,7 +834,7 @@ ContractReport report_contract_checks(const std::vector<ContractCheck> &checks,
              * mide y se ensena, no se construye. */
             ++r.violated;
             diags.diag(loc, vx::DiagLevel::ERR, "VXT004",
-                       {ck.function, ck.contract, ck.detail});
+                       {shown, ck.contract, ck.detail});
             break;
         case ContractCheck::UNVERIFIABLE:
             /* Y este es el que se descartaba en silencio.  NO es un error: el
@@ -819,7 +844,7 @@ ContractReport report_contract_checks(const std::vector<ContractCheck> &checks,
              * que es lo que lo vuelve accionable. */
             ++r.unverified;
             diags.diag(loc, vx::DiagLevel::WARN, "VXW001",
-                       {ck.function, ck.contract, ck.detail});
+                       {shown, ck.contract, ck.detail});
             break;
         case ContractCheck::OK:
         default:

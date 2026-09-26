@@ -53,7 +53,7 @@ static int g_fail = 0;
 static analyze::ContractCheck check(const char *fn, const char *contract,
                                     analyze::ContractCheck::Status st) {
     analyze::ContractCheck c;
-    c.function = fn;
+    c.function = util::InternedName::intern(fn);
     c.contract = contract;
     c.status = st;
     c.detail = "efectos desconocidos";

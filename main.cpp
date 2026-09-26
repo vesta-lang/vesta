@@ -3000,7 +3000,7 @@ int main(int argc, char *argv[]) {
                                  : ck.status == analyze::ContractCheck::VIOLATED
                                      ? "violated"
                                      : "unverifiable";
-                js << "{\"function\":\"" << jstr(ck.function)
+                js << "{\"function\":\"" << jstr(ck.function.str())
                    << "\",\"contract\":\"" << jstr(ck.contract)
                    << "\",\"status\":\"" << st << "\",\"detail\":\""
                    << jstr(ck.detail) << "\"}";
@@ -3143,7 +3143,7 @@ int main(int argc, char *argv[]) {
 
             // Contratos de huella declarados por el usuario para esta funcion.
             for (const auto &ck : contract_checks) {
-                if (ck.function != rp.function) continue;
+                if (ck.function.str() != rp.function) continue;
                 const std::string &mark =
                     ck.status == analyze::ContractCheck::OK ? verdict_ok
                     : ck.status == analyze::ContractCheck::VIOLATED
@@ -3231,7 +3231,7 @@ int main(int argc, char *argv[]) {
                           << (tf.has_destructor ? " [~dtor]" : "")
                           << (tf.is_reference ? " [ref]" : "") << "\n";
                 for (const auto &ck : type_checks) {
-                    if (ck.function != tf.type_name) continue;
+                    if (ck.function.str() != tf.type_name) continue;
                     const std::string &st =
                         ck.status == analyze::ContractCheck::OK ? verdict_ok
                         : ck.status == analyze::ContractCheck::VIOLATED

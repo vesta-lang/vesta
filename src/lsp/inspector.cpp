@@ -1803,7 +1803,7 @@ nlohmann::json Inspector::function_report(const std::string &uri) {
         // El veredicto de cada contrato declarado.
         nlohmann::json checks = nlohmann::json::array();
         for (const auto &ck : veredictos) {
-            if (ck.function != cr.function) continue;
+            if (ck.function.str() != cr.function) continue;
             nlohmann::json jc;
             jc["contract"] = ck.contract;
             /* Veredicto ESTABLE, no texto de usuario: lo compara quien lo

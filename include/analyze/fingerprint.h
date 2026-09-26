@@ -207,6 +207,13 @@ struct FunctionContracts {
     int64_t alloc_total = -1;   ///< @alloc(total: N) o `@alloc(N)`.
     int64_t stack_partial = -1; ///< @stack(partial: N).
     int64_t stack_total = -1;   ///< @stack(total: N) o `@stack(N)`.
+    /// Como se le ensena la funcion al usuario (`ns.Tipo.metodo(i64)`): el
+    /// simbolo la IDENTIFICA pero no es lo que se escribio, y de el no se
+    /// puede sacar -- el nombre de un metodo puede llevar `_` y la etiqueta
+    /// de una sobrecarga tambien --.  Vacio = se ensena el simbolo.
+    util::InternedName shown;
+    /// Donde se declara, para que el veredicto apunte ahi y no al fichero.
+    vx::SourceLoc where;
     bool any() const {
         return pure || nothrow || nopanic || alloc_partial >= 0 ||
                alloc_total >= 0 || stack_partial >= 0 || stack_total >= 0;
@@ -226,10 +233,16 @@ struct ContractCheck {
         UNVERIFIABLE, ///< no se pudo decidir (efectos desconocidos) -> ni si ni
                       ///< no.
     };
-    std::string function;
-    std::string contract; ///< "@pure", "@nothrow", "@alloc", ...
+    util::InternedName function; ///< el simbolo de la funcion (o el tipo)
+    /// "@pure", "@nothrow", "@alloc", ...: apunta a una constante, es la
+    /// sintaxis del contrato y no se copia.
+    const char *contract = "";
     Status status = OK;
-    std::string detail; ///< "esperado vs inferido".
+    std::string detail; ///< por que, ya en el idioma activo.
+    /// Lo que se le ensena al usuario, y donde; ver @ref
+    /// FunctionContracts::shown.  Vacios = el simbolo y el fichero.
+    util::InternedName shown;
+    vx::SourceLoc where;
 };
 
 /**

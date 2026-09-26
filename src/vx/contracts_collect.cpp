@@ -4,9 +4,39 @@
  */
 #include "vx/contracts_collect.h"
 
+#include "vx/generics/generic_infer.h"     // generics::type_node_text
+#include "vx/module/namespace_flatten.h"   // demangle_symbol
 #include "vx/type_checker.h" // el simbolo de cada metodo lo sabe el comprobador
 
 namespace vx {
+
+namespace {
+
+/**
+ * @brief Como se le ensena al usuario una funcion con contratos:
+ *        `ns.Tipo.metodo(i64, u8*)`.
+ *
+ * Con los tipos de los parametros porque con sobrecarga el nombre solo no
+ * dice cual de las dos incumple.
+ *
+ * @param qualified Nombre (ya aplanado: se deshace aqui).
+ * @param params    Los parametros, tal como se escribieron.
+ * @return El texto.
+ */
+std::string shown_signature(
+    const std::string &qualified,
+    const std::vector<std::unique_ptr<ast::ParamDecl>> &params) {
+    std::string out = demangle_symbol(qualified);
+    out += '(';
+    for (size_t k = 0; k < params.size(); ++k) {
+        if (k != 0) out += ", ";
+        if (params[k]) out += generics::type_node_text(params[k]->type.get());
+    }
+    out += ')';
+    return out;
+}
+
+} // namespace
 
 void collect_function_contracts(
     const std::vector<std::unique_ptr<ast::Node>> &decls, const TypeChecker &tc,
@@ -33,8 +63,12 @@ void collect_function_contracts(
             c.alloc_partial = fd->contract_alloc_partial;
             c.stack_total = fd->contract_stack;
             c.stack_partial = fd->contract_stack_partial;
-            if (c.any())
+            if (c.any()) {
+                c.shown = util::InternedName::intern(
+                    shown_signature(fd->name, fd->params));
+                c.where = fd->loc;
                 out[util::InternedName::intern(function_symbol_of(*fd))] = c;
+            }
         }
         /* Los metodos de struct y de clase, por UN camino: cada rama solo dice
          * de donde salen y con que nombre de tipo; recogerlos se escribe una
@@ -69,6 +103,9 @@ void collect_function_contracts(
             c.stack_total = m->contract_stack;
             c.stack_partial = m->contract_stack_partial;
             if (!c.any()) continue;
+            c.shown = util::InternedName::intern(
+                shown_signature(*type_name + "." + m->name, m->params));
+            c.where = m->loc;
             const ClassMethodInfo *mi = tc.method_at_slot(*type_name,
                                                           m->layout_slot);
             /* Sin ficha no hay simbolo que dar; se guarda con el nombre que
