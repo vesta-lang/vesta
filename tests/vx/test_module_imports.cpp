@@ -115,6 +115,18 @@ int main() {
     check(lk.ns_to_modname.at("std.types") == "types",
           "el namespace se traduce al primer modulo que lo declara");
 
+    // Un registro de dependencia de un `.vxi`: por namespace el suyo, y sin
+    // namespace, por nombre.
+    vx::VxiModule::DepRecord rec;
+    rec.name = "linux";
+    rec.ns = "std.syscall.linux";
+    check(lk.find(rec) == 1, "registro homonimo: gana su namespace");
+    rec.ns.clear();
+    check(lk.find(rec) == 0, "registro sin namespace: por nombre");
+    check(lk.namespace_of(1) == "std.syscall.linux",
+          "el namespace que identifica a un modulo");
+    check(lk.namespace_of(4).empty(), "modulo sin namespace");
+
     // Transitivo: app -> syscall.linux -> types -> x86_64 (y types otra vez).
     add_dep_record(work[1], "types");
     add_dep_record(work[2], "x86_64");

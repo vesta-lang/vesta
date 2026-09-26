@@ -289,21 +289,27 @@ void test_dep_table_roundtrip() {
     std::cout << "\n[Test] dep table roundtrip (M4.ext L.13)\n";
     vx::VxiModule m;
     m.source_hash = 0xDEADBEEFCAFE;
-    // anñadir 3 deps con abi_hashes distintos.
-    m.deps.push_back({"libc", 0x1111111111111111ULL});
-    m.deps.push_back({"std/io", 0x2222222222222222ULL});
-    m.deps.push_back({"my/lib", 0xABCDEF0123456789ULL});
+    // Tres deps con abi_hashes distintos.  Dos se llaman IGUAL (`linux`) y
+    // solo las distingue su namespace, que es para lo que viaja (v22); la
+    // tercera no declara ninguno.
+    m.deps.push_back({"linux", "std.os.linux", 0x1111111111111111ULL});
+    m.deps.push_back({"linux", "std.syscall.linux", 0x2222222222222222ULL});
+    m.deps.push_back({"my/lib", "", 0xABCDEF0123456789ULL});
     auto b = vx::vxi_emit(m);
     auto r = vx::vxi_parse(b.data(), b.size());
     CHECK(r.ok, "parse modulo con dep table OK");
     CHECK(r.module_.deps.size() == 3, "3 deps roundtrip");
-    CHECK(r.module_.deps[0].name == "libc", "dep[0].name");
+    CHECK(r.module_.deps[0].name == "linux", "dep[0].name");
+    CHECK(r.module_.deps[0].ns == "std.os.linux", "dep[0].ns");
     CHECK(r.module_.deps[0].abi_hash == 0x1111111111111111ULL,
           "dep[0].abi_hash");
-    CHECK(r.module_.deps[1].name == "std/io", "dep[1].name");
+    CHECK(r.module_.deps[1].name == "linux", "dep[1].name");
+    CHECK(r.module_.deps[1].ns == "std.syscall.linux",
+          "dep[1].ns distingue al homonimo");
     CHECK(r.module_.deps[1].abi_hash == 0x2222222222222222ULL,
           "dep[1].abi_hash");
     CHECK(r.module_.deps[2].name == "my/lib", "dep[2].name");
+    CHECK(r.module_.deps[2].ns.empty(), "dep[2] sin namespace");
     CHECK(r.module_.deps[2].abi_hash == 0xABCDEF0123456789ULL,
           "dep[2].abi_hash");
 }

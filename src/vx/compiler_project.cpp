@@ -2338,28 +2338,21 @@ CompileResult compile_vx_project(
                     // (que ya viene populated en work[] por topo order).
                     /* Como importa este modulo cada dep, para recomputar la
                      * huella con EL MISMO criterio con que se guardo. */
-                    std::unordered_map<std::string, const ImportRequest *>
+                    /* Por el MODULO resuelto, no por su nombre: el registro
+                     * y el import se encuentran por el mismo indice. */
+                    std::unordered_map<size_t, const ImportRequest *>
                         como_importa;
                     const std::vector<ImportRequest> imps_val =
                         lookup.imports_of(pm);
-                    /* Por el nombre del modulo RESUELTO, que es el que se
-                     * guarda en el registro (ver donde se llena `deps`). */
                     for (const auto &r : imps_val) {
                         const size_t idx = lookup.find(r);
-                        if (idx < work.size())
-                            como_importa.emplace(work[idx].module_name.str(),
-                                                 &r);
+                        if (idx < work.size()) como_importa.emplace(idx, &r);
                     }
                     bool deps_match = true;
                     for (const auto &dep_rec : pr.module_.deps) {
-                        /* El registro solo trae el nombre; si este modulo
-                         * importa esa dependencia, su import dice CUAL es --
-                         * con dos ficheros homonimos, el nombre no --. */
-                        auto itc = como_importa.find(dep_rec.name);
-                        const size_t dep_idx =
-                            itc != como_importa.end()
-                                ? lookup.find(*itc->second)
-                                : lookup.find_by_name(dep_rec.name);
+                        // Por su namespace, que distingue a los homonimos.
+                        const size_t dep_idx = lookup.find(dep_rec);
+                        const auto itc = como_importa.find(dep_idx);
                         if (dep_idx >= work.size()) {
                             // El dep ya no existe -> miss.
                             deps_match = false;
@@ -2729,8 +2722,7 @@ CompileResult compile_vx_project(
             // parametro se queda en `void`.
             std::vector<const VxiModule *> dep_alias_srcs;
             for (const auto &dr : dep_vxi.deps) {
-                // El registro del `.vxi` solo trae el nombre.
-                const size_t src = lookup.find_by_name(dr.name);
+                const size_t src = lookup.find(dr);
                 if (src < work.size()) dep_alias_srcs.push_back(&work[src].vxi);
             }
             // `only *` (glob): expandir a TODOS los simbolos publicos del dep,
@@ -3209,6 +3201,8 @@ CompileResult compile_vx_project(
              * dos ficheros homonimos pueden no coincidir, y al validar se
              * busca por este. */
             drec.name = dep.module_name.str();
+            // Y su namespace, que es lo que lo distingue de un homonimo.
+            drec.ns = lookup.namespace_of(dep_idx);
             /* Lo que este modulo VE del dep, no la interfaz entera del dep:
              * anadirle algo publico que nadie usa no tiene por que invalidar a
              * quien no lo usa.  El mismo criterio se aplica al validar. */

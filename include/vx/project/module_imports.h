@@ -22,6 +22,7 @@
 #include "vx/ast.h"
 #include "vx/diagnostic.h"
 #include "vx/module/module_resolver.h" // NamespaceList
+#include "vx/module/vxi_format.h"      // VxiModule::DepRecord
 #include "vx/type_checker.h"           // TypeChecker::VxiOnlyEntry
 
 #include <cstddef>
@@ -33,7 +34,6 @@
 namespace vx {
 
 struct ProjectModuleWork;
-struct VxiModule;
 
 /// Un import de un modulo, ya leido de su AST.
 struct ImportRequest {
@@ -58,10 +58,14 @@ constexpr size_t kNoModule = SIZE_MAX;
 
 namespace scratch {
 struct ModuleIndices;
+struct ModuleNamespaces;
 } // namespace scratch
 
 /// Una lista de modulos del proyecto, por su indice en el trabajo.
 using ModuleIndices = util::NamedVector<size_t, scratch::ModuleIndices>;
+/// El namespace que identifica a cada modulo, por su indice.
+using ModuleNamespaces =
+    util::NamedVector<std::string, scratch::ModuleNamespaces>;
 
 /**
  * @brief Donde esta cada modulo del proyecto, y como se resuelve un import.
@@ -82,6 +86,9 @@ struct ModuleLookup {
     /// Namespace -> TODOS los modulos que lo declaran (namespace parcial),
     /// en orden de trabajo.
     std::unordered_map<std::string, ModuleIndices> ns_to_modules;
+    /// El namespace que identifica a cada modulo (el primero que declara),
+    /// vacio si no declara ninguno.  Es la clave de @ref by_ns.
+    ModuleNamespaces module_ns;
     /// Lo que el manifiesto auto-importa, y el arbol al que NO se aplica.
     AutoImportNs auto_imports;
     std::string auto_import_owner_dir;
@@ -99,16 +106,35 @@ struct ModuleLookup {
     size_t find(const ImportRequest &req) const;
 
     /**
+     * @brief El modulo al que se refiere un registro de dependencia de un
+     *        `.vxi`.
+     *
+     * Por su namespace si lo lleva -- que es unico --, y solo si no, por el
+     * nombre: un modulo que no declara namespace solo se puede importar por
+     * ruta, y ahi el nombre es lo mismo que usa el propio import.
+     *
+     * @param dep El registro.
+     * @return Su indice, o @ref kNoModule.
+     */
+    size_t find(const VxiModule::DepRecord &dep) const;
+
+    /**
      * @brief Un modulo por su nombre de fichero, y nada mas.
      *
-     * Para lo que solo trae el nombre: los registros de dependencias de un
-     * `.vxi` guardan eso y nada mas, asi que ahi no hay otra forma.  LIMITE
-     * conocido: con dos ficheros homonimos devuelve el primero.
+     * LIMITE: con dos ficheros homonimos devuelve el primero.  Solo para lo
+     * que no trae otra cosa.
      *
      * @param name Nombre del modulo.
      * @return Su indice, o @ref kNoModule.
      */
     size_t find_by_name(const std::string &name) const;
+
+    /**
+     * @brief El namespace que identifica a un modulo.
+     * @param idx Su indice.
+     * @return El namespace; vacio si no declara ninguno.
+     */
+    const std::string &namespace_of(size_t idx) const;
 
     /**
      * @brief Los modulos que declaran un namespace.
@@ -173,9 +199,9 @@ uint64_t used_surface_hash(const VxiModule &dep_vxi, const ImportRequest &req);
 /**
  * @brief Las dependencias de un modulo, directas y transitivas.
  *
- * Las directas se resuelven por @ref ModuleLookup::find; las de mas abajo
- * salen de las tablas de dependencias de los `.vxi`, que solo traen el nombre
- * (ver @ref ModuleLookup::find_by_name).
+ * Las directas se resuelven por su import y las de mas abajo por los
+ * registros de dependencias de los `.vxi`; las dos por @ref
+ * ModuleLookup::find.
  *
  * @param lookup  Los indices del proyecto.
  * @param work    Los modulos.

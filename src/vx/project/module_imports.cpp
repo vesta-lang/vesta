@@ -57,9 +57,22 @@ size_t ModuleLookup::find(const ImportRequest &req) const {
     return find_by_name(req.module_name);
 }
 
+size_t ModuleLookup::find(const VxiModule::DepRecord &dep) const {
+    if (!dep.ns.empty()) {
+        const auto itn = by_ns.find(dep.ns);
+        if (itn != by_ns.end()) return itn->second;
+    }
+    return find_by_name(dep.name);
+}
+
 size_t ModuleLookup::find_by_name(const std::string &name) const {
     const auto itd = by_name.find(name);
     return itd != by_name.end() ? itd->second : kNoModule;
+}
+
+const std::string &ModuleLookup::namespace_of(size_t idx) const {
+    static const std::string kNone;
+    return idx < module_ns.size() ? module_ns[idx] : kNone;
 }
 
 const ModuleIndices *
@@ -81,6 +94,7 @@ ModuleLookup build_module_lookup(const std::vector<ProjectModuleWork> &work,
     ModuleLookup lk;
     lk.auto_imports = std::move(auto_imports);
     lk.auto_import_owner_dir = std::move(auto_owner_dir);
+    lk.module_ns.resize(work.size());
     for (size_t i = 0; i < work.size(); ++i) {
         const ProjectModuleWork &pm = work[i];
         // `emplace` conserva el primero: con homonimos gana el de menor
@@ -89,8 +103,10 @@ ModuleLookup build_module_lookup(const std::vector<ProjectModuleWork> &work,
         if (!pm.ast) continue;
         /* El primer namespace del modulo lo identifica; los demas indices
          * miran TODOS los que declara. */
-        if (const ast::NamespaceDecl *nd = first_namespace(pm))
+        if (const ast::NamespaceDecl *nd = first_namespace(pm)) {
             lk.by_ns.emplace(nd->name, i);
+            lk.module_ns[i] = nd->name;
+        }
         for (const auto &d : pm.ast->decls) {
             if (!d || d->kind != ast::NodeKind::NamespaceDecl) continue;
             const auto *ns = static_cast<const ast::NamespaceDecl *>(d.get());
@@ -222,7 +238,7 @@ ModuleIndices transitive_dependencies(const ModuleLookup &lookup,
     // En anchura: `order` crece mientras se recorre.
     for (size_t qi = 0; qi < order.size(); ++qi) {
         for (const auto &de : work[order[qi]].vxi.deps) {
-            const size_t idx = lookup.find_by_name(de.name);
+            const size_t idx = lookup.find(de);
             if (idx >= work.size() || seen[idx]) continue;
             seen[idx] = true;
             order.push_back(idx);

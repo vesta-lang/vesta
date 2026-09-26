@@ -86,11 +86,22 @@
 
 namespace vx {
 
-// ---------------------------------------------------------------------------
-// FNV-1a 64-bit.  Identica formula que ModuleGraph::fnv1a_; replicada
-// aqui para evitar dep circular module_resolver -> vxi_format.
-// ---------------------------------------------------------------------------
 namespace {
+
+/* Los tamanos del formato, UNA vez para el escritor y el lector.  Estaban
+ * escritos en los dos, y si uno crece y el otro no las entradas se leen
+ * desplazadas y el sintoma no dice nada de la causa ("kind de simbolo
+ * desconocido"). */
+/// Cabecera (v18: +conjunto comptime en 104..132).
+constexpr size_t kHeaderBytes = 136;
+/// Entrada de simbolo: 1 + 1 + 2 + 4 + 4 + 4 + 4.
+constexpr size_t kSymbolEntryBytes = 20;
+/// Entrada de dependencia (v22): u32 name_off + u32 name_len + u32 ns_off +
+/// u32 ns_len + u64 abi_hash.
+constexpr size_t kDepEntryBytes = 24;
+/// Entrada de plantilla (v9): name_off + name_len + kind + src_off + src_len
+/// + ns_off + ns_len.
+constexpr size_t kGenEntryBytes = 28;
 
 /**
  * @brief Nombres que aparecen dentro de un tipo canonico y NO son un tipo de
@@ -666,12 +677,9 @@ std::vector<uint8_t> vxi_emit(const VxiModule &mod) {
     // blob_pool_size u32 + blob_pool_alignment u8 + 7 pad en offsets 48..63).
     // v6: crece a 80 (gen_templates_offset u32 + gen_templates_count u32 +
     // 8 pad en offsets 64..79).
-    const size_t HEADER_BYTES = 136; // v18: +conjunto comptime (104..132)
-    const size_t GEN_ENTRY_BYTES =
-        28; // name_off+name_len+kind+src_off+src_len+ns_off+ns_len (v9)
-    const size_t SYMENTRY_BYTES = 20; // 1 + 1 + 2 + 4 + 4 + 4 + 4
-    const size_t DEP_ENTRY_BYTES =
-        16; // u32 name_off + u32 name_len + u64 abi_hash
+    const size_t HEADER_BYTES = kHeaderBytes;
+    const size_t SYMENTRY_BYTES = kSymbolEntryBytes;
+    const size_t DEP_ENTRY_BYTES = kDepEntryBytes;
     const size_t entries_bytes = mod.symbols.size() * SYMENTRY_BYTES;
     const size_t payloads_bytes = payloads.size();
     const size_t deps_bytes = mod.deps.size() * DEP_ENTRY_BYTES;
@@ -680,11 +688,19 @@ std::vector<uint8_t> vxi_emit(const VxiModule &mod) {
 
     // Pre-internamos los nombres de los deps al pool ANTES de calcular
     // offsets (asi el pool_start no cambia tras emit de la dep table).
-    std::vector<std::pair<uint32_t, uint32_t>> dep_name_offs;
-    dep_name_offs.reserve(mod.deps.size());
+    /// Donde quedan en el pozo el nombre y el namespace de una dependencia.
+    struct DepOffsets {
+        uint32_t name_off, name_len, ns_off, ns_len;
+    };
+    std::vector<DepOffsets> dep_offs;
+    dep_offs.reserve(mod.deps.size());
     for (const auto &d : mod.deps) {
-        dep_name_offs.emplace_back(pool.intern(d.name),
-                                   static_cast<uint32_t>(d.name.size()));
+        DepOffsets o{};
+        o.name_off = pool.intern(d.name);
+        o.name_len = static_cast<uint32_t>(d.name.size());
+        o.ns_off = pool.intern(d.ns);
+        o.ns_len = static_cast<uint32_t>(d.ns.size());
+        dep_offs.push_back(o);
     }
     // v6: pre-internar nombre + fuente de cada plantilla generica exportada.
     struct GenTplOff {
@@ -781,8 +797,10 @@ std::vector<uint8_t> vxi_emit(const VxiModule &mod) {
     //  M4.ext L.13: dep table tras los payloads, antes del blob_pool.
     const uint32_t deps_start = static_cast<uint32_t>(out.size());
     for (size_t i = 0; i < mod.deps.size(); ++i) {
-        write_u32(out, dep_name_offs[i].first);  // name_off (rel al pool)
-        write_u32(out, dep_name_offs[i].second); // name_len
+        write_u32(out, dep_offs[i].name_off); // rel al pool
+        write_u32(out, dep_offs[i].name_len);
+        write_u32(out, dep_offs[i].ns_off); // v22
+        write_u32(out, dep_offs[i].ns_len);
         // abi_hash u64 little-endian
         const uint64_t h = mod.deps[i].abi_hash;
         write_u32(out, static_cast<uint32_t>(h & 0xFFFFFFFFull));
@@ -1561,14 +1579,12 @@ VxiParseResult vxi_parse(const uint8_t *data, size_t size) {
     r.module_.vxdbg_map_hi = vxdbg_hi_hdr;
     r.module_.symbols.reserve(symbol_count);
 
-    // Symbol entries empiezan tras el header v18 (136 bytes).  Este numero y
-    constexpr size_t SYMENTRY_BYTES = 20;
-    // el del escritor van SIEMPRE juntos: si uno crece y el otro no, las
-    // entradas se leen desplazadas y el sintoma no dice nada de la causa
-    // ("kind de simbolo desconocido").
-    constexpr size_t HEADER_BYTES = 136;
-    constexpr size_t DEP_ENTRY_BYTES = 16;
-    constexpr size_t GEN_ENTRY_BYTES = 28; // v9: +ns_off+ns_len
+    // Las entradas de simbolo empiezan tras la cabecera.  Los tamanos son los
+    // del escritor: vienen del mismo sitio.
+    constexpr size_t SYMENTRY_BYTES = kSymbolEntryBytes;
+    constexpr size_t HEADER_BYTES = kHeaderBytes;
+    constexpr size_t DEP_ENTRY_BYTES = kDepEntryBytes;
+    constexpr size_t GEN_ENTRY_BYTES = kGenEntryBytes;
     // v4: blob_pool extraido a un std::vector para conservar la API
     // existente.  Validamos rangos antes de copiar.
     if (blob_pool_size_hdr != 0) {
@@ -1672,28 +1688,23 @@ VxiParseResult vxi_parse(const uint8_t *data, size_t size) {
     r.module_.deps.reserve(dep_count);
     for (uint32_t i = 0; i < dep_count; ++i) {
         size_t dep_off = dep_table_offset + i * DEP_ENTRY_BYTES;
-        uint32_t n_off = 0, n_len = 0;
+        uint32_t n_off = 0, n_len = 0, ns_off = 0, ns_len = 0;
         uint32_t lo = 0, hi = 0;
-        if (!read_u32(data, size, dep_off, n_off)) {
-            r.error_message = "dep entry truncada";
-            return r;
-        }
-        if (!read_u32(data, size, dep_off, n_len)) {
-            r.error_message = "dep entry truncada";
-            return r;
-        }
-        if (!read_u32(data, size, dep_off, lo)) {
-            r.error_message = "dep entry truncada";
-            return r;
-        }
-        if (!read_u32(data, size, dep_off, hi)) {
+        // Los seis campos, en el orden en que los escribe el escritor.
+        if (!read_u32(data, size, dep_off, n_off) ||
+            !read_u32(data, size, dep_off, n_len) ||
+            !read_u32(data, size, dep_off, ns_off) ||
+            !read_u32(data, size, dep_off, ns_len) ||
+            !read_u32(data, size, dep_off, lo) ||
+            !read_u32(data, size, dep_off, hi)) {
             r.error_message = "dep entry truncada";
             return r;
         }
         VxiModule::DepRecord d;
         d.abi_hash =
             static_cast<uint64_t>(lo) | (static_cast<uint64_t>(hi) << 32);
-        if (!read_name(data, size, n_off, n_len, pool_start, d.name)) {
+        if (!read_name(data, size, n_off, n_len, pool_start, d.name) ||
+            !read_name(data, size, ns_off, ns_len, pool_start, d.ns)) {
             r.error_message = "dep name fuera de bounds";
             return r;
         }

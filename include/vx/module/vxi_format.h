@@ -74,7 +74,10 @@ inline constexpr uint32_t VXI_MAGIC = 0x49584556u;
  * existe ("simbolo no resuelto: code.bg_rgb" en un ejemplo que no nombra
  * `bg_rgb` en ninguna linea).  Con la version subida, lo viejo se rechaza y se
  * regenera, que es justo para lo que esta. */
-inline constexpr uint16_t VXI_FORMAT_VERSION = 21;
+/* v22: cada dependencia lleva tambien su NAMESPACE (entrada de 16 a 24
+ * bytes).  Con solo el nombre de fichero, dos dependencias homonimas eran
+ * indistinguibles al validar la cache. */
+inline constexpr uint16_t VXI_FORMAT_VERSION = 22;
 
 /// \brief Bit 0 de @ref VxiHeader::module_flags: el modulo declara clases.
 inline constexpr uint16_t VXI_MODULE_DECLARES_CLASSES = 1u << 0;
@@ -414,7 +417,13 @@ struct VxiModule {
     /// nombre del modulo dep + su abi_hash en el momento de compilar
     /// este .vxi.  El loader verifica los deps al cache hit.
     struct DepRecord {
-        std::string name;
+        std::string name; ///< nombre del modulo (el de su fichero)
+        /// v22: el namespace que declara, vacio si ninguno.  El nombre de
+        /// fichero NO es unico -- `std/os/linux.vx` y `std/syscall/linux.vx`
+        /// son los dos `linux` --, y con solo el nombre, quien validaba la
+        /// cache o recorria las dependencias transitivas podia quedarse con
+        /// el modulo que no era.  El namespace si es unico.
+        std::string ns;
         uint64_t abi_hash = 0;
     };
     std::vector<DepRecord> deps;
