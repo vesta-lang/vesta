@@ -3275,7 +3275,7 @@ r0_case("il73", "array+struct init lists C-style", "73_init_lists.vx", 42, line=
 r0_case("bfi74", "bit fields en init list", "74_bf_init.vx", 42, line=1665)
 r0_case("sm75", "metodos OO string (s.length etc)", "75_string_methods.vx", 42, line=1668)
 r0_case("ca80", "compound assign (campo + indexado + deref)", "79_compound_assign.vx", 42, line=1819)
-r0_case("mb82", "math builtins (sqrt/pow/sin/log/...)", "81_math_builtins.vx", 42, line=1850)
+r0_case("mb82", "math builtins (sqrt/pow/sin/log/...) y los genericos numericos abs/min/max/clamp, del tipo de sus argumentos (i8, u8, f32, mezclados, con punto)", "81_math_builtins.vx", 42, line=1850)
 r0_case("hpat83", "is_host_ptr round-trip via address-taken local (limitacion A)", "82_host_ptr_addr_taken.vx", 42, line=1858)
 r0_case("hpi84", "is_host_ptr indirecto via i32** pp = &p (limitacion A parte 2)", "83_host_ptr_indirect.vx", 42, line=1867)
 modes3_case("sf85", "un campo estatico, en los TRES modos.  Antes solo se comprobaba interpretado, porque a nativo lo bajaba el frontend por su cuenta -- emitia un intermedio DISTINTO segun a donde fuera a parar el programa --.  Ahora el intermedio es el mismo y el hueco lo reparte el AOT, que es quien sabe donde vive: uno por nombre y por MODULO, porque quien escribe el campo y quien lo lee casi nunca son la misma funcion", "84_static_fields.vx", 42, line=1876)
@@ -3443,7 +3443,7 @@ fails_case("regcall", "region: una llamada que escribe mas de lo que cabe -> err
 fails_case("regcall2", "region: lo que hace una funcion dos niveles abajo -> error (VX3001)", "region_cruza_dos_llamadas.vx", "VX3001", line=3654)
 modes3_case("asmwidth", "asm: lift general modela anchos x86 (8/16/32/64) en interp/jit/aot", "asm_lift_widths.vx", 42, line=3654)
 modes3_case("shvar", "shift por cantidad variable (SHL/SHR/SAR via CL) en interp/jit/aot", "shift_variable.vx", 42, line=3654)
-modes3_case("fpround", "float floor/ceil/round/trunc/fmin/fmax (f64+f32) en interp/jit/aot", "fp_rounding.vx", 42, line=3654)
+modes3_case("fpround", "float floor/ceil/round/trunc/min/max (f64+f32) en interp/jit/aot", "fp_rounding.vx", 42, line=3654)
 modes3_case("asmbits", "asm lift de bits (popcnt/lzcnt/tzcnt/bswap -> IrOp neutro) en interp/jit/aot", "asm_bitops.vx", 42, line=3654)
 modes3_case("asmmovext", "asm lift de movzx/movsx (extension de ancho) en interp/jit/aot", "asm_movext.vx", 42, line=3654)
 modes3_case("asmcmpset", "asm lift fusiona cmp+setcc en comparacion tipada (signed/unsigned/eq) en interp/jit/aot", "asm_cmp_setcc.vx", 42, line=3654)
@@ -3679,6 +3679,8 @@ fails_case("cota589", "cuando el cuerpo de una generica falla, se dice la COTA q
 fails_case("cadena588", "un fallo en el cuerpo de una instancia lleva su CAMINO DE VUELTA: la cadena entera hasta la linea que el programador escribio, y cuando no cabe se pliega POR EL MEDIO -- nunca por el final, que es donde esta esa linea -- diciendo cuantos niveles se saltaron", "588_cadena_instanciacion.vx", "VX2111")
 fails_case("ovr600", "dos @StringConcat es una pregunta sin respuesta: se CORTA en el acto, en la linea de la SEGUNDA declaracion y citando las dos como se escribieron -- tambien por el camino de proyecto, que antes seguia con la primera", "600_string_concat_duplicado.vx", r"600_string_concat_duplicado.vx:18:.*VX2118")
 fails_case("ovr601", "un @SyncImpl sin su pareja no compila: el error se situa en la mitad que SI esta, que es donde hay que escribir la otra", "601_syncimpl_a_medias.vx", r"601_syncimpl_a_medias.vx:16:.*VX2119")
+modes3_case("decl_varios_nombres", "una declaracion nombra varias variables (`f64 dx = a, dy = b;`, tambien con `const` y con dimensiones por nombre) y el `for` declara varias y da varios pasos (`for (auto i = 1, doble = ...; ...; i = doble(i), n++)`); con `auto` cada nombre infiere el suyo, y `auto` vale en el `for`, donde antes daba tipo desconocido", "603_declaracion_varios_nombres.vx", 42)
+fails_case("neg_generico_const", "una plantilla que escribe por un `const T*` no compila, igual que sin parametros de tipo: al instanciarla, el clon de la firma copiaba la forma del tipo y perdia `const`, `nonnull`, `volatile`, `VirtualPtr` y la ABI de los tipos funcion", "602_neg_generico_const.vx", r"602_neg_generico_const.vx:14:.*const")
 fails_case("gen224", "constraint violada (Punto no es Numeric)", "224_conceptos_error.vx", "VX2108", line=3673)
 r0_case("gen225", "especializacion total + parcial (Caja<T> / Caja<i64> / Caja<Punto> / Caja<T*>)", "225_especializacion.vx", 42, line=3676)
 r0_case("gen226", "especializacion avanzada (clase + funcion + patron anidado Caja<Inner<T>>)", "226_especializacion_avanzada.vx", 42, line=3677)
@@ -3879,7 +3881,7 @@ modes3_case("optptr503", "sacar el valor de un Optional<T*> daba un puntero SIN 
 modes3_case("optsinmarca504", "un Optional cuyo valor no puede ser cero no necesita una palabra aparte que diga si hay algo: el cero sobra y sirve de marca, y el conjunto mide 8 en vez de 16.  Se aplica solo donde el tipo lo promete (un prestamo), nunca a un T* crudo, donde Some(nulo) dejaria de distinguirse de vacio", "504_optional_sin_marca.vx", 42, line=3806)
 modes3_case("nonnull505", "`nonnull` se comprueba al asignar (antes solo se rechazaba el literal null), y no cuesta nada cuando el valor no puede ser nulo: el pase que quita comprobaciones demostrables las borra.  Ademas `nonnull` y `!!` son la misma cosa, asi que escribir `!!` al asignar a un nonnull es redundante y tampoco cuesta", "505_nonnull_se_cumple.vx", 42, line=3808)
 modes3_case("ayudantes507", "unwrap_or(x, def) y expect(x, \"msg\"): la salida que NO mata el proceso y la que si pero diciendo por que.  Desde que fallar una afirmacion es fatal, importa que la forma recuperable sea la comoda -- antes solo estaba escribir el if a mano --.  Los dos se montan con las mismas dos piezas que isPresent y unwrap; ninguno vuelve a escribir como se lee un Optional", "507_ayudantes_optional.vx", 42, line=3810)
-modes3_case("sufijos512", "un literal puede decir de que tipo es (42_i8, 0xFF_u32, 3.14_f64), en cualquier base y con `_` separando millares.  Sin sufijo lo sigue poniendo el contexto, que es la forma normal; el sufijo sirve cuando no hay contexto o cuando decirlo aclara", "512_sufijos_de_tipo.vx", 55, line=3812)
+modes3_case("sufijos512", "un literal puede decir de que tipo es (42_i8, 0xFF_u32, 3.14_f64), en cualquier base y con `_` separando millares y el sufijo, tambien tras un exponente (1e-16_f64, 0x1.8p+1_f64).  Sin sufijo lo sigue poniendo el contexto, que es la forma normal; el sufijo sirve cuando no hay contexto o cuando decirlo aclara", "512_sufijos_de_tipo.vx", 60, line=3812)
 fails_case("neg_sufijo_c",
            "un sufijo de C no nombra ningun tipo de Vesta: `100L` dice `long`, "
            "y hasta ahora se consumia sin efecto ninguno -- el literal valia "

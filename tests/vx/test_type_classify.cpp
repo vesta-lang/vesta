@@ -234,6 +234,25 @@ int main() {
         CHECK(!is_managed(struct_ty("Desconocido"), resolver));
     }
 
+    // --- 14. Conversiones que conservan el valor (resolucion de sobrecargas) ---
+    {
+        using PK = PrimitiveKind;
+        CHECK(is_lossless_conversion(PK::I32, PK::I32));
+        CHECK(is_lossless_conversion(PK::I32, PK::I64));  // ampliar
+        CHECK(!is_lossless_conversion(PK::I64, PK::I32)); // estrechar
+        CHECK(is_lossless_conversion(PK::U8, PK::I16));   // sin signo, mas ancho
+        CHECK(!is_lossless_conversion(PK::U32, PK::I32)); // no cabe el rango
+        CHECK(!is_lossless_conversion(PK::I8, PK::U64));  // los negativos
+        CHECK(is_lossless_conversion(PK::I32, PK::F64));  // cabe en la mantisa
+        CHECK(!is_lossless_conversion(PK::I64, PK::F64)); // 64 > 53 bits
+        CHECK(is_lossless_conversion(PK::I16, PK::F32));
+        CHECK(!is_lossless_conversion(PK::I32, PK::F32));
+        CHECK(is_lossless_conversion(PK::F32, PK::F64));
+        CHECK(!is_lossless_conversion(PK::F64, PK::F32));
+        CHECK(!is_lossless_conversion(PK::F64, PK::I64)); // real a entero
+        CHECK(!is_lossless_conversion(PK::BOOL, PK::I64)); // no numerico
+    }
+
     if (g_fail == 0)
         std::printf("test_type_classify: %d checks OK\n", g_checks);
     else

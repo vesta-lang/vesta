@@ -309,7 +309,8 @@ static void test_if_while_for() {
     auto fr =
         as_node<ast::ForStmt>(fn->body->body[3].get(), ast::NodeKind::ForStmt);
     VX_ASSERT(fr != nullptr, "for presente");
-    VX_ASSERT(fr->init != nullptr && fr->cond != nullptr && fr->step != nullptr,
+    VX_ASSERT(fr->init.size() == 1 && fr->cond != nullptr &&
+                  fr->step.size() == 1,
               "for con tres partes");
     auto fbody =
         as_node<ast::BlockStmt>(fr->body.get(), ast::NodeKind::BlockStmt);
@@ -420,6 +421,55 @@ static void test_position_propagated() {
     VX_ASSERT_EQ(ret->loc.line, (uint32_t)2, "return linea 2");
 }
 
+/**
+ * @brief Una declaracion de VARIOS nombres son varias `VarDeclStmt` seguidas,
+ *        con el almacenamiento del primero; el `for` lleva listas en el
+ *        inicializador y en el paso; y el cuerpo `=>` de una funcion `void`
+ *        puede ser una sentencia de control.
+ */
+static void test_multi_declarations() {
+    auto out = parse_src("void f(i64 n) => for (i64 i = 0; i < n; i++) g(i);\n"
+                         "i32 main() {\n"
+                         "    const f64 dx = 1.0, dy = 2.0;\n"
+                         "    i64 t[3], k = 7;\n"
+                         "    for (auto i = 0, h = 2; i < 9; i += h, k--) {}\n"
+                         "    if (k > 0) i64 p = 1, q = 2;\n"
+                         "    return 0;\n"
+                         "}\n");
+    VX_ASSERT(!out.diags.has_errors(), "varios nombres sin errores");
+    auto f = as_node<ast::FunctionDecl>(out.mod->decls[0].get(),
+                                        ast::NodeKind::FunctionDecl);
+    VX_ASSERT(f != nullptr && f->body->body.size() == 1 &&
+                  f->body->body[0]->kind == ast::NodeKind::ForStmt,
+              "cuerpo => que es un for");
+    auto fn = as_node<ast::FunctionDecl>(out.mod->decls[1].get(),
+                                         ast::NodeKind::FunctionDecl);
+    VX_ASSERT(fn != nullptr, "main es funcion");
+    const auto &body = fn->body->body;
+    // dx, dy, t, k, for, if, return
+    VX_ASSERT_EQ(body.size(), (size_t)7, "una VarDeclStmt por nombre");
+    auto dy = as_node<ast::VarDeclStmt>(body[1].get(),
+                                        ast::NodeKind::VarDeclStmt);
+    VX_ASSERT(dy != nullptr && dy->name == "dy" && dy->is_const,
+              "el segundo nombre hereda `const`");
+    auto t = as_node<ast::VarDeclStmt>(body[2].get(), ast::NodeKind::VarDeclStmt);
+    auto k = as_node<ast::VarDeclStmt>(body[3].get(), ast::NodeKind::VarDeclStmt);
+    VX_ASSERT(t && t->type && t->type->kind == ast::NodeKind::ArrayTypeNode,
+              "las dimensiones son del primero");
+    VX_ASSERT(k && k->type && k->type->kind != ast::NodeKind::ArrayTypeNode,
+              "y el segundo es escalar");
+    auto fr = as_node<ast::ForStmt>(body[4].get(), ast::NodeKind::ForStmt);
+    VX_ASSERT(fr && fr->init.size() == 2 && fr->step.size() == 2,
+              "for con dos declaraciones y dos pasos");
+    auto h = as_node<ast::VarDeclStmt>(fr->init[1].get(),
+                                       ast::NodeKind::VarDeclStmt);
+    VX_ASSERT(h && h->infer_type, "con `auto`, cada nombre infiere el suyo");
+    auto fi = as_node<ast::IfStmt>(body[5].get(), ast::NodeKind::IfStmt);
+    VX_ASSERT(fi && fi->then_branch &&
+                  fi->then_branch->kind == ast::NodeKind::BlockStmt,
+              "donde va una sentencia, los nombres van en un bloque");
+}
+
 // ---------------------------------------------------------------------
 // main del test.
 // ---------------------------------------------------------------------
@@ -437,6 +487,7 @@ int main() {
     test_compound_assignments();
     test_error_recovery();
     test_position_propagated();
+    test_multi_declarations();
 
     std::printf("\n=== test_vx_parser: %d pasos OK, %d fallidos ===\n",
                 g_passed, g_failed);

@@ -518,6 +518,22 @@ Token Lexer::lex_number() {
     // mintiendo a quien viniera de C.
     TokenKind suffix = TokenKind::END_OF_FILE;
     auto read_type_suffix = [&](bool floaty) {
+        /* El `_` que separa el numero del sufijo (`1e-16_f64`) es el mismo
+         * separador de digitos de siempre.  Las partes entera y decimal ya se
+         * lo comen en su bucle, pero el exponente -- decimal o el `p` de un
+         * flotante hexadecimal -- no: el sufijo llegaba como `_f64` y se
+         * rechazaba justo en las constantes que mas lo necesitan (epsilones,
+         * minimos).  Solo se salta si detras hay una LETRA: un `_` suelto o
+         * seguido de digitos no es cosa del sufijo. */
+        {
+            size_t after = pos_;
+            while (after < source_.size() && source_[after] == '_') ++after;
+            if (after > pos_ && after < source_.size() &&
+                std::isalpha((unsigned char)source_[after])) {
+                column_ += (uint32_t)(after - pos_);
+                pos_ = after;
+            }
+        }
         // El sufijo va pegado al numero, asi que se lee como un identificador.
         size_t end = pos_;
         while (end < source_.size()) {

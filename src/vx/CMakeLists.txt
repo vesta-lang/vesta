@@ -90,6 +90,12 @@ add_library(vx_lib STATIC
     lexer.cpp
     ast.cpp
     parser.cpp
+    # Por donde se entra a una sentencia (sola o en lista), las declaraciones
+    # de variable -- varios nombres en una -- y el `for`, con su inicializador
+    # y sus pasos en lista.  Fuera del monolito del parser.
+    parser/statement_entry.cpp
+    parser/var_declarators.cpp
+    parser/for_stmt.cpp
     # Que declara el modulo, indexado UNA vez.  Buscar una declaracion por
     # nombre estaba escrito a mano, con un recorrido del modulo entero, en 33
     # sitios del frontend; varios corren por cada identificador del programa.
@@ -237,6 +243,12 @@ add_library(vx_lib STATIC
     # serian dos criterios, y el sintoma es que el mismo programa compila o no
     # segun como se escriba la llamada.
     ufcs_resolve.cpp
+    # La llamada a una funcion de un namespace importado (`ns.f()`,
+    # `a.b.f()`): una sola comprobacion para las dos formas.
+    ns_call.cpp
+    # Una funcion de namespace y el builtin de su nombre, en un solo conjunto
+    # de sobrecargas (el aplanado las separaba y la del namespace lo ocultaba).
+    builtin_homonyms.cpp
     # Y la pregunta al REVES: no "que funcion es esta llamada", sino "que se
     # puede llamar sobre este tipo desde aqui".  La usan la introspeccion
     # comptime (`scoped_method_*`) y el `.` del editor -- un productor, dos

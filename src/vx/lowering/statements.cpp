@@ -1141,8 +1141,9 @@ void Lowering::lower_for(ast::ForStmt *s) {
     //   exit  (target de break; tras el loop, las vars vuelven a SSA
     //   leyendo del slot)
     push_scope();
-    if (s->init) {
-        lower_stmt(s->init.get());
+    // El inicializador, en orden: lo declarado vive en el alcance del `for`.
+    for (const auto &in : s->init) {
+        lower_stmt(in.get());
         if (block_terminated_) {
             pop_scope();
             return;
@@ -1153,7 +1154,8 @@ void Lowering::lower_for(ast::ForStmt *s) {
     std::set<std::string> modified;
     if (s->cond) collect_assigned_vars(s->cond.get(), modified);
     if (s->body) collect_assigned_vars(s->body.get(), modified);
-    if (s->step) collect_assigned_vars(s->step.get(), modified);
+    for (const auto &sp : s->step)
+        collect_assigned_vars(sp.get(), modified);
 
     // Para cada var: alocar slot, STORE el valor inicial, marcarla como
     // address-taken, bindear el name al addr.  Las lecturas usaran LOAD
@@ -1252,8 +1254,10 @@ void Lowering::lower_for(ast::ForStmt *s) {
 
     current_block_ = step_id;
     block_terminated_ = false;
-    if (s->step) {
-        (void)lower_expr(s->step.get());
+    // Los pasos, en el orden en que se escribieron.
+    for (const auto &sp : s->step) {
+        if (block_terminated_) break;
+        (void)lower_expr(sp.get());
     }
     if (!block_terminated_) {
         const ir::IrBlockId step_end_id = current_block_;

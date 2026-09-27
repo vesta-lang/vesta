@@ -3,21 +3,619 @@
 // namespace).  Uso:  import std.math;  f64 h = std.math.hypot(3.0, 4.0);
 namespace std.math;
 
-/// Hipotenusa: raiz de la suma de cuadrados.
-public f64 hypot(f64 a, f64 b) => sqrt(a * a + b * b);
 
-/// Interpolacion lineal entre a y b por t en [0, 1].
-public f64 lerp(f64 a, f64 b, f64 t) => a + (b - a) * t;
+// ---------------------------------------------------------------------------
+// Constantes (f64)
+// ---------------------------------------------------------------------------
 
-/// Maximo de tres enteros.
-public i64 imax3(i64 a, i64 b, i64 c) => imax(imax(a, b), c);
+/**
+ * @brief
+ * \~english Ratio of a circle's circumference to its diameter (π).
+ * \~spanish Razon entre la circunferencia de un circulo y su diametro (π).
+ * \~
+ */
+public const f64 PI = 3.14159265358979323846_f64;
 
-/// Minimo de tres enteros.
-public i64 imin3(i64 a, i64 b, i64 c) => imin(imin(a, b), c);
+/**
+ * @brief
+ * \~english Half of @ref PI (π/2). Common right angle in radians.
+ * \~spanish Mitad de @ref PI (π/2). Angulo recto habitual en radianes.
+ * \~
+ */
+public const f64 PI_2 = 1.57079632679489661923_f64;
 
-/// Restringe x al rango [lo, hi] (enteros).
-public i64 iclamp(i64 x, i64 lo, i64 hi) {
-	if (x < lo) { return lo; }
-	if (x > hi) { return hi; }
-	return x;
+/**
+ * @brief
+ * \~english A quarter of @ref PI (π/4).
+ * \~spanish Un cuarto de @ref PI (π/4).
+ * \~
+ */
+public const f64 PI_4 = 0.78539816339744830962_f64;
+
+/**
+ * @brief
+ * \~english Reciprocal of @ref PI (1/π).
+ * \~spanish Inverso de @ref PI (1/π).
+ * \~
+ */
+public const f64 INV_PI = 0.31830988618379067154_f64;
+
+/**
+ * @brief
+ * \~english Reciprocal of @ref TAU (1/(2π)). Useful when normalizing by a full turn.
+ * \~spanish Inverso de @ref TAU (1/(2π)). Util al normalizar por una vuelta completa.
+ * \~
+ */
+public const f64 INV_2PI = 0.15915494309189533577_f64;
+
+/**
+ * @brief
+ * \~english log₂(e). Multiply ln(x) by this to obtain log₂(x).
+ * \~spanish log₂(e). Multiplicar ln(x) por esto para obtener log₂(x).
+ * \~
+ */
+public const f64 LOG2E = 1.44269504088896340736_f64;
+
+/**
+ * @brief
+ * \~english log₁₀(e). Multiply ln(x) by this to obtain log₁₀(x).
+ * \~spanish log₁₀(e). Multiplicar ln(x) por esto para obtener log₁₀(x).
+ * \~
+ */
+public const f64 LOG10E = 0.43429448190325182765_f64;
+
+/**
+ * @brief
+ * \~english Square root of 3. Frequent in equilateral triangles and hexagonal grids.
+ * \~spanish Raiz cuadrada de 3. Frecuente en triangulos equilateros y rejillas hexagonales.
+ * \~
+ */
+public const f64 SQRT3 = 1.73205080756887729353_f64;
+
+/**
+ * @brief
+ * \~english Golden ratio φ = (1+√5)/2.
+ * \~spanish Numero aureo φ = (1+√5)/2.
+ * \~
+ */
+public const f64 PHI = 1.61803398874989484820_f64;
+
+/**
+ * @brief
+ * \~english Reciprocal of the golden ratio, 1/φ = φ − 1.
+ * \~spanish Inverso del numero aureo, 1/φ = φ − 1.
+ * \~
+ */
+public const f64 INV_PHI = 0.61803398874989484820_f64;
+
+/**
+ * @brief
+ * \~english Machine epsilon for `f64`: difference between 1.0 and the next
+ * representable value. For relative tolerances, not a universal absolute epsilon.
+ * \~spanish Epsilon de maquina de `f64`: diferencia entre 1.0 y el siguiente
+ * valor representable. Para tolerancias relativas, no un epsilon absoluto universal.
+ * \~
+ */
+public const f64 F64_EPS = 2.22044604925031308085e-16_f64;
+
+/**
+ * @brief
+ * \~english Full turn in radians (2π).
+ * \~spanish Vuelta completa en radianes (2π).
+ * \~
+ */
+public const f64 TAU = 6.28318530717958647692_f64;
+
+/**
+ * @brief
+ * \~english Base of the natural logarithm (e).
+ * \~spanish Base del logaritmo natural (e).
+ * \~
+ */
+public const f64 E = 2.71828182845904523536_f64;
+
+/**
+ * @brief
+ * \~english Natural log of 2, ln(2).
+ * \~spanish Logaritmo natural de 2, ln(2).
+ * \~
+ */
+public const f64 LN2 = 0.69314718055994530942_f64;
+
+/**
+ * @brief
+ * \~english Natural log of 10, ln(10).
+ * \~spanish Logaritmo natural de 10, ln(10).
+ * \~
+ */
+public const f64 LN10 = 2.302585092994046_f64;
+
+/**
+ * @brief
+ * \~english Square root of 2.
+ * \~spanish Raiz cuadrada de 2.
+ * \~
+ */
+public const f64 SQRT2 = 1.41421356237309504880_f64;
+
+/**
+ * @brief
+ * \~english Square root of 1/2 (1/@ref SQRT2).
+ * \~spanish Raiz cuadrada de 1/2 (1/@ref SQRT2).
+ * \~
+ */
+public const f64 SQRT1_2 = 0.70710678118654752440_f64;
+
+/**
+ * @brief
+ * \~english Degrees to radians multiplier (π/180).
+ * \~spanish Factor de grados a radianes (π/180).
+ * \~
+ */
+public const f64 DEG2RAD = 0.01745329251994329577_f64;
+
+/**
+ * @brief
+ * \~english Radians to degrees multiplier (180/π).
+ * \~spanish Factor de radianes a grados (180/π).
+ * \~
+ */
+public const f64 RAD2DEG = 57.2957795130823208768_f64;
+
+/**
+ * @brief
+ * \~english Smallest value of the signed integer type @p T; 0 for unsigned
+ *   integers and floats.  Computed at compile time from the size of @p T.
+ * \~spanish Menor valor del entero con signo @p T; 0 para los enteros sin
+ *   signo y los reales.  Se calcula al compilar a partir del tamano de @p T.
+ * \~
+ */
+comptime i64 signed_min<T>() {
+	if (type.is_integer<T>() && type.is_signed<T>()) {
+		return -(1_i64 << (8 * (i64)type.size<T>() - 1));
+	}
+	return 0_i64;
 }
+
+/**
+ * @brief
+ * \~english True if @p a / @p b is not defined for @p T: division by zero
+ *   (also 0.0 for floats), or MIN / -1 for signed integers, whose result does
+ *   not fit and traps in hardware.
+ * \~spanish Cierto si @p a / @p b no esta definida para @p T: dividir por cero
+ *   (tambien 0.0 en reales), o MIN / -1 en enteros con signo, cuyo resultado
+ *   no cabe y el hardware lo convierte en una trampa.
+ * \~
+ */
+bool division_undefined<T>(in T a, in T b) {
+	if (b == 0) return true;
+	return type.is_integer<T>() && type.is_signed<T>() &&
+		a == signed_min<T>() && b == -1;
+}
+
+/**
+ * @brief
+ * \~english Sum of @p a and @p b, of their type.
+ * \~spanish Suma de @p a y @p b, de su tipo.
+ * \~
+ */
+public T add<T>(in T a, in T b) => a + b;
+
+/**
+ * @brief
+ * \~english Difference @p a - @p b, of their type.
+ * \~spanish Diferencia @p a - @p b, de su tipo.
+ * \~
+ */
+public T sub<T>(in T a, in T b) => a - b;
+
+/**
+ * @brief
+ * \~english Product of @p a and @p b, of their type.
+ * \~spanish Producto de @p a y @p b, de su tipo.
+ * \~
+ */
+public T mul<T>(in T a, in T b) => a * b;
+
+/**
+ * @brief
+ * \~english Quotient @p a / @p b, or None when it is not defined (see
+ *   division_undefined).  Integers truncate toward zero.
+ * \~spanish Cociente @p a / @p b, o None cuando no esta definido (ver
+ *   division_undefined).  Los enteros truncan hacia cero.
+ * \~
+ */
+public Optional<T> div<T>(in T a, in T b) {
+	if (division_undefined(a, b)) return None();
+	return Some(a / b);
+}
+
+/**
+ * @brief
+ * \~english Remainder of @p a / @p b, with the sign of @p a, or None when the
+ *   division is not defined (see division_undefined).
+ * \~spanish Resto de @p a / @p b, con el signo de @p a, o None cuando la
+ *   division no esta definida (ver division_undefined).
+ * \~
+ */
+public Optional<T> mod<T>(in T a, in T b) {
+	if (division_undefined(a, b)) return None();
+	return Some(a % b);
+}
+
+
+// ---------------------------------------------------------------------------
+// Clasificacion / signos
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief
+ * \~english Integer sign of @p x: -1, 0, or 1.
+ * \~spanish Signo entero de @p x: -1, 0 o 1.
+ * \~
+ *
+ * @param  x \~english Value to classify.  \~spanish Valor a clasificar.  \~
+ * @return   \~english -1 if @p x < 0, 1 if @p x > 0, otherwise 0.  \~spanish -1 si @p x < 0, 1 si @p x > 0; si no, 0.  \~
+ */
+public i64 sign(in i64 x) {
+	if (x > 0) { return 1; }
+	if (x < 0) { return -1; }
+	return 0;
+}
+
+/**
+ * @brief
+ * \~english Floating sign of @p x: -1.0, 0.0, or 1.0.
+ * \~spanish Signo en coma flotante de @p x: -1.0, 0.0 o 1.0.
+ * \~
+ *
+ * \~english
+ * Does not implement IEEE `copysign` or NaN-aware signbit; comparisons decide.
+ *
+ * \~spanish
+ * No implementa el `copysign` de IEEE ni signbit consciente de NaN; deciden las
+ * comparaciones.
+ * \~
+ *
+ * @param  x \~english Value to classify.  \~spanish Valor a clasificar.  \~
+ * @return   \~english -1.0, 0.0, or 1.0 as for @ref isign.  \~spanish -1.0, 0.0 o 1.0 como en @ref isign.  \~
+ */
+public f64 sign(in f64 x) {
+	if (x > 0.0) { return 1.0; }
+	if (x < 0.0) { return -1.0; }
+	return 0.0;
+}
+
+/**
+ * @brief
+ * \~english Whether @p x is even.
+ * \~spanish Si @p x es par.
+ * \~
+ *
+ * @param  x \~english Integer value.  \~spanish Valor entero.  \~
+ * @return   \~english true if @p x is divisible by 2.  \~spanish true si @p x es divisible por 2.  \~
+ */
+public bool is_even(in i64 x) => (x & 1) == 0;
+
+/**
+ * @brief
+ * \~english Whether @p x is odd.
+ * \~spanish Si @p x es impar.
+ * \~
+ *
+ * @param  x \~english Integer value.  \~spanish Valor entero.  \~
+ * @return   \~english true if @p x is not divisible by 2.  \~spanish true si @p x no es divisible por 2.  \~
+ */
+public bool is_odd(in i64 x) => (x & 1) != 0;
+
+
+// ---------------------------------------------------------------------------
+// Min / max / clamp
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief
+ * \~english Minimum of three `i64` values.
+ * \~spanish Minimo de tres valores `i64`.
+ * \~
+ */
+public i64 min3(in i64 a, in i64 b, in i64 c) => min(min(a, b), c);
+
+/**
+ * @brief
+ * \~english Maximum of three `i64` values.
+ * \~spanish Maximo de tres valores `i64`.
+ * \~
+ */
+public i64 max3(in i64 a, in i64 b, in i64 c) => max(max(a, b), c);
+
+/**
+ * @brief
+ * \~english Minimum of three `f64` values.
+ * \~spanish Minimo de tres valores `f64`.
+ * \~
+ */
+public f64 min3(in f64 a, in f64 b, in f64 c) => min(a, b).min(c);
+
+/**
+ * @brief
+ * \~english Maximum of three `f64` values.
+ * \~spanish Maximo de tres valores `f64`.
+ * \~
+ */
+public f64 max3(in f64 a, in f64 b, in f64 c) => max(a, b).max(c);
+
+/**
+ * @brief
+ * \~english Clamps @p x to [0, 1]. Same as `clamp(x, 0, 1)`.
+ * \~spanish Restringe @p x a [0, 1]. Igual que `clamp(x, 0, 1)`.
+ * \~
+ */
+public f64 saturate(in f64 x) => clamp(x, 0.0, 1.0);
+
+
+// ---------------------------------------------------------------------------
+// Interpolacion y curvas
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief
+ * \~english Linear interpolation: @p a + (@p b - @p a) * @p t.  @p t is not saturated.
+ * \~spanish Interpolacion lineal: @p a + (@p b - @p a) * @p t.  @p t no se satura.
+ * \~
+ *
+ * @param  a \~english Start value (t = 0).  \~spanish Valor inicial (t = 0).  \~
+ * @param  b \~english End value (t = 1).  \~spanish Valor final (t = 1).  \~
+ * @param  t \~english Mix factor; may lie outside [0, 1].  \~spanish Factor de mezcla; puede salir de [0, 1].  \~
+ */
+public f64 lerp(in f64 a, in f64 b, in f64 t) => a + (b - a) * t;
+
+/**
+ * @brief
+ * \~english @ref lerp with @p t saturated to [0, 1].
+ * \~spanish @ref lerp con @p t saturado a [0, 1].
+ * \~
+ */
+public f64 lerp_clamped(in f64 a, in f64 b, in f64 t) =>
+	lerp(a, b, saturate(t));
+
+/**
+ * @brief
+ * \~english Factor @c t such that @p x = lerp(@p a, @p b, t).  If @p a == @p b, returns 0.
+ * \~spanish Factor @c t tal que @p x = lerp(@p a, @p b, t).  Si @p a == @p b, devuelve 0.
+ * \~
+ *
+ * @param  a \~english Interval start.  \~spanish Inicio del intervalo.  \~
+ * @param  b \~english Interval end.  \~spanish Fin del intervalo.  \~
+ * @param  x \~english Value to express as a mix of @p a and @p b.  \~spanish Valor a expresar como mezcla de @p a y @p b.  \~
+ */
+public f64 unlerp(in f64 a, in f64 b, in f64 x) {
+	f64 d = b - a;
+	if (d == 0.0) { return 0.0; }
+	return (x - a) / d;
+}
+
+/**
+ * @brief
+ * \~english Hermite smoothstep on [@p edge0, @p edge1] with saturated @c t.
+ * \~spanish Smoothstep de Hermite en [@p edge0, @p edge1] con @c t saturado.
+ * \~
+ *
+ * \~english
+ * Maps @p x into [0, 1] via @ref unlerp and @ref saturate, then applies
+ * `t²(3 - 2t)`.
+ *
+ * \~spanish
+ * Lleva @p x a [0, 1] con @ref unlerp y @ref saturate, y aplica `t²(3 - 2t)`.
+ * \~
+ */
+public f64 smoothstep(in f64 edge0, in f64 edge1, in f64 x) {
+	f64 t = saturate(unlerp(edge0, edge1, x));
+	return t * t * (3.0 - 2.0 * t);
+}
+
+/**
+ * @brief
+ * \~english Unit step: 0.0 if @p x < @p edge, otherwise 1.0.
+ * \~spanish Escalón unidad: 0.0 si @p x < @p edge; si no, 1.0.
+ * \~
+ */
+public f64 step(in f64 edge, in f64 x) => x < edge ? 0.0 : 1.0;
+
+/**
+ * @brief
+ * \~english Same as @ref lerp (GLSL-style name).
+ * \~spanish Igual que @ref lerp (nombre al estilo GLSL).
+ * \~
+ */
+public f64 mix(in f64 a, in f64 b, in f64 t) => lerp(a, b, t);
+
+
+// ---------------------------------------------------------------------------
+// Geometria 2D
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief
+ * \~english Hypotenuse: sqrt(a² + b²). Naive form; not overflow-hardened like libm.
+ * \~spanish Hipotenusa: sqrt(a² + b²). Forma ingenua; sin endurecer overflow como libm.
+ * \~
+ */
+public f64 hypot(in f64 a, in f64 b) => sqrt(a * a + b * b);
+
+/**
+ * @brief
+ * \~english Euclidean distance between 2D points (@p x0,@p y0) and (@p x1,@p y1).
+ * \~spanish Distancia euclidea entre puntos 2D (@p x0,@p y0) y (@p x1,@p y1).
+ * \~
+ *
+ * \~english
+ * The name means “distance in 2D”, not “distance squared”.
+ *
+ * \~spanish
+ * El nombre significa “distancia en 2D”, no “distancia al cuadrado”.
+ * \~
+ */
+public f64 dist2(in f64 x0, in f64 y0, in f64 x1, in f64 y1) {
+	f64 dx = x1 - x0, dy = y1 - y0;
+	return hypot(dx, dy);
+}
+
+/**
+ * @brief
+ * \~english 2D dot product of (ax, ay) and (bx, by).
+ * \~spanish Producto escalar 2D de (ax, ay) y (bx, by).
+ * \~
+ */
+public f64 dot2(in f64 ax, in f64 ay, in f64 bx, in f64 by) =>
+	ax * bx + ay * by;
+
+/**
+ * @brief
+ * \~english L2 length of the 2D vector (@p x, @p y). Same as @ref hypot(@p x, @p y).
+ * \~spanish Norma L2 del vector 2D (@p x, @p y). Igual que @ref hypot(@p x, @p y).
+ * \~
+ *
+ * \~english
+ * Not “length squared”; that would omit the square root.
+ *
+ * \~spanish
+ * No es “longitud al cuadrado”; eso omitiria la raiz.
+ * \~
+ */
+public f64 length2(in f64 x, in f64 y) => hypot(x, y);
+
+
+// ---------------------------------------------------------------------------
+// Angulos
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief
+ * \~english Converts degrees to radians (@p deg * @ref DEG2RAD).
+ * \~spanish Convierte grados a radianes (@p deg * @ref DEG2RAD).
+ * \~
+ */
+public f64 to_radians(in f64 deg) => deg * DEG2RAD;
+
+/**
+ * @brief
+ * \~english Converts radians to degrees (@p rad * @ref RAD2DEG).
+ * \~spanish Convierte radianes a grados (@p rad * @ref RAD2DEG).
+ * \~
+ */
+public f64 to_degrees(in f64 rad) => rad * RAD2DEG;
+
+/**
+ * @brief
+ * \~english Wraps an angle in radians into the interval (-π, π].
+ * \~spanish Normaliza un angulo en radianes al intervalo (-π, π].
+ * \~
+ *
+ * \~english
+ * Uses repeated add/sub of @ref TAU. Prefer a remainder against @ref TAU when
+ * available for large magnitudes.
+ *
+ * \~spanish
+ * Usa sumas/restas repetidas de @ref TAU. Preferir un resto respecto a @ref TAU
+ * cuando exista, para magnitudes grandes.
+ * \~
+ */
+public f64 wrap_pi(in f64 rad) {
+	f64 r = rad;
+	while (r > PI) { r -= TAU; }
+	while (r <= -PI) { r += TAU; }
+	return r;
+}
+
+
+// ---------------------------------------------------------------------------
+// Enteros
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief
+ * \~english Integer average of @p a and @p b toward zero without computing @c a+b.
+ * \~spanish Promedio entero de @p a y @p b hacia cero sin calcular @c a+b.
+ * \~
+ *
+ * \~english
+ * Uses `(a & b) + ((a ^ b) >> 1)` so intermediate sum overflow is avoided when
+ * both fit in `i64`.
+ *
+ * \~spanish
+ * Usa `(a & b) + ((a ^ b) >> 1)` para evitar el overflow de la suma intermedia
+ * cuando ambos caben en `i64`.
+ * \~
+ */
+public i64 avg(in i64 a, in i64 b) => (a & b) + ((a ^ b) >> 1);
+
+/**
+ * @brief
+ * \~english Integer power @p base^@p exp for @p exp >= 0 (exponentiation by squaring).
+ * \~spanish Potencia entera @p base^@p exp con @p exp >= 0 (exponenciacion por cuadrados).
+ * \~
+ *
+ * \~english
+ * If @p exp < 0 returns 0 (policy placeholder; a panic may be preferable).
+ *
+ * \~spanish
+ * Si @p exp < 0 devuelve 0 (politica provisional; un panic puede ser preferible).
+ * \~
+ */
+public i64 pow(in i64 base, in i64 exp) {
+	if (exp < 0) { return 0; }
+	i64 r = 1_i64;
+	for (i64 b = base, e = exp; e > 0; e >>= 1, b *= b) {
+		if ((e & 1) != 0) {
+			r *= b;
+		}
+	}
+	return r;
+}
+
+/**
+ * @brief
+ * \~english Ceiling division: ceil(@p n / @p d) for @p d > 0 and @p n >= 0.
+ * \~spanish Division hacia arriba: ceil(@p n / @p d) con @p d > 0 y @p n >= 0.
+ * \~
+ *
+ * \~english
+ * Formula `(n + d - 1) / d`. Signs other than non-negative n and positive d are
+ * not defined here.
+ *
+ * \~spanish
+ * Formula `(n + d - 1) / d`. Otros signos distintos de n no negativo y d positivo
+ * no se definen aqui.
+ * \~
+ */
+public i64 div_ceil(in i64 n, in i64 d) => (n + d - 1) / d;
+
+/**
+ * @brief
+ * \~english Rounds @p x up to a multiple of @p a; @p a must be a power of two.
+ * \~spanish Alinea @p x hacia arriba a un multiplo de @p a; @p a debe ser potencia de dos.
+ * \~
+ */
+public i64 align_up(in i64 x, in i64 a) => (x + a - 1) & ~(a - 1);
+
+/**
+ * @brief
+ * \~english Whether @p x is a power of two (@p x > 0).
+ * \~spanish Si @p x es potencia de dos (@p x > 0).
+ * \~
+ */
+public bool is_pow2(in i64 x) => x > 0 && (x & (x - 1)) == 0;
+
+
+// ---------------------------------------------------------------------------
+// f64
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief
+ * \~english Fractional part: @p x - floor(@p x). Requires a `floor` builtin.
+ * \~spanish Parte fraccionaria: @p x - floor(@p x). Requiere el builtin `floor`.
+ * \~
+ */
+public f64 fract(in f64 x) => x - floor(x);

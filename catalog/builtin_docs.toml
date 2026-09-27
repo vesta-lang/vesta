@@ -511,14 +511,9 @@ en = "Power base^exp."
 es = "Potencia base^exp."
 
 ["abs"]
-sig = "abs(x: f64) -> f64"
-en = "Absolute value (f64)."
-es = "Valor absoluto (f64)."
-
-["fabs"]
-sig = "fabs(x: f64) -> f64"
-en = "Absolute value (f64)."
-es = "Valor absoluto (f64)."
+sig = "abs(x: T) -> T"
+en = "Absolute value, of the argument's numeric type (an unsigned value is returned as is)."
+es = "Valor absoluto, del tipo numerico del argumento (un valor sin signo se devuelve tal cual)."
 
 ["floor"]
 sig = "floor(x: f64) -> f64"
@@ -570,40 +565,20 @@ sig = "tan(x: f64) -> f64"
 en = "Tangent (radians)."
 es = "Tangente (radianes)."
 
-["fmin"]
-sig = "fmin(a: f64, b: f64) -> f64"
-en = "Minimum of two f64."
-es = "Minimo de dos f64."
+["min"]
+sig = "min(a: T, b: T) -> T"
+en = "Minimum of two numbers, of their type: min(i32, i32) is an i32 and min(f32, f32) an f32; mixed types meet at the one that loses nothing."
+es = "Minimo de dos numeros, de su tipo: min(i32, i32) es un i32 y min(f32, f32) un f32; con tipos mezclados se usa el que no pierde nada."
 
-["fmax"]
-sig = "fmax(a: f64, b: f64) -> f64"
-en = "Maximum of two f64."
-es = "Maximo de dos f64."
+["max"]
+sig = "max(a: T, b: T) -> T"
+en = "Maximum of two numbers, of their type (see min)."
+es = "Maximo de dos numeros, de su tipo (ver min)."
 
 ["clamp"]
-sig = "clamp(x: f64, lo: f64, hi: f64) -> f64"
-en = "Clamps x to the range [lo, hi]."
-es = "Acota x al rango [lo, hi]."
-
-["imin"]
-sig = "imin(a: i64, b: i64) -> i64"
-en = "Minimum of two signed integers."
-es = "Minimo de dos enteros con signo."
-
-["imax"]
-sig = "imax(a: i64, b: i64) -> i64"
-en = "Maximum of two signed integers."
-es = "Maximo de dos enteros con signo."
-
-["iminu"]
-sig = "iminu(a: u64, b: u64) -> u64"
-en = "Minimum of two unsigned integers."
-es = "Minimo de dos enteros sin signo."
-
-["imaxu"]
-sig = "imaxu(a: u64, b: u64) -> u64"
-en = "Maximum of two unsigned integers."
-es = "Maximo de dos enteros sin signo."
+sig = "clamp(x: T, lo: T, hi: T) -> T"
+en = "Clamps x to the range [lo, hi], of the arguments' numeric type: min(max(x, lo), hi)."
+es = "Acota x al rango [lo, hi], del tipo numerico de los argumentos: min(max(x, lo), hi)."
 
 ["ilog2"]
 sig = "ilog2(x: u64) -> u64"

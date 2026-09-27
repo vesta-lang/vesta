@@ -1,0 +1,21 @@
+/**
+ * @file 602_neg_generico_const.vx
+ * @brief Una plantilla que escribe por un `const T*` no compila, igual que la
+ *        misma funcion sin parametros de tipo.
+ *
+ * Al instanciar una plantilla se clona su firma sustituyendo `T`, y el clon
+ * copiaba solo la FORMA del tipo: el `const` se quedaba por el camino.  La
+ * version generica de una funcion que escribe por un puntero de solo lectura
+ * compilaba, y la que no era generica no.  Lo mismo pasaba con `nonnull`,
+ * `volatile`, `VirtualPtr<T>` y los tipos funcion variadicos.
+ */
+
+void put<T>(const T * p, T v) {
+	*p = v;
+}
+
+i32 main() {
+	i64 x = 1_i64;
+	put<i64>(&x, 5);
+	return (i32)x;
+}

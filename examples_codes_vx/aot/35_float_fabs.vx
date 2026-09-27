@@ -1,6 +1,6 @@
 // AOT float SSE2: FABS (valor absoluto via ANDPS, mascara ~signbit).
 // El valor negativo se deriva por recursion (runtime) para que el
-// optimizador NO constant-foldee el fabs y el codegen ANDPS se ejerza
+// optimizador NO constant-foldee el abs y el codegen ANDPS se ejerza
 // de verdad.  FNEG (XORPS) tambien se valida de paso.
 
 // Suma recursiva: produce un valor float runtime (no foldable).
@@ -9,7 +9,7 @@ f64 fsum(i64 n, f64 acc, f64 step) {
 	return fsum(n - 1, acc + step, step);
 }
 
-f64 myabs(f64 x) => fabs(x); // -> IrOp::FABS -> ANDPS
+f64 myabs(f64 x) => abs(x); // de reales: IrOp::FABS -> ANDPS
 
 i32 main() {
 	f64 neg = fsum(4, 0.0, -2.5); // -10.0 (runtime)

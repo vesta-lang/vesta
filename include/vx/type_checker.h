@@ -4522,6 +4522,44 @@ class TypeChecker {
     uint32_t select_ns_overload(const ImportedNamespace &ns,
                                 const std::string &name, ast::CallExpr *e);
 
+    /**
+     * @brief Comprueba una llamada `ns.f(...)` contra la funcion elegida del
+     *        namespace y anota lo que el bajado necesita.
+     *
+     * Los argumentos se comprueban con @c check_call_arg, la MISMA regla que
+     * una llamada local.  Las dos rutas de llamada por namespace -- `ns.f()` y
+     * `a.b.f()` -- tenian cada una su copia y ninguna miraba los tipos: si no
+     * encajaba ninguna sobrecarga, se llamaba a la primera en silencio y un
+     * `f64` entraba en la de enteros.
+     *
+     * @param e      La llamada.
+     * @param fa     Su callee, `ns.f`.
+     * @param ns_idx El namespace, en @c imported_namespaces_.
+     * @param picked La funcion elegida, en @c ns.symbols.
+     * @param shown  Como se escribio el namespace, para los mensajes.
+     * @return El tipo del resultado.
+     */
+    Type check_ns_call_(ast::CallExpr *e, ast::FieldAccessExpr *fa,
+                        uint32_t ns_idx, uint32_t picked,
+                        const std::string &shown);
+
+    /**
+     * @brief Une una funcion de NAMESPACE con el builtin de su mismo nombre en
+     *        un solo conjunto de sobrecargas.
+     *
+     * El aplanado renombra la funcion y sus llamadas (`clamp` ->
+     * `std__math__clamp`) antes de comprobar nada, asi que el builtin no
+     * competia: la del namespace lo OCULTABA, y `clamp(x, 0.0, 1.0)` con un f64
+     * iba a la de enteros.  Aqui se hace lo mismo que arriba del todo (una
+     * funcion del usuario con nombre de builtin se sobrecarga con el): las dos
+     * compiten y gana la que encaja.  Una con los MISMOS tipos y ranuras que
+     * el builtin es una redefinicion, como arriba.
+     *
+     * @param fn        La funcion, ya declarada con su nombre aplanado.
+     * @param sig_index Su firma.
+     */
+    void join_builtin_homonyms_(ast::FunctionDecl *fn, uint32_t sig_index);
+
   private:
     std::vector<ImportedNamespace> imported_namespaces_;
 

@@ -111,11 +111,12 @@ static bool reorder_named(const Candidate &c, const std::vector<Type> &args,
  * que es otra cosa.  Juntas eran cuatro niveles de anidamiento y un `continue`
  * que habia que seguir con el dedo.
  *
- * @param exact true en la pasada estricta: el tipo tiene que ser EL MISMO, no
- *              uno al que se pueda convertir.
+ * @param pass 0 = el tipo tiene que ser EL MISMO; 1 = los numeros solo pueden
+ *             AMPLIARSE (ver @c is_lossless_conversion) y lo demas se
+ *             convierte como siempre; 2 = cualquier conversion admitida.
  */
 static bool candidate_fits(const Candidate &c, const std::vector<Type> &args,
-                           bool exact, AcceptsFn accepts, void *ctx) {
+                           int pass, AcceptsFn accepts, void *ctx) {
     const std::vector<Type> &p = *c.params;
     const Type *elem = c.variadic_elem;
     const bool open = elem != nullptr || c.raw_variadic;
@@ -142,8 +143,15 @@ static bool candidate_fits(const Candidate &c, const std::vector<Type> &args,
             k < fixed && k < 64 && (c.by_ref_mask & (1ull << k)) != 0;
         const Type &expected =
             (by_ref && declared.pointee) ? *declared.pointee : declared;
-        if (!(exact ? (expected == args[k]) : accepts(ctx, expected, args[k])))
+        if (expected == args[k]) continue;
+        if (pass == 0) return false;
+        /* En la pasada intermedia, un numero que se convierte a otro tiene que
+         * conservar su valor: es la que evita que `f(i32, i64)` acabe en la
+         * de `(i32, i32)` solo por estar declarada antes. */
+        if (pass == 1 && is_numeric(expected.kind) && is_numeric(args[k].kind) &&
+            !is_lossless_conversion(args[k].kind, expected.kind))
             return false;
+        if (!accepts(ctx, expected, args[k])) return false;
     }
     return true;
 }
@@ -156,7 +164,11 @@ uint32_t select(const Candidate *cands, size_t n, const std::vector<Type> &args,
      * el caso normal, esto es una sonda a un puntero y el camino de siempre. */
     const bool named = arg_names != nullptr && !arg_names->empty();
     std::vector<Type> reordered;
-    for (int pass = 0; pass < 2; ++pass) {
+    /* TRES pasadas: exacta; luego la que solo AMPLIA numeros; y solo si no hay
+     * ninguna, la primera que admita conversion aunque pierda -- que el bajado
+     * avisa --.  Con dos, `f(i32, i64)` elegia la de `(i32, i32)` declarada
+     * primero y truncaba el i64: otro valor, con un aviso como unica pista. */
+    for (int pass = 0; pass < 3; ++pass) {
         /* La que va ganando, cuando hay una hermana que toma LO MISMO y podria
          * encajar tambien.  En el caso normal no llega a usarse: la primera que
          * encaja se devuelve y el recorrido acaba ahi. */
@@ -184,7 +196,7 @@ uint32_t select(const Candidate *cands, size_t n, const std::vector<Type> &args,
                         continue;
                     use = &reordered;
                 }
-                if (!candidate_fits(c, *use, pass == 0, accepts, ctx)) continue;
+                if (!candidate_fits(c, *use, pass, accepts, ctx)) continue;
                 /* El caso normal: la primera que encaja ES la respuesta, y el
                  * recorrido acaba aqui.  Solo cuando hay una hermana que toma
                  * LO MISMO se sigue mirando, para poder DECIR que la llamada no

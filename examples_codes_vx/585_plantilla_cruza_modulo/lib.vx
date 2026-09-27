@@ -48,6 +48,27 @@ public i64 mide<T>(T * p) {
 	return escala_publica(escala_privada(v));
 }
 
+/// Una PLANTILLA privada que usa otra publica: la quinta categoria.  Solo las
+/// publicas iban al `.vxi`, asi que la instancia de la publica, que nace en el
+/// consumidor, no la encontraba.  Ahora viaja como ayudante: la publica la ve y
+/// quien importa no puede nombrarla.  El `(T)2` es un cast al parametro de
+/// tipo: el parser tiene que tomarlo por cast aunque `T` no lleve `*` detras.
+T doble_privado<T>(T x) => x * (T)2;
+
+/// @tparam T Tipo del valor.
+/// @param x El valor.
+/// @return Cuatro veces @p x, por la plantilla privada.
+public T cuadruple<T>(T x) => doble_privado(doble_privado(x));
+
+/// Una comptime GENERICA y privada: tambien es plantilla, y tambien tiene que
+/// viajar como ayudante.  Una comptime SIN parametros de tipo no viaja asi (la
+/// baja este modulo), y confundir las dos dejaba a la publica sin su ayudante.
+comptime i64 bits_de<T>() => 8 * (i64)type.size<T>();
+
+/// @tparam T Tipo cuyo ancho se pide.
+/// @return El ancho de @p T en bits, calculado por la comptime privada.
+public i64 ancho_en_bits<T>() => bits_de<T>();
+
 public i64 llamadas() => g_llamadas;
 
 public i64 bytes_vistos() => __g_bytes;

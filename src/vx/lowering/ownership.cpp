@@ -1137,12 +1137,15 @@ void Lowering::scan_address_taken_stmt(ast::Stmt *st, int &depth) {
         // loop esta anidado en una rama condicional.
         if (depth > 0) {
             mark_loop_assigned_vars(f->cond.get());
-            mark_loop_assigned_vars(f->step.get());
+            for (auto &sp : f->step)
+                mark_loop_assigned_vars(sp.get());
             mark_loop_assigned_vars(f->body.get());
         }
-        scan_address_taken_stmt(f->init.get(), depth);
+        for (auto &in : f->init)
+            scan_address_taken_stmt(in.get(), depth);
         scan_address_taken_expr(f->cond.get(), depth);
-        scan_address_taken_expr(f->step.get(), depth);
+        for (auto &sp : f->step)
+            scan_address_taken_expr(sp.get(), depth);
         scan_address_taken_stmt(f->body.get(), depth);
         return;
     }
@@ -1377,9 +1380,11 @@ void Lowering::scan_escaping_stmt(ast::Stmt *st, AliasGraph &alias) {
     }
     case ast::NodeKind::ForStmt: {
         auto *f = static_cast<ast::ForStmt *>(st);
-        scan_escaping_stmt(f->init.get(), alias);
+        for (auto &in : f->init)
+            scan_escaping_stmt(in.get(), alias);
         scan_escaping_expr(f->cond.get(), alias);
-        scan_escaping_expr(f->step.get(), alias);
+        for (auto &sp : f->step)
+            scan_escaping_expr(sp.get(), alias);
         scan_escaping_stmt(f->body.get(), alias);
         return;
     }

@@ -140,9 +140,11 @@ void collect_assigned_vars(const ast::Node *n, std::set<std::string> &out) {
     }
     case ast::NodeKind::ForStmt: {
         auto *f = static_cast<const ast::ForStmt *>(n);
-        collect_assigned_vars(f->init.get(), out);
+        for (const auto &in : f->init)
+            collect_assigned_vars(in.get(), out);
         collect_assigned_vars(f->cond.get(), out);
-        collect_assigned_vars(f->step.get(), out);
+        for (const auto &st : f->step)
+            collect_assigned_vars(st.get(), out);
         collect_assigned_vars(f->body.get(), out);
         return;
     }
@@ -2549,9 +2551,11 @@ bool Lowering::spawn_body_uses_coop(ast::Stmt *s) {
         }
         case ast::NodeKind::ForStmt: {
             auto *f = static_cast<ast::ForStmt *>(st);
-            visit_stmt(f->init.get());
+            for (auto &in : f->init)
+                visit_stmt(in.get());
             visit_expr(f->cond.get());
-            visit_expr(f->step.get());
+            for (auto &sp : f->step)
+                visit_expr(sp.get());
             visit_stmt(f->body.get());
             return;
         }

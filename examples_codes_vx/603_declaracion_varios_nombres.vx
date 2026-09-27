@@ -1,0 +1,80 @@
+/**
+ * @file 603_declaracion_varios_nombres.vx
+ * @brief Una declaracion puede nombrar varias variables, y el `for` puede
+ *        declarar varias y dar varios pasos.
+ *
+ * `f64 dx = a, dy = b;` son dos variables del mismo tipo.  Lo escrito una
+ * vez -- el tipo, `const`, `static` -- vale para todas; las dimensiones
+ * `[N]` y el inicializador son de cada nombre.  Con `auto` cada nombre
+ * infiere el SUYO, asi que un contador y una lambda caben en el mismo `for`.
+ *
+ * En el `for`, el inicializador y los pasos son listas separadas por coma.
+ * Solo ahi: la coma no es un operador del lenguaje, y fuera del `for` separa
+ * argumentos.
+ */
+
+/// Potencia entera por cuadrados: dos variables de bucle, dos pasos.
+i64 ipow(i64 base, i64 exp) {
+	i64 r = 1_i64;
+	for (i64 b = base, e = exp; e > 0; e >>= 1, b *= b) {
+		if ((e & 1) != 0) {
+			r *= b;
+		}
+	}
+	return r;
+}
+
+/// Una funcion que no devuelve nada puede tener por cuerpo `=>` una sentencia
+/// de control: aqui, un `for` de una sola sentencia.
+void llenar(
+	i64* p,
+	i64 n
+) => for (i64 i = 0, v = 10; i < n; i++, v += 10) p[i] = v;
+
+/// Distancia euclidea: dos variables en una declaracion.
+f64 dist2(f64 x0, f64 y0, f64 x1, f64 y1) {
+	f64 dx = x1 - x0, dy = y1 - y0;
+	return sqrt(dx * dx + dy * dy);
+}
+
+i32 main() {
+	if (ipow(3, 4) != 81) return 1;
+	if (dist2(0.0, 0.0, 3.0, 4.0) != 5.0) return 2;
+
+	// `const` vale para los dos nombres.
+	const i64 a = 2, b = 3;
+	if (a + b != 5) return 3;
+
+	// Las dimensiones son de cada nombre: un array y un escalar.
+	i64 tabla[3], extra = 7;
+	tabla[0]            = 1;
+	tabla[1]            = 2;
+	tabla[2]            = 3;
+	if (tabla[0] + tabla[1] + tabla[2] + extra != 13) return 4;
+
+	// Con `auto`, cada nombre infiere su tipo: un i64 y una lambda.
+	i64 vueltas = 0_i64;
+	for (auto i = 1, doble = (i64 v) => v * 2; i < 99; i = doble(i), vueltas++) {
+	}
+	if (vueltas != 7) return 5; // 1, 2, 4, 8, 16, 32, 64
+
+	// Sin tipo delante, el inicializador son expresiones.
+	i64 bajo = 0, alto = 0;
+	for (bajo = 0, alto = 10; bajo < alto; bajo++, alto--) {
+	}
+	if (bajo != 5 || alto != 5) return 6;
+
+	// `auto` en el `for` de siempre.
+	i64 suma = 0_i64;
+	for (auto k = 0; k < 4; k++) {
+		suma += k;
+	}
+	if (suma != 6) return 7;
+
+	// Cuerpo `=>` que es un `for`.
+	i64 datos[3];
+	llenar(&datos[0], 3);
+	if (datos[0] + datos[1] + datos[2] != 60) return 8;
+
+	return 42;
+}

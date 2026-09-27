@@ -21,8 +21,11 @@ struct DocEntry {
 // Ordenadas por nombre para busqueda binaria.
 const DocEntry kEntries[] = {
     {"abs",
-     "abs(x: f64) -> f64",
-     {"Absolute value (f64).", "Valor absoluto (f64)."}},
+     "abs(x: T) -> T",
+     {"Absolute value, of the argument's numeric type (an unsigned value is "
+      "returned as is).",
+      "Valor absoluto, del tipo numerico del argumento (un valor sin signo se "
+      "devuelve tal cual)."}},
     {"as_native_callback",
      "as_native_callback(fn) -> u64",
      {"Adapts a Vesta function into a native C callback pointer.",
@@ -57,8 +60,11 @@ const DocEntry kEntries[] = {
      {"One-character string from the Unicode code point.",
       "Cadena de un caracter desde el codepoint Unicode."}},
     {"clamp",
-     "clamp(x: f64, lo: f64, hi: f64) -> f64",
-     {"Clamps x to the range [lo, hi].", "Acota x al rango [lo, hi]."}},
+     "clamp(x: T, lo: T, hi: T) -> T",
+     {"Clamps x to the range [lo, hi], of the arguments' numeric type: "
+      "min(max(x, lo), hi).",
+      "Acota x al rango [lo, hi], del tipo numerico de los argumentos: "
+      "min(max(x, lo), hi)."}},
     {"clz",
      "clz(x: u64) -> u64",
      {"Count of leading zeros.",
@@ -84,9 +90,6 @@ const DocEntry kEntries[] = {
      "echo(value) -> void",
      {"Alias of print: prints the value with no trailing newline.",
       "Alias de print: imprime el valor sin salto de linea."}},
-    {"fabs",
-     "fabs(x: f64) -> f64",
-     {"Absolute value (f64).", "Valor absoluto (f64)."}},
     {"fclose",
      "fclose(fp: u64) -> i32",
      {"Closes a file opened with fopen.",
@@ -138,12 +141,6 @@ const DocEntry kEntries[] = {
      "flush() -> void",
      {"Flushes the vesta_io output buffer to the terminal.",
       "Vacia el buffer de salida de vesta_io al terminal."}},
-    {"fmax",
-     "fmax(a: f64, b: f64) -> f64",
-     {"Maximum of two f64.", "Maximo de dos f64."}},
-    {"fmin",
-     "fmin(a: f64, b: f64) -> f64",
-     {"Minimum of two f64.", "Minimo de dos f64."}},
     {"fopen",
      "fopen(path: string, mode: string) -> u64",
      {"Opens a file; returns the FILE* (0 on failure).",
@@ -166,18 +163,6 @@ const DocEntry kEntries[] = {
      "ilog2(x: u64) -> u64",
      {"Integer base 2 logarithm (position of the highest set bit).",
       "Logaritmo entero base 2 (posicion del bit mas alto)."}},
-    {"imax",
-     "imax(a: i64, b: i64) -> i64",
-     {"Maximum of two signed integers.", "Maximo de dos enteros con signo."}},
-    {"imaxu",
-     "imaxu(a: u64, b: u64) -> u64",
-     {"Maximum of two unsigned integers.", "Maximo de dos enteros sin signo."}},
-    {"imin",
-     "imin(a: i64, b: i64) -> i64",
-     {"Minimum of two signed integers.", "Minimo de dos enteros con signo."}},
-    {"iminu",
-     "iminu(a: u64, b: u64) -> u64",
-     {"Minimum of two unsigned integers.", "Minimo de dos enteros sin signo."}},
     {"is_shared",
      "is_shared<T>() -> bool",
      {"True if T is a shared<T> type (cross-process shared memory).",
@@ -205,6 +190,10 @@ const DocEntry kEntries[] = {
      "malloc(bytes: u64) -> T*",
      {"Reserves @p bytes of raw host memory and returns the pointer.",
       "Reserva @p bytes de memoria host cruda; devuelve el puntero."}},
+    {"max",
+     "max(a: T, b: T) -> T",
+     {"Maximum of two numbers, of their type (see min).",
+      "Maximo de dos numeros, de su tipo (ver min)."}},
     {"method.count",
      "method.count<T>() -> u32",
      {"Number of methods of T (CLASS only; inherited ones included).",
@@ -221,6 +210,12 @@ const DocEntry kEntries[] = {
      "method.result<T>(idx: int) -> Type",
      {"Return type of the idx-th method of T (compile time).",
       "Tipo de retorno del metodo idx-esimo de T (comptime)."}},
+    {"min",
+     "min(a: T, b: T) -> T",
+     {"Minimum of two numbers, of their type: min(i32, i32) is an i32 and "
+      "min(f32, f32) an f32; mixed types meet at the one that loses nothing.",
+      "Minimo de dos numeros, de su tipo: min(i32, i32) es un i32 y min(f32, "
+      "f32) un f32; con tipos mezclados se usa el que no pierde nada."}},
     {"move",
      "move(p) -> unique<T>",
      {"Transfers ownership; invalidates the source (mvtake).",
@@ -561,7 +556,7 @@ const DocEntry kEntries[] = {
      "write_borrow(m, v) -> void",
      {"Writes through a borrow_mut.", "Escribe a traves de un borrow_mut."}},
 };
-const int kEntryCount = 135;
+const int kEntryCount = 130;
 
 } // namespace
 

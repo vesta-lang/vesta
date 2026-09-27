@@ -244,6 +244,32 @@ static std::vector<std::string> split_type_list_(const std::string &s) {
 Type TypeChecker::resolve_type_string(const std::string &type_str) const {
     if (type_str.empty()) return Type{};
 
+    /* El `const` que @ref type_to_string escribe delante.
+     *
+     * Un parametro `in f64` lleva `is_const` en su tipo, y la firma viaja al
+     * `.vxi` como `const f64`.  Este lector no lo entendia: lo daba por un
+     * nombre de tipo desconocido y lo leia como VOID.  Dos sobrecargas `in`
+     * llegaban las dos como `(void, void)`, ninguna encajaba, y se llamaba en
+     * silencio a la primera -- `std.math.min3(5.5, 2.5, 9.5)` iba a la de
+     * enteros y daba 0 --.
+     *
+     * Solo arriba del todo cuando es de un valor.  En un `const T*` o un
+     * `const T[N]` el `const` es del ELEMENTO -- lo de `in T*` --, y lo
+     * aplican las ramas de puntero y array al recursar sobre `const T`.  Y
+     * antes de la rama `#`, que si no tomaria `const fd` por el nombre del
+     * newtype. */
+    {
+        static constexpr char kConst[] = "const ";
+        constexpr size_t kConstLen = sizeof(kConst) - 1;
+        const char last = type_str.back();
+        if (type_str.compare(0, kConstLen, kConst) == 0 && last != '*' &&
+            last != ']') {
+            Type t = resolve_type_string(type_str.substr(kConstLen));
+            t.is_const = true;
+            return t;
+        }
+    }
+
     // Newtype enriquecido `nombre#underlying` (ver canonical_typename_of): un
     // typedef-new importado en una firma cuyo modulo NO define el newtype.  Si
     // el newtype SI esta definido localmente (mismo nombre en type_aliases_),
@@ -311,7 +337,12 @@ Type TypeChecker::resolve_type_string(const std::string &type_str) const {
     if (!is_fn_typename && type_str.back() == '*') {
         std::string inner = type_str.substr(0, type_str.size() - 1);
         Type pt = resolve_type_string(inner);
-        if (pt.kind == PrimitiveKind::VOID && inner != "void") {
+        /* `const void*` es un void de verdad, con su `const`: no confundirlo
+         * con un nombre que no resolvio, o el `const` se pierde y un `LPCVOID`
+         * importado deja de aceptar un `const char*`. */
+        const bool is_void_written =
+            inner == "void" || (pt.is_const && inner == "const void");
+        if (pt.kind == PrimitiveKind::VOID && !is_void_written) {
             // No se pudo resolver inner: devolver void* generico.
             return Type::make_ptr(Type{PrimitiveKind::VOID});
         }
@@ -1595,11 +1626,20 @@ void export_typechecker_to_vxi(const TypeChecker &tc, uint64_t source_hash,
     // monomorphizar `Caja<i64>` cross-module.  No re-exportar las que vienen
     // de otro modulo (salvo re-export explicito).
     for (const auto &tex : tc.ast_module().generic_template_exports) {
-        if (!tex.is_public) continue;
+        /* Una PRIVADA viaja tambien si otra plantilla la usa: se instancia en
+         * quien importa, y alli tiene que poder llamarla.  Sin esto `div<T>`
+         * que llama a su `signed_min<T>` privada fallaba con "funcion no
+         * declarada" en `<vxi-templates:>`.  Viaja marcada como ayudante para
+         * que quien importa no se la ensenye al usuario.  Una comptime sin
+         * parametros de tipo no: esa la baja el modulo que la declara. */
+        const bool helper_only = !tex.is_public && !tex.is_plain_comptime &&
+                                 needed_by_template(tex.name);
+        if (!tex.is_public && !helper_only) continue;
         if (tc.is_imported(tex.name) && !tc.is_reexported(tex.name)) continue;
         VxiModule::GenericTemplateSource g;
         g.name = tex.name;
         g.kind = tex.kind;
+        g.helper_only = helper_only;
         g.source = tex.source;
         // NS.2: si la plantilla/concepto se declaro en un namespace, propagar
         // su ns_path.  El tex.name es el nombre publico (sin manglar); lo
@@ -2092,6 +2132,22 @@ void inject_generic_templates_from_vxi(
                 if (decl) vxgen::rename_idents(decl.get(), global_renames);
     }
 
+    /* Y con las plantillas AYUDANTE: las privadas que viajan solo porque otra
+     * plantilla las usa.  Se les da un nombre que nadie escribe -- el aplanado
+     * con su namespace -- y se reescriben a el las llamadas de las demas
+     * plantillas; asi la publica resuelve y el usuario no puede nombrarlas,
+     * igual que un ayudante normal. */
+    std::unordered_map<std::string, std::string> helper_tpl_names;
+    for (const auto &g : mod.generic_templates) {
+        if (!g.helper_only) continue;
+        helper_tpl_names.emplace(
+            g.name, !g.ns_path.empty() ? namespace_member_symbol(g.ns_path, g.name)
+                                       : qualified_symbol(ns_prefix, g.name));
+    }
+    if (!helper_tpl_names.empty())
+        for (auto &decl : parsed->decls)
+            if (decl) vxgen::rename_idents(decl.get(), helper_tpl_names);
+
     // Helper: nombre del decl (para el filtro `only` + rename namespace).
     auto decl_name = [](ast::Node *d) -> std::string {
         switch (d->kind) {
@@ -2209,6 +2265,12 @@ void inject_generic_templates_from_vxi(
                 ifd->is_imported_comptime = true;
         }
         const std::string nm = decl_name(decl.get());
+        /* Una AYUDANTE entra siempre -- la necesita una plantilla que si se
+         * pidio -- con el nombre que nadie escribe, y no se publica: ni en el
+         * namespace ni con alias corto. */
+        const auto helper = helper_tpl_names.find(nm);
+        const bool is_helper = helper != helper_tpl_names.end();
+        if (is_helper) set_decl_name(decl.get(), helper->second);
         /* Filtro `only` (si wanted no esta vacio).  Las specs comparten el
          * nombre del primario, asi que el filtro por nombre las incluye.
          *
@@ -2217,7 +2279,7 @@ void inject_generic_templates_from_vxi(
          * cortos, asi que preguntar solo por uno dejaba fuera la plantilla --
          * y sin ella el proveedor no existia, aunque su modulo estuviera
          * compilado y su `.vxi` al lado --. */
-        if (!wanted.empty() && wanted.find(nm) == wanted.end()) {
+        if (!is_helper && !wanted.empty() && wanted.find(nm) == wanted.end()) {
             bool found = false;
             for (size_t sep = nm.find("__"); sep != std::string::npos && !found;
                  sep = nm.find("__", sep + 1)) {
@@ -2236,7 +2298,9 @@ void inject_generic_templates_from_vxi(
                 tpl_ns = g.ns_path;
                 break;
             }
-        if (!tpl_ns.empty()) {
+        if (is_helper) {
+            // Ya tiene su nombre, y no se publica.
+        } else if (!tpl_ns.empty()) {
             const std::string mangled_full = namespace_member_symbol(tpl_ns, nm);
             set_decl_name(decl.get(), mangled_full);
             // El nombre corto tiene que seguir llevando a la plantilla: un

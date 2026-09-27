@@ -187,12 +187,14 @@ static void collect_spawn_captures_in_stmt(
     }
     case ast::NodeKind::ForStmt: {
         const auto *f = static_cast<const ast::ForStmt *>(s);
-        collect_spawn_captures_in_stmt(f->init.get(), locals_defined,
-                                       out_captures, seen, lw);
+        for (const auto &in : f->init)
+            collect_spawn_captures_in_stmt(in.get(), locals_defined,
+                                           out_captures, seen, lw);
         collect_spawn_captures_in_expr(f->cond.get(), locals_defined,
                                        out_captures, seen, lw);
-        collect_spawn_captures_in_expr(f->step.get(), locals_defined,
-                                       out_captures, seen, lw);
+        for (const auto &st : f->step)
+            collect_spawn_captures_in_expr(st.get(), locals_defined,
+                                           out_captures, seen, lw);
         collect_spawn_captures_in_stmt(f->body.get(), locals_defined,
                                        out_captures, seen, lw);
         return;

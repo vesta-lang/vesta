@@ -547,11 +547,90 @@ class Parser {
     // -----------------------------------------------------------------
 
     std::unique_ptr<ast::BlockStmt> parse_block();
+    /**
+     * @brief Parsea UNA sentencia donde va una sola (el cuerpo de un `if` sin
+     *        llaves, de un `while`...).
+     *
+     * Una declaracion de varios nombres son varias sentencias; aqui se
+     * envuelven en un bloque, que es el alcance que ya tenian.
+     *
+     * @return La sentencia, o nulo si no se pudo leer.
+     */
     std::unique_ptr<ast::Stmt> parse_statement();
-    /// Cuerpo real; @ref parse_statement lo envuelve para medir la extension.
+    /**
+     * @brief Parsea una sentencia y la anade a una LISTA (un bloque, un
+     *        `comptime { }`): una declaracion de varios nombres entra como
+     *        una `VarDeclStmt` por nombre, seguidas.
+     * @param out La lista.
+     * @return false si no se pudo leer ninguna sentencia.
+     */
+    bool parse_statement_into(std::vector<std::unique_ptr<ast::Stmt>> &out);
+    /**
+     * @brief Parsea una sentencia, mide su extension y recoge los demas
+     *        nombres de una declaracion de varios.
+     * @param rest Recibe los nombres que siguen al primero, ya con las marcas
+     *             de almacenamiento del primero; vacio en cualquier otra
+     *             sentencia.
+     * @return La sentencia (el primer nombre, si es una declaracion).
+     */
+    std::unique_ptr<ast::Stmt>
+    parse_statement_measured(std::vector<std::unique_ptr<ast::Stmt>> &rest);
+    /**
+     * @brief Si el token actual abre una sentencia de CONTROL (`for`,
+     *        `foreach`, `while`, `do`, `if`): lo que puede ser el cuerpo
+     *        `=>` de una funcion que no devuelve nada.
+     * @return true si la abre.
+     */
+    bool starts_control_statement_();
+    /// Cuerpo real; @ref parse_statement_measured lo envuelve.
     std::unique_ptr<ast::Stmt> parse_statement_inner();
     std::unique_ptr<ast::Stmt> parse_var_decl_stmt(bool is_const,
                                                    bool from_comptime = false);
+    /**
+     * @brief Lee el tipo de una declaracion, o `auto`/`var` si se infiere.
+     * @param vd La declaracion: recibe `type` o `infer_type`.
+     */
+    void parse_decl_type_(ast::VarDeclStmt &vd);
+    /**
+     * @brief Lee UN declarador tras el tipo: puntero a funcion C, `!!`, el
+     *        nombre, las dimensiones `[N]` y el `= init`.
+     * @param vd        La declaracion, con el tipo ya puesto.
+     * @param name_read Si el nombre ya se leyo (el `for` lo lee para saber si
+     *                  es un `for (T x : col)`).
+     * @return false si falta el nombre: el error ya esta dicho.
+     */
+    bool parse_declarator_(ast::VarDeclStmt &vd, bool name_read);
+    /**
+     * @brief Lee los declaradores que siguen al primero: `, b = 1, c`.
+     * @param first El primero, ya leido: de el sale el tipo de los demas.
+     * @param base  El tipo escrito ANTES de las dimensiones del primero (`i64
+     *              a[4], b` declara un array y un `i64`); nulo con `auto`.
+     * @param out   Donde se anaden, uno por nombre.
+     */
+    void parse_more_declarators_(const ast::VarDeclStmt &first,
+                                 const ast::TypeNode *base,
+                                 std::vector<std::unique_ptr<ast::Stmt>> &out);
+    /**
+     * @brief Entrega los nombres que @c parse_var_decl_stmt dejo en
+     *        @c pending_declarators_, con el almacenamiento de @p first.
+     * @param first La sentencia que acaba de leerse.
+     * @param rest  Recibe los demas nombres; vacio si no hay.
+     */
+    void take_pending_declarators_(const ast::Stmt *first,
+                                   std::vector<std::unique_ptr<ast::Stmt>> &rest);
+    /**
+     * @brief Si un tipo recien leido es en realidad `auto`/`var`: el `for` lee
+     *        el tipo antes de saber si es un `for (T x : col)`.
+     * @param t El tipo leido.
+     * @return true si la declaracion infiere su tipo.
+     */
+    bool is_inferred_decl_type_(const ast::TypeNode *t) const;
+    /**
+     * @brief Lee lo que sigue al inicializador de un `for`: la condicion, los
+     *        pasos separados por coma, el `)` y el cuerpo.
+     * @param s El `for`, con el inicializador ya puesto.
+     */
+    void parse_for_tail_(ast::ForStmt &s);
     std::unique_ptr<ast::Stmt> parse_if_stmt();
     std::unique_ptr<ast::Stmt> parse_while_stmt();
     std::unique_ptr<ast::Stmt> parse_do_while_stmt();
@@ -904,6 +983,14 @@ class Parser {
     /// encolan aqui y @c parse_program / @c parse_namespace_decl los drenan al
     /// nivel del modulo.  Reusa el patron de @c parse_extern_block (N decls).
     std::vector<std::unique_ptr<ast::Node>> pending_extra_decls_;
+
+    /// Los nombres que siguen al primero en una declaracion de varios (`f64
+    /// dx = a, dy = b;`).  @c parse_var_decl_stmt solo devuelve el primero,
+    /// porque quien lo llama le pone despues marcas (`static`, `comptime`)
+    /// que los demas tienen que heredar; los deja aqui y @ref
+    /// parse_statement_measured los recoge en cuanto vuelve, les copia esas
+    /// marcas y los entrega junto al primero.
+    std::vector<std::unique_ptr<ast::Stmt>> pending_declarators_;
 
     /// Structs/uniones ANONIMOS sintetizados dentro del cuerpo de otro struct
     /// (`struct { ... } campo;` o miembro anonimo C11 `union { ... };`).  Se

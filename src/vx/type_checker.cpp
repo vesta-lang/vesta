@@ -1306,8 +1306,9 @@ static bool stmt_mentions_self(const ast::Stmt *s) {
             static_cast<const ast::WhileStmt *>(s)->body.get());
     case ast::NodeKind::ForStmt: {
         auto *f = static_cast<const ast::ForStmt *>(s);
-        return stmt_mentions_self(f->init.get()) ||
-               stmt_mentions_self(f->body.get());
+        for (const auto &in : f->init)
+            if (stmt_mentions_self(in.get())) return true;
+        return stmt_mentions_self(f->body.get());
     }
     default: return false;
     }
@@ -2249,9 +2250,11 @@ static void pre_mono_collect_in_stmt(TypeChecker &tc, const ast::Stmt *s) {
     }
     case ast::NodeKind::ForStmt: {
         auto *f = static_cast<const ast::ForStmt *>(s);
-        pre_mono_collect_in_stmt(tc, f->init.get());
+        for (const auto &in : f->init)
+            pre_mono_collect_in_stmt(tc, in.get());
         pre_mono_collect_in_expr(tc, f->cond.get());
-        pre_mono_collect_in_expr(tc, f->step.get());
+        for (const auto &st : f->step)
+            pre_mono_collect_in_expr(tc, st.get());
         pre_mono_collect_in_stmt(tc, f->body.get());
         return;
     }
@@ -4556,13 +4559,21 @@ void TypeChecker::collect_globals() {
          * candidatas; lo que las separa son los parametros, y de eso ya sabe
          * `add_overload_candidate`.
          *
-         * Solo cuando lo anterior NO es otro builtin: varios comparten cuerpo
-         * y se registran dos veces a proposito (los alias), y emparejar un
-         * builtin consigo mismo lo marcaba como sobrecargado -- y eso cambiaba
-         * la resolucion y los mensajes de medio compilador. */
-        if (!declare(name, s) && had_previous &&
-            !function_sigs_[previous_idx].is_builtin)
-            (void)add_overload_candidate(name, previous_idx, s.sig_index);
+         * Con otro builtin, solo si la FIRMA es distinta: varios comparten
+         * cuerpo y se registran dos veces a proposito (los alias), y emparejar
+         * un builtin consigo mismo lo marcaba como sobrecargado -- y eso
+         * cambiaba la resolucion y los mensajes de medio compilador --.  Los
+         * genericos numericos (`min` de cada tipo) si son sobrecargas de
+         * verdad, y se separan por sus parametros. */
+        if (!declare(name, s) && had_previous) {
+            const FunctionSig &prev_sig = function_sigs_[previous_idx];
+            const FunctionSig &new_sig = function_sigs_[s.sig_index];
+            const bool alias =
+                prev_sig.is_builtin &&
+                overload::same_params(prev_sig.param_types, new_sig.param_types);
+            if (!alias)
+                (void)add_overload_candidate(name, previous_idx, s.sig_index);
+        }
     };
     // Salida de texto (aceptan ANY tipo via dispatch en lowering).
     // El check_call hace bypass especial para estos nombres y permite
@@ -4790,33 +4801,36 @@ void TypeChecker::collect_globals() {
     reg_builtin("sqrt", Type{PrimitiveKind::F64}, {PrimitiveKind::F64});
     reg_builtin("pow", Type{PrimitiveKind::F64},
                 {PrimitiveKind::F64, PrimitiveKind::F64});
-    reg_builtin("fabs", Type{PrimitiveKind::F64}, {PrimitiveKind::F64});
     reg_builtin("floor", Type{PrimitiveKind::F64}, {PrimitiveKind::F64});
     reg_builtin("ceil", Type{PrimitiveKind::F64}, {PrimitiveKind::F64});
     reg_builtin("round", Type{PrimitiveKind::F64}, {PrimitiveKind::F64});
-    reg_builtin("fmin", Type{PrimitiveKind::F64},
-                {PrimitiveKind::F64, PrimitiveKind::F64});
-    reg_builtin("fmax", Type{PrimitiveKind::F64},
-                {PrimitiveKind::F64, PrimitiveKind::F64});
     reg_builtin("log", Type{PrimitiveKind::F64}, {PrimitiveKind::F64});
     reg_builtin("log2", Type{PrimitiveKind::F64}, {PrimitiveKind::F64});
     reg_builtin("log10", Type{PrimitiveKind::F64}, {PrimitiveKind::F64});
     reg_builtin("sin", Type{PrimitiveKind::F64}, {PrimitiveKind::F64});
     reg_builtin("cos", Type{PrimitiveKind::F64}, {PrimitiveKind::F64});
     reg_builtin("tan", Type{PrimitiveKind::F64}, {PrimitiveKind::F64});
-    reg_builtin("abs", Type{PrimitiveKind::I64}, {PrimitiveKind::I64});
-    reg_builtin("imin", Type{PrimitiveKind::I64},
-                {PrimitiveKind::I64, PrimitiveKind::I64});
-    reg_builtin("imax", Type{PrimitiveKind::I64},
-                {PrimitiveKind::I64, PrimitiveKind::I64});
-    reg_builtin("clamp", Type{PrimitiveKind::I64},
-                {PrimitiveKind::I64, PrimitiveKind::I64, PrimitiveKind::I64});
+    /* `abs`, `min`, `max` y `clamp` son GENERICOS NUMERICOS: el resultado es
+     * del tipo de los argumentos -- `min(i32, i32)` es un i32 y `min(f32,
+     * f32)` un f32 --.  Eran siete nombres (`imin`, `iminu`, `fmin`...) y
+     * cada uno de un solo tipo, asi que el nombre decia lo que ya decia el
+     * argumento y un i32 volvia como i64.
+     *
+     * Una firma por cada tipo numerico, que se sobrecargan entre si: elige la
+     * resolucion de sobrecargas de siempre -- tipos mezclados, literales y
+     * llamada con punto incluidos -- y el bajado elige la instruccion por la
+     * firma elegida.  Los tipos salen de `is_numeric`, su dueno. */
+    for (uint8_t nk = 0; nk < static_cast<uint8_t>(PrimitiveKind::COUNT);
+         ++nk) {
+        const PrimitiveKind k = static_cast<PrimitiveKind>(nk);
+        if (!is_numeric(k)) continue;
+        reg_builtin("abs", Type{k}, {k});
+        reg_builtin("min", Type{k}, {k, k});
+        reg_builtin("max", Type{k}, {k, k});
+        reg_builtin("clamp", Type{k}, {k, k, k});
+    }
     // Math-IR-promote v2.2a: float + bit ops nuevos.
     reg_builtin("trunc", Type{PrimitiveKind::F64}, {PrimitiveKind::F64});
-    reg_builtin("iminu", Type{PrimitiveKind::U64},
-                {PrimitiveKind::U64, PrimitiveKind::U64});
-    reg_builtin("imaxu", Type{PrimitiveKind::U64},
-                {PrimitiveKind::U64, PrimitiveKind::U64});
     reg_builtin("ilog2", Type{PrimitiveKind::U64}, {PrimitiveKind::U64});
     reg_builtin("popcount", Type{PrimitiveKind::U64}, {PrimitiveKind::U64});
     reg_builtin("clz", Type{PrimitiveKind::U64}, {PrimitiveKind::U64});
@@ -7212,7 +7226,12 @@ void TypeChecker::collect_globals() {
                 }
             }
             s.decl_loc = fn->loc; // para poder citarla si otra choca con ella
-            if (!declare(fn->name, s)) {
+            if (declare(fn->name, s)) {
+                /* La primera con este nombre: si es de un namespace y se llama
+                 * como un builtin, compite con el (las siguientes homonimas
+                 * entran por `register_overload`, que ya ve el conjunto). */
+                join_builtin_homonyms_(fn, s.sig_index);
+            } else {
                 // Bug fix 2026-05-23: forward declaration -- si el simbolo
                 // ya existe Y este es un forward decl (sin body), OK.
                 // Si la PREVIA era forward y esta tiene body, tambien OK
@@ -8553,12 +8572,13 @@ rewrite_implicit_this(std::unique_ptr<ast::Stmt> &stmt,
         case ast::NodeKind::ForStmt: {
             auto *fs = static_cast<ast::ForStmt *>(s.get());
             locals_stack.push_back({});
-            visit(fs->init);
+            for (auto &in : fs->init)
+                visit(in);
             if (fs->cond)
                 rewrite_implicit_this_expr(fs->cond, field_names, params_set,
                                            locals_stack);
-            if (fs->step)
-                rewrite_implicit_this_expr(fs->step, field_names, params_set,
+            for (auto &st : fs->step)
+                rewrite_implicit_this_expr(st, field_names, params_set,
                                            locals_stack);
             visit(fs->body);
             locals_stack.pop_back();
@@ -8850,9 +8870,11 @@ void TypeChecker::compute_borrow_last_uses(ast::Stmt *body) {
         }
         case ast::NodeKind::ForStmt: {
             auto *fs = static_cast<ast::ForStmt *>(s);
-            if (fs->init) visit_stmt(fs->init.get());
+            for (auto &in : fs->init)
+                visit_stmt(in.get());
             if (fs->cond) visit_expr(fs->cond.get());
-            if (fs->step) visit_expr(fs->step.get());
+            for (auto &st : fs->step)
+                visit_expr(st.get());
             if (fs->body) visit_stmt(fs->body.get());
             return;
         }
@@ -10494,7 +10516,8 @@ void TypeChecker::check_while(ast::WhileStmt *s, const Type &fn_return_type) {
 void TypeChecker::check_for(ast::ForStmt *s, const Type &fn_return_type) {
     // Scope adicional para el init del for (estilo C).
     push_scope();
-    if (s->init) check_stmt(s->init.get(), fn_return_type);
+    for (auto &in : s->init)
+        check_stmt(in.get(), fn_return_type);
     if (s->cond) {
         Type tc = check_expr(s->cond.get());
         if (tc.kind != PrimitiveKind::BOOL && !is_numeric(tc.kind)) {
@@ -10502,7 +10525,8 @@ void TypeChecker::check_for(ast::ForStmt *s, const Type &fn_return_type) {
                          "condicion de 'for' debe ser numerica o bool");
         }
     }
-    if (s->step) (void)check_expr(s->step.get());
+    for (auto &st : s->step)
+        (void)check_expr(st.get());
     if (s->body) check_stmt(s->body.get(), fn_return_type);
     pop_scope();
 }
@@ -16571,32 +16595,8 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
                         select_ns_overload(ns, fa->field_name, e);
                     if (picked_ns != ImportedNamespace::kNoHomonym) {
                         referenced_names_.insert(ns_path);
-                        fa->ns_sym = picked_ns; // el bajado lee ESTE, no busca
-                        const auto &sym = ns.symbols[picked_ns];
-                        const FunctionSig *real_sig =
-                            sym.mangled_label.empty()
-                                ? nullptr
-                                : function_sig_by_name(sym.mangled_label);
-                        const FunctionSig *use_sig =
-                            real_sig ? real_sig : &sym.sig;
-                        if (e->args.size() != use_sig->param_types.size()) {
-                            diags_.error(e->loc,
-                                         "llamada a '" + ns_path + "." +
-                                             fa->field_name +
-                                             "': se esperaban " +
-                                             std::to_string(
-                                                 use_sig->param_types.size()) +
-                                             " args, recibidos " +
-                                             std::to_string(e->args.size()));
-                        }
-                        for (auto &a : e->args)
-                            (void)check_expr(a.get());
-                        fa->property_kind = 4;
-                        fa->ns_index = ns_idx_c;
-                        fa->result_type = Type::make_function(
-                            use_sig->param_types, use_sig->return_type);
-                        e->result_type = use_sig->return_type;
-                        return use_sig->return_type;
+                        return check_ns_call_(e, fa, ns_idx_c, picked_ns,
+                                              ns_path);
                     }
                 }
             }
@@ -16641,41 +16641,8 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
                             (void)check_expr(a.get());
                         return Type{};
                     }
-                    fa->ns_sym = picked_ns; // el bajado lee ESTE, no busca
-                    const auto &sym = ns.symbols[picked_ns];
-                    //  M.7.c: si la sig esta vacia (namespace
-                    // inline; las firmas se rellenan en check_function),
-                    // buscamos la sig real via function_sig_by_name
-                    // usando el mangled_label.  Para namespaces
-                    // cross-module (M7.a), sym.sig ya esta lleno.
-                    const FunctionSig *real_sig = nullptr;
-                    if (!sym.mangled_label.empty()) {
-                        real_sig = function_sig_by_name(sym.mangled_label);
-                    }
-                    const FunctionSig *use_sig = real_sig ? real_sig : &sym.sig;
-                    // Validar aridad.
-                    if (e->args.size() != use_sig->param_types.size()) {
-                        diags_.error(
-                            e->loc,
-                            "llamada a '" + idb->name + "." + fa->field_name +
-                                "': se esperaban " +
-                                std::to_string(use_sig->param_types.size()) +
-                                " args, recibidos " +
-                                std::to_string(e->args.size()));
-                    }
-                    // Chequear cada arg (sin validacion estricta de
-                    // tipo en MVP; M7.x anyadira coerce + cast checks).
-                    for (auto &a : e->args)
-                        (void)check_expr(a.get());
-                    // Marcar el FieldAccess para que el lowering lo
-                    // reconozca como namespace call y emita CALLVM al
-                    // mangled_label.
-                    fa->property_kind = 4;
-                    fa->ns_index = ns_idx_b; // M.7
-                    fa->result_type = Type::make_function(use_sig->param_types,
-                                                          use_sig->return_type);
-                    e->result_type = use_sig->return_type;
-                    return use_sig->return_type;
+                    return check_ns_call_(e, fa, ns_idx_b, picked_ns,
+                                          idb->name);
                 }
             }
             auto it_cls_s = class_layouts_.find(idb->name);
@@ -20487,6 +20454,15 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
              * nombre publico lo comparten varias -- y llega a ella con un
              * acceso a un vector, sin hashear ni copiar cadenas. */
             e->resolved_sig = chosen_sig;
+            /* Y si gano el BUILTIN en un conjunto que comparte con una funcion
+             * de namespace, la llamada lleva todavia el nombre aplanado de esa
+             * funcion (`std__math__clamp`): se le devuelve el que se escribio,
+             * que es el del builtin.  Sin esto el bajado -- y todo el que mira
+             * el nombre, como el vectorizador -- no la reconocerian como tal y
+             * la mandarian a la funcion del usuario. */
+            if (function_sigs_[chosen_sig].is_builtin &&
+                builtin_from_name(id->name) == Builtin::Unknown)
+                const_cast<ast::IdentExpr *>(id)->name = written_name(id->name);
         }
     }
     const FunctionSig &sig = function_sigs_[chosen_sig];

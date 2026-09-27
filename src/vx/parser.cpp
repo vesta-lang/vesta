@@ -31,6 +31,7 @@
 #include "vx/parser.h"
 
 #include "vx/annotation_names.h" // la lista de las que el lenguaje conoce
+#include "vx/generics/generic_clone.h" // clonar un tipo entero, marcas incluidas
 #include "vx/hook_points.h"
 #include "vx/method_names.h" // el nombre interno del destructor
 
@@ -977,6 +978,9 @@ void Parser::collect_template_export_(ast::ModuleNode *mod, ast::Node *decl,
             // modulo + explota el cache de IR del consumidor.
             tex.name = fd->name;
             tex.is_public = fd->is_public;
+            tex.is_plain_comptime = fd->type_params.empty() &&
+                                    !fd->is_specialization &&
+                                    fd->spec_pattern.empty();
             is_template = true;
         }
         break;
@@ -2672,11 +2676,7 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
                  * un global existente).  Solo parse_statement
                  * normal.  Si quieres una const local al bloque,
                  * escribe `comptime T NAME = expr;` explicito. */
-                auto inner = parse_statement();
-                if (inner)
-                    cb->stmts.push_back(std::move(inner));
-                else
-                    synchronize();
+                if (!parse_statement_into(cb->stmts)) synchronize();
             }
             (void)expect(TokenKind::RBRACE,
                          "se esperaba '}' al cerrar comptime block");
@@ -3348,12 +3348,15 @@ bool Parser::looks_like_cast() const noexcept {
         || (first_kind == TokenKind::IDENTIFIER &&
             declared_structs_.count(first.lexeme) > 0 &&
             mut_lex.peek_at(off + 1).kind == TokenKind::STAR)
-        // Y un PARAMETRO DE TIPO de la funcion en curso, con la misma regla del
-        // `*`: dentro de `R f<T>(...)`, `T` nombra un tipo tanto como un
-        // struct, asi que `(T*)x` es un cast.
+        // Y un PARAMETRO DE TIPO de la funcion en curso: dentro de
+        // `R f<T>(...)`, `T` nombra un tipo igual que un `typedef`, asi que
+        // `(T)x` y `(T*)x` son casts.  No hace falta el `*` que se pide a un
+        // struct: ahi el nombre podia ser tambien una variable (`(a) - b`), y
+        // un parametro de tipo en su ambito no es otra cosa que un tipo.  Con
+        // el `*` obligatorio, `(T)0` no parseaba y una plantilla no podia
+        // convertir a su propio tipo.
         || (first_kind == TokenKind::IDENTIFIER &&
-            is_active_type_param(first.lexeme) &&
-            mut_lex.peek_at(off + 1).kind == TokenKind::STAR) ||
+            is_active_type_param(first.lexeme)) ||
         is_qualified_ns;
     if (!is_type_starter) return false;
     ++off;
@@ -4425,49 +4428,6 @@ std::unique_ptr<ast::TypeNode> Parser::parse_type_node() {
 // preserva en is_using_form solo para diagnosticos.
 // -----------------------------------------------------------------
 
-// Deep-clone minimal de un TypeNode (Named/Primitive/Pointer/Array). Suficiente
-// para replicar el tipo base de un typedef C-style en cada declarador extra.
-static std::unique_ptr<ast::TypeNode>
-clone_type_node_td_(const ast::TypeNode *t) {
-    if (!t) return nullptr;
-    switch (t->kind) {
-    case ast::NodeKind::PrimitiveTypeNode: {
-        auto *s = static_cast<const ast::PrimitiveTypeNode *>(t);
-        auto p = std::make_unique<ast::PrimitiveTypeNode>();
-        p->loc = s->loc;
-        p->prim = s->prim;
-        for (auto &ta : s->type_args)
-            p->type_args.push_back(clone_type_node_td_(ta.get()));
-        return p;
-    }
-    case ast::NodeKind::NamedTypeNode: {
-        auto *s = static_cast<const ast::NamedTypeNode *>(t);
-        auto p = std::make_unique<ast::NamedTypeNode>();
-        p->loc = s->loc;
-        p->name = s->name;
-        for (auto &ta : s->type_args)
-            p->type_args.push_back(clone_type_node_td_(ta.get()));
-        return p;
-    }
-    case ast::NodeKind::PointerTypeNode: {
-        auto *s = static_cast<const ast::PointerTypeNode *>(t);
-        auto p = std::make_unique<ast::PointerTypeNode>();
-        p->loc = s->loc;
-        p->pointee = clone_type_node_td_(s->pointee.get());
-        p->is_virtual = s->is_virtual;
-        return p;
-    }
-    case ast::NodeKind::ArrayTypeNode: {
-        auto *s = static_cast<const ast::ArrayTypeNode *>(t);
-        auto p = std::make_unique<ast::ArrayTypeNode>();
-        p->loc = s->loc;
-        p->element_type = clone_type_node_td_(s->element_type.get());
-        return p;
-    }
-    default: return nullptr;
-    }
-}
-
 // Quita todos los niveles de puntero envolventes de un TypeNode: `LONG**` ->
 // `LONG`.  Devuelve un puntero al nodo base interno (no toma ownership).
 static const ast::TypeNode *strip_pointers_td_(const ast::TypeNode *t) {
@@ -4633,7 +4593,7 @@ std::unique_ptr<ast::StructDecl> Parser::parse_inline_anon_aggregate_() {
             continue;
         }
         // Clon del tipo BASE para el multi-declarador C `T a, b, c;`.
-        auto anon_base_clone = clone_type_node_td_(f.type.get());
+        auto anon_base_clone = vxgen::clone_type_with_subst(f.type.get());
         f.name = consume().lexeme;
         if (current_.kind == TokenKind::LBRACKET)
             f.type = wrap_c_array_dims_(std::move(f.type));
@@ -4654,7 +4614,7 @@ std::unique_ptr<ast::StructDecl> Parser::parse_inline_anon_aggregate_() {
             }
             ast::StructFieldDecl g;
             g.loc = current_.loc;
-            g.type = clone_type_node_td_(anon_base_clone.get());
+            g.type = vxgen::clone_type_with_subst(anon_base_clone.get());
             g.name = consume().lexeme;
             if (current_.kind == TokenKind::LBRACKET)
                 g.type = wrap_c_array_dims_(std::move(g.type));
@@ -4729,7 +4689,7 @@ void Parser::parse_c_typedef_ptr_aliases_(const ast::TypeNode *base) {
         const SourceLoc nloc = current_.loc;
         const std::string alias_name = consume().lexeme;
         // Construir el tipo: base clonado + `stars` niveles de puntero.
-        std::unique_ptr<ast::TypeNode> ty = clone_type_node_td_(base);
+        std::unique_ptr<ast::TypeNode> ty = vxgen::clone_type_with_subst(base);
         if (!ty) {
             error_here("typedef C-style: tipo base no clonable para el alias");
             break;
@@ -4799,7 +4759,7 @@ Parser::parse_typedef_struct_or_enum(bool leading_typedef) {
         } else {
             const SourceLoc nloc = current_.loc;
             const std::string alias_name = consume().lexeme;
-            std::unique_ptr<ast::TypeNode> ty = clone_type_node_td_(base.get());
+            std::unique_ptr<ast::TypeNode> ty = vxgen::clone_type_with_subst(base.get());
             for (int i = 0; i < stars; ++i) {
                 auto p = std::make_unique<ast::PointerTypeNode>();
                 p->loc = nloc;
@@ -6207,14 +6167,12 @@ std::unique_ptr<ast::Expr> Parser::parse_match_expr() {
         if (current_.kind == TokenKind::LBRACE) {
             arm.body = parse_block();
         } else {
-            auto stmt = parse_statement();
-            if (!stmt) {
+            auto blk = std::make_unique<ast::BlockStmt>();
+            blk->loc = arm.loc;
+            if (!parse_statement_into(blk->body)) {
                 synchronize();
                 continue;
             }
-            auto blk = std::make_unique<ast::BlockStmt>();
-            blk->loc = arm.loc;
-            blk->body.push_back(std::move(stmt));
             arm.body = std::move(blk);
         }
         m->arms.push_back(std::move(arm));
@@ -6571,7 +6529,7 @@ void Parser::parse_struct_body_(ast::StructDecl &sd, bool is_overlay) {
             is_comptime_member; // `comptime T campo` -> solo compile-time
         // Clon del tipo BASE (sin dims de array) para el multi-declarador C
         // `T a, b, c;`: cada declarador extra reutiliza el mismo tipo base.
-        auto base_type_clone = clone_type_node_td_(type_node.get());
+        auto base_type_clone = vxgen::clone_type_with_subst(type_node.get());
         f.type = std::move(type_node);
         f.name = std::move(member_name);
         // Overlay F3b ARRAY: `T Name[count] ...`.  El `[count]` va tras el
@@ -6724,7 +6682,7 @@ void Parser::parse_struct_body_(ast::StructDecl &sd, bool is_overlay) {
             auto gvar = std::make_unique<ast::GlobalVarDecl>();
             gvar->loc = f.loc;
             gvar->name = s->name + "__" + f.name;
-            gvar->type = clone_type_node_td_(f.type.get());
+            gvar->type = vxgen::clone_type_with_subst(f.type.get());
             gvar->is_public = s->is_public;
             pending_before_decls_.push_back(std::move(gvar));
         }
@@ -6740,7 +6698,7 @@ void Parser::parse_struct_body_(ast::StructDecl &sd, bool is_overlay) {
             }
             ast::StructFieldDecl g;
             g.loc = current_.loc;
-            g.type = clone_type_node_td_(base_type_clone.get());
+            g.type = vxgen::clone_type_with_subst(base_type_clone.get());
             g.name = consume().lexeme;
             // Array C-style por-declarador: `T a, b[4];`.
             if (current_.kind == TokenKind::LBRACKET) {
@@ -6772,7 +6730,7 @@ void Parser::parse_struct_body_(ast::StructDecl &sd, bool is_overlay) {
                 auto gvar = std::make_unique<ast::GlobalVarDecl>();
                 gvar->loc = g.loc;
                 gvar->name = s->name + "__" + g.name;
-                gvar->type = clone_type_node_td_(g.type.get());
+                gvar->type = vxgen::clone_type_with_subst(g.type.get());
                 gvar->is_public = s->is_public;
                 pending_before_decls_.push_back(std::move(gvar));
             }
@@ -7832,9 +7790,7 @@ std::unique_ptr<ast::ConceptDecl> Parser::parse_concept_decl() {
     const auto temp = register_temp_type_aliases(c->type_params);
     while (current_.kind != TokenKind::RBRACE &&
            current_.kind != TokenKind::END_OF_FILE) {
-        auto st = parse_statement();
-        if (!st) break;
-        blk->body.push_back(std::move(st));
+        if (!parse_statement_into(blk->body)) break;
     }
     unregister_temp_type_aliases(temp);
     (void)expect(TokenKind::RBRACE,
@@ -7867,6 +7823,15 @@ std::unique_ptr<ast::BlockStmt> Parser::parse_method_body(bool is_void) {
         (void)consume(); // '=>'
         auto block = std::make_unique<ast::BlockStmt>();
         block->loc = loc;
+        /* Una funcion que no devuelve nada puede tener por cuerpo una
+         * sentencia de control: `void times(i64 n, F f) => for (...) f(i);`.
+         * La sentencia trae su propio `;` (o su bloque).  En una que devuelve
+         * algo, lo que sigue a `=>` es el valor y tiene que ser una
+         * expresion. */
+        if (is_void && starts_control_statement_()) {
+            if (!parse_statement_into(block->body)) synchronize();
+            return block;
+        }
         auto expr = parse_expr();
         if (is_void) {
             // Tratar como ExprStmt: ejecutar la expresion y descartar.
@@ -7898,40 +7863,14 @@ std::unique_ptr<ast::BlockStmt> Parser::parse_block() {
     (void)expect(TokenKind::LBRACE, "se esperaba '{' al abrir bloque");
     while (current_.kind != TokenKind::RBRACE &&
            current_.kind != TokenKind::END_OF_FILE) {
-        auto s = parse_statement();
-        if (s)
-            b->body.push_back(std::move(s));
-        else
-            synchronize();
+        if (!parse_statement_into(b->body)) synchronize();
     }
     (void)expect(TokenKind::RBRACE, "se esperaba '}' al cerrar bloque");
     return b;
 }
 
-/**
- * @brief Parsea una sentencia y le pone su EXTENSION real.
- *
- * El nodo se queda con la posicion de su primer token, cuya longitud es la de
- * ESE TOKEN y no la de la sentencia: una que empiece por `return` media seis
- * caracteres, los de la palabra clave.  Al subrayar un fallo se marcaba la
- * palabra clave en vez de lo que se estaba evaluando.
- *
- * Aqui se mide de verdad: del primer byte de la sentencia al ultimo consumido.
- * Se hace en el envoltorio y no en cada rama porque son decenas y bastaria
- * olvidar una para que volviera a mentir en ese caso concreto.
- *
- * @return La sentencia.
- */
-std::unique_ptr<ast::Stmt> Parser::parse_statement() {
-    const uint32_t ini = current_.loc.offset;
-    auto st = parse_statement_inner();
-    if (st && st->loc.offset >= ini) {
-        // El final es donde empieza el token que YA no es de la sentencia.
-        const uint32_t fin = current_.loc.offset;
-        if (fin > st->loc.offset) st->loc.length = fin - st->loc.offset;
-    }
-    return st;
-}
+// parse_statement, parse_statement_into y la medida de la extension viven en
+// parser/statement_entry.cpp.
 
 std::unique_ptr<ast::Stmt> Parser::parse_statement_inner() {
     // `label:` -- declaracion de etiqueta para `goto`.  Detectada
@@ -8101,11 +8040,7 @@ std::unique_ptr<ast::Stmt> Parser::parse_statement_inner() {
                     cb->stmts.push_back(std::move(vd));
                     continue;
                 }
-                auto inner = parse_statement();
-                if (inner)
-                    cb->stmts.push_back(std::move(inner));
-                else
-                    synchronize();
+                if (!parse_statement_into(cb->stmts)) synchronize();
             }
             (void)expect(TokenKind::RBRACE,
                          "se esperaba '}' al cerrar comptime block");
@@ -8253,157 +8188,7 @@ std::unique_ptr<ast::Stmt> Parser::parse_statement_inner() {
     }
 }
 
-std::unique_ptr<ast::Stmt> Parser::parse_var_decl_stmt(bool is_const,
-                                                       bool from_comptime) {
-    auto vd = std::make_unique<ast::VarDeclStmt>();
-    vd->loc = current_.loc;
-    vd->is_const = is_const;
-    /* Direccion: `in i64* vista = null;`.  El MISMO lector que en un
-     * parametro, para que la marca no signifique una cosa aqui y otra alli.
-     * Lo que cambia es lo que queda de ella: en un parametro dice ademas que
-     * hace la funcion; en una variable solo el permiso. */
-    vd->dir = parse_opt_param_dir_();
-    /*  AS inc.2: storage-class `register("reg")` antes del tipo.
-     * El patron ya fue validado por looks_like_register_storage() en el
-     * router, pero KW_CONST / for-init tambien llaman aqui; reconsumimos
-     * de forma defensiva solo cuando el patron `register ( "reg" )`
-     * aparece literalmente, dejando intacto cualquier otro caso. */
-    if (current_.kind == TokenKind::IDENTIFIER &&
-        current_.lexeme == "register" &&
-        lex_.peek_at(0).kind == TokenKind::LPAREN &&
-        lex_.peek_at(1).kind == TokenKind::STRING_LIT &&
-        lex_.peek_at(2).kind == TokenKind::RPAREN) {
-        (void)consume();                    /* 'register' */
-        (void)consume();                    /* '(' */
-        vd->reg_binding = current_.str_val; /* nombre del registro */
-        (void)consume();                    /* STRING_LIT */
-        (void)expect(TokenKind::RPAREN,
-                     "se esperaba ')' tras register(\"reg\")");
-    }
-    /* Z.6: modificador `shared` en var-decl marca el storage class.
-     * Disambiguacion con el smart pointer `shared<T>`: si tras `shared`
-     * viene `<`, NO es modificador (es el tipo smart pointer); si
-     * viene cualquier otro starter de tipo (identificador, keyword
-     * primitivo, etc.), SI es modificador y consumimos.  El parser
-     * de @c parse_type_node luego ve el tipo "limpio" sin shared. */
-    if (current_.kind == TokenKind::KW_SHARED &&
-        lex_.peek_at(0).kind != TokenKind::LT) {
-        (void)consume(); /* descartar 'shared' modifier */
-        vd->is_shared = true;
-    }
-    /* `auto NAME = init;` o `var NAME = init;` -- inferencia
-     * local de tipo desde el init.  `auto`/`var` se reconocen como
-     * IDENTIFIER contextual seguido de OTRO IDENTIFIER (el nombre);
-     * asi NO los reservamos como keywords y codigo existente con
-     * variables llamadas `auto`/`var` sigue funcionando salvo en
-     * posicion de tipo en var-decl. */
-    if (current_.kind == TokenKind::IDENTIFIER &&
-        (current_.lexeme == "auto" || current_.lexeme == "var") &&
-        lex_.peek_at(0).kind == TokenKind::IDENTIFIER) {
-        (void)consume(); /* descartar 'auto' o 'var' */
-        vd->type = nullptr;
-        vd->infer_type = true;
-    } else {
-        vd->type = parse_type_node();
-    }
-    // const-correctness C-style: un `const` LIDER sobre un tipo PUNTERO
-    // qualifica el APUNTADO (`const char *p` = puntero a const char, puntero
-    // MUTABLE), no el binding.  Sobre un tipo no-puntero, `const` sigue siendo
-    // binding const (valor inmutable -- semantica Vesta existente + comptime).
-    // No aplica a comptime (su `const` es "compile-time", no del pointee).
-    if (is_const && !from_comptime && vd->type &&
-        vd->type->kind == ast::NodeKind::PointerTypeNode) {
-        ast::TypeNode *inner = vd->type.get();
-        while (inner->kind == ast::NodeKind::PointerTypeNode)
-            inner = static_cast<ast::PointerTypeNode *>(inner)->pointee.get();
-        if (inner) inner->is_const = true;
-        vd->is_const = false; // el puntero/binding es mutable (C)
-    }
-    // Puntero a funcion estilo C como variable: `R (*name)(params) = init;`.
-    bool got_fp_name = false;
-    {
-        std::string fp_name;
-        std::unique_ptr<ast::TypeNode> fp_type;
-        if (vd->type && try_parse_c_func_ptr_(vd->type, fp_name, fp_type)) {
-            vd->type = std::move(fp_type);
-            vd->name = std::move(fp_name);
-            got_fp_name = true;
-        }
-    }
-    // azucar: `T !!name = init;` equivale a
-    // `nonnull T name = !!init;`.  El `!!` entre tipo y nombre
-    // marca el tipo como no-null y envuelve el inicializador con
-    // unwrap para insertar el check runtime + assert compile-time.
-    bool inline_nonnull = false;
-    if (!got_fp_name && current_.kind == TokenKind::BANG_BANG) {
-        inline_nonnull = true;
-        (void)consume();
-        if (vd->type) vd->type->is_nonnull = true;
-    }
-    if (!got_fp_name) {
-        if (!is_name_token(current_.kind)) {
-            error_expected_name("nombre de variable",
-                                "se esperaba un nombre tras el tipo");
-            return nullptr;
-        }
-        vd->name = consume().lexeme;
-    }
-    // Sintaxis C-style: `T name[N]` -> wrappear el tipo base en
-    // ArrayTypeNode(N).  Acepta tambien `T name[]` (sin tamano,
-    // tipico de parametros con decay-to-ptr).  Cadena permitida
-    // para matrices: `T name[N][M]`.
-    //
-    // Bug fix 2026-05-23: para matrices `T name[N][M][K]`, la dimension
-    // MAS A LA IZQUIERDA es la EXTERIOR (igual que C).  Sea result =
-    // T[N][M][K] significa: array de N de array de M de array de K de T.
-    // El orden de los `[N]`, `[M]`, `[K]` en el wrap es:
-    //   outer = N -> element = (array M de (array K de T)).
-    // El wrap NAIVE (siguiente bracket envuelve al previo) invierte el
-    // orden y produce T[K][M][N].  Coleccionamos los tamanyos en
-    // vector y wrappeamos de DERECHA a IZQUIERDA.
-    if (current_.kind == TokenKind::LBRACKET) {
-        std::vector<std::pair<SourceLoc, std::unique_ptr<ast::Expr>>> dims;
-        while (current_.kind == TokenKind::LBRACKET) {
-            const SourceLoc abr_loc = current_.loc;
-            (void)consume(); // '['
-            std::unique_ptr<ast::Expr> sz;
-            if (current_.kind != TokenKind::RBRACKET) {
-                sz = parse_expr();
-            }
-            (void)expect(TokenKind::RBRACKET,
-                         "se esperaba ']' al cerrar el tamano del array");
-            dims.emplace_back(abr_loc, std::move(sz));
-        }
-        // Wrap de derecha a izquierda: la ULTIMA dimension envuelve al
-        // tipo base; cada dimension anterior envuelve la previa.  Asi
-        // T[N][M][K] -> ArrayType(N, ArrayType(M, ArrayType(K, T))).
-        for (auto it = dims.rbegin(); it != dims.rend(); ++it) {
-            auto an = std::make_unique<ast::ArrayTypeNode>();
-            an->loc = it->first;
-            an->element_type = std::move(vd->type);
-            an->size_expr = std::move(it->second);
-            vd->type = std::move(an);
-        }
-    }
-    if (match(TokenKind::ASSIGN)) {
-        vd->init = parse_expr();
-        // Si la sintaxis fue `T !!name = init`, envolvemos el init
-        // con un `!!` automatico para que el runtime falle pronto si
-        // init resulta null.  Si el usuario ya escribio `!!init`, el
-        // doble unwrap es idempotente (segundo unwrap sobre valor no
-        // null = valor mismo).
-        if (inline_nonnull && vd->init) {
-            auto un = std::make_unique<ast::UnaryExpr>();
-            un->loc = vd->init->loc;
-            un->op = ast::UnOp::Unwrap;
-            un->operand = std::move(vd->init);
-            vd->init = std::move(un);
-        }
-    }
-    (void)expect(TokenKind::SEMICOLON,
-                 "se esperaba ';' al final de la declaracion");
-    return vd;
-}
+// parse_var_decl_stmt y los declaradores viven en parser/var_declarators.cpp.
 
 std::unique_ptr<ast::Stmt> Parser::parse_if_stmt() {
     auto s = std::make_unique<ast::IfStmt>();
@@ -8448,113 +8233,7 @@ std::unique_ptr<ast::Stmt> Parser::parse_do_while_stmt() {
     return s;
 }
 
-std::unique_ptr<ast::Stmt> Parser::parse_for_stmt() {
-    const SourceLoc for_loc = current_.loc;
-    // Aceptar tanto KW_FOR como IDENT("foreach") contextual.  Ambos
-    // delegan al mismo handler que detecta automaticamente la
-    // sintaxis foreach (`T x : col`) vs counted-for (`init; cond; step`).
-    (void)consume(); // 'for' o 'foreach'
-    (void)expect(TokenKind::LPAREN, "se esperaba '(' tras 'for'/'foreach'");
-
-    // aceptar `comptime const/var T NAME = expr` como init del for.
-    // Esto permite usar el counter como comptime value dentro del body
-    // si el resto del for esta en contexto comptime (e.g. dentro de
-    // comptime fn body).  Sintaxis: `for (comptime var i64 i = 0; ...)`.
-    // El parser detecta `comptime` aqui y construye un VarDeclStmt con
-    // is_comptime=true; el resto del for se procesa normalmente.
-    bool init_is_comptime = false;
-    bool init_is_comptime_const = false;
-    if (current_.kind == TokenKind::IDENTIFIER &&
-        current_.lexeme == "comptime") {
-        Lexer &mut_lex = const_cast<Lexer &>(lex_);
-        if (mut_lex.peek_at(0).kind == TokenKind::KW_CONST) {
-            (void)consume(); /* comptime */
-            (void)consume(); /* const */
-            init_is_comptime = true;
-            init_is_comptime_const = true;
-        } else if (mut_lex.peek_at(0).kind == TokenKind::IDENTIFIER &&
-                   mut_lex.peek_at(0).lexeme == "var") {
-            (void)consume(); /* comptime */
-            (void)consume(); /* var */
-            init_is_comptime = true;
-        }
-    }
-
-    // Disambiguacion entre foreach y counted-for.
-    //   foreach: `for (T NAME : EXPR) body`
-    //   counted: `for (init? ; cond? ; step?) body`
-    // Ambos empiezan con un tipo opcional; la diferencia es lo que
-    // viene tras el primer identificador.  Hacemos lookahead: si
-    // encontramos `:` despues de `T NAME`, vamos por la rama
-    // foreach; de lo contrario reusamos parse_var_decl_stmt.
-    if (starts_type()) {
-        // Save state to allow rollback if not foreach.
-        // Parseamos el tipo (ya valido por starts_type).
-        auto type_node = parse_type_node();
-        if (!type_node) {
-            error_here("tipo invalido en for");
-            return nullptr;
-        }
-        // Tras el tipo: identificador.
-        if (current_.kind == TokenKind::IDENTIFIER) {
-            std::string name = consume().lexeme;
-            if (current_.kind == TokenKind::COLON) {
-                // foreach
-                (void)consume(); // ':'
-                auto fe = std::make_unique<ast::ForEachStmt>();
-                fe->loc = for_loc;
-                fe->iter_type = std::move(type_node);
-                fe->iter_name = std::move(name);
-                fe->iter_expr = parse_expr();
-                (void)expect(TokenKind::RPAREN,
-                             "se esperaba ')' tras for-each");
-                fe->body = parse_statement();
-                return fe;
-            }
-            // No es foreach: reconstruimos el VarDeclStmt manualmente
-            // (no podemos retroceder tokens facilmente).
-            auto s = std::make_unique<ast::ForStmt>();
-            s->loc = for_loc;
-            auto vd = std::make_unique<ast::VarDeclStmt>();
-            vd->loc = for_loc;
-            vd->type = std::move(type_node);
-            vd->name = std::move(name);
-            /* `for (comptime var/const T NAME = expr; ...)` */
-            vd->is_comptime = init_is_comptime;
-            vd->is_const = init_is_comptime_const;
-            if (match(TokenKind::ASSIGN)) {
-                vd->init = parse_expr();
-            }
-            (void)expect(TokenKind::SEMICOLON,
-                         "se esperaba ';' tras init del 'for'");
-            s->init = std::move(vd);
-            if (current_.kind != TokenKind::SEMICOLON) s->cond = parse_expr();
-            (void)expect(TokenKind::SEMICOLON,
-                         "se esperaba ';' tras la condicion del 'for'");
-            if (current_.kind != TokenKind::RPAREN) s->step = parse_expr();
-            (void)expect(TokenKind::RPAREN, "se esperaba ')' al cerrar 'for'");
-            s->body = parse_statement();
-            return s;
-        }
-        error_expected_name("nombre de variable del 'for'",
-                            "se esperaba un identificador tras el tipo en for");
-        return nullptr;
-    }
-
-    // No tipo al inicio: counted-for sin init de tipo o vacio.
-    auto s = std::make_unique<ast::ForStmt>();
-    s->loc = for_loc;
-    if (!match(TokenKind::SEMICOLON)) {
-        s->init = parse_expr_stmt();
-    }
-    if (current_.kind != TokenKind::SEMICOLON) s->cond = parse_expr();
-    (void)expect(TokenKind::SEMICOLON,
-                 "se esperaba ';' tras la condicion del 'for'");
-    if (current_.kind != TokenKind::RPAREN) s->step = parse_expr();
-    (void)expect(TokenKind::RPAREN, "se esperaba ')' al cerrar 'for'");
-    s->body = parse_statement();
-    return s;
-}
+// parse_for_stmt vive en parser/for_stmt.cpp.
 
 std::unique_ptr<ast::Stmt> Parser::parse_return_stmt() {
     auto s = std::make_unique<ast::ReturnStmt>();

@@ -141,11 +141,14 @@ using AcceptsFn = bool (*)(void *ctx, const Type &param, const Type &arg);
  * @brief La que piden estos argumentos.
  *
  * @par El orden de preferencia, y por que es este
- * DOS PASADAS: primero la que encaja EXACTA, y solo si no hay ninguna, la
- * primera que admita conversion.  Con una sola pasada `f(2.0)` se iria a
- * `f(i64)` -- un f64 es asignable a un i64 -- y nunca llegaria a la de f64, que
- * es la que el usuario escribio.  Es el mismo orden que el lenguaje ya usa al
- * especializar un generico: exacta, luego patron, luego la primaria.
+ * TRES PASADAS: primero la que encaja EXACTA; si no hay, la primera en la que
+ * los numeros solo se AMPLIAN (`is_lossless_conversion`); y solo si tampoco,
+ * la primera que admita cualquier conversion.  Con una sola pasada `f(2.0)` se
+ * iria a `f(i64)` -- un f64 es asignable a un i64 -- y nunca llegaria a la de
+ * f64, que es la que el usuario escribio.  Y sin la intermedia, `f(i32, i64)`
+ * iba a `f(i32, i32)` por estar declarada antes y truncaba el i64.  Es el mismo
+ * orden que el lenguaje ya usa al especializar un generico: exacta, luego
+ * patron, luego la primaria.
  *
  * Un argumento que no se pudo tipar (@c PrimitiveKind::COUNT) no descarta a
  * nadie: su error ya esta dado, y descartar por el solo anyadiria un segundo

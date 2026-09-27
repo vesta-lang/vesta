@@ -394,178 +394,19 @@ bool after_dollar(const std::vector<vx::Token> &toks, size_t i) {
     return at >= 1 && toks[at - 1].kind == TK::DOLLAR;
 }
 
+/**
+ * @brief Si @p name es un builtin del lenguaje, para colorearlo como tal.
+ *
+ * Se pregunta a la tabla de builtins, que es su duena.  Aqui habia una COPIA
+ * escrita a mano que se habia quedado atras: le faltaban un centenar -- `ord`,
+ * `to_str`, los de terminal, las de `type.info` -- y seguia teniendo nombres
+ * que el lenguaje ya no tiene.
+ *
+ * @param name El nombre.
+ * @return true si es un builtin.
+ */
 bool is_builtin_name(const std::string &name) {
-    static const std::unordered_set<std::string> kBuiltins = {
-        // --- I/O (vesta_io) ---
-        "print",
-        "println",
-        "echo",
-        "flush",
-        "print_int",
-        "print_uint",
-        "print_hex",
-        "print_float",
-        "print_bool",
-        "print_char",
-        "print_color",
-        "print_cstr",
-        "print_bin",
-        "print_oct",
-        "print_ptr",
-        "print_gchandle",
-        "print_pad",
-        "fopen",
-        "fwrite",
-        "fclose",
-        // --- Memoria cruda ---
-        "malloc",
-        "free",
-        // --- CPU dispatch ---
-        "cpu_features",
-        // --- Strings (StringObject) ---
-        "str_length",
-        "str_bytes",
-        "str_cstr",
-        "str_wstr",
-        "str_hash",
-        "str_intern",
-        "str_concat",
-        "str_equals",
-        "str_make",
-        "str_convert",
-        // --- Excepciones / secciones / RAII ---
-        "panic",
-        "section_start",
-        "section_end",
-        "section_size",
-        "dispose",
-        // --- FFI runtime dinamico ---
-        "ffi_open",
-        "ffi_sym",
-        "ffi_call",
-        // --- Math (vesta_math) ---
-        "sqrt",
-        "pow",
-        "fabs",
-        "floor",
-        "ceil",
-        "round",
-        "fmin",
-        "fmax",
-        "log",
-        "log2",
-        "log10",
-        "sin",
-        "cos",
-        "tan",
-        "abs",
-        "imin",
-        "imax",
-        "clamp",
-        "trunc",
-        "iminu",
-        "imaxu",
-        "ilog2",
-        "popcount",
-        "clz",
-        "ctz",
-        "bswap",
-        "rotl",
-        "rotr",
-        // --- Callbacks nativos ---
-        "as_native_callback",
-        // --- Reflexion runtime ---
-        "forName",
-        "getClass",
-        "getField",
-        "getMethod",
-        "newInstance",
-        "getMethods",
-        "invoke",
-        // --- Introspeccion comptime ---
-        "static_assert",
-        "type.size",
-        "type.align",
-        "type.name",
-        "type.id",
-        "type.kind",
-        "field.count",
-        "method.count",
-        "type.is_class",
-        "type.is_struct",
-        "type.is_primitive",
-        "type.is_newtype",
-        "field.offset",
-        "field.has",
-        "method.has",
-        "type.is_subtype",
-        "type.is_same",
-        "type.of",
-        "type.base",
-        "type.inner",
-        "type.error",
-        "type.result",
-        "method.name",
-        "method.result",
-        "field.name",
-        "field.type",
-        "field.type_at",
-        "type.is_enum",
-        "type.is_opaque",
-        "is_shared",
-        "type.underlying",
-        // --- Overlay (vistas tipadas sobre memoria) ---
-        "overlay.in_bounds",
-        "overlay.extent",
-        // --- Builtins comptime de string + utilidades ---
-        "comptime.str.concat",
-        "comptime.str.eq",
-        "comptime.str.len",
-        "comptime.chr",
-        "comptime.ord",
-        "comptime.str.substr",
-        "comptime.str.repeat",
-        "comptime.str.replace",
-        "comptime.str.contains",
-        "gensym",
-        "comptime_compile",
-        "comptime.to_str",
-        "comptime.print",
-        // --- Smart pointers / borrow ---
-        "unique_box",
-        "shared_box",
-        "unique_with",
-        "shared_with",
-        "move",
-        "ptr_of",
-        "use_count",
-        "lend",
-        "lend_mut",
-        "read_borrow",
-        "write_borrow",
-        // --- Memoria compartida ( Z) ---
-        "share",
-        "unshare",
-        "is_shared",
-        "shared_malloc",
-        "shared_free",
-        "atomic_load_i64",
-        "atomic_store_i64",
-        "atomic_cas_i64",
-        "atomic_add_i64",
-        // --- Colecciones constructoras ---
-        "arraylist",
-        "hashmap",
-        "hashset",
-        "queue",
-        "deque",
-        "treemap",
-        "treeset",
-        // --- Carga dinamica de modulos ---
-        "loadmodule",
-        "unloadmodule",
-    };
-    return kBuiltins.count(name) != 0;
+    return vx::builtin_from_name(name) != vx::Builtin::Unknown;
 }
 
 /**

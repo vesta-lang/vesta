@@ -1070,16 +1070,16 @@ MacroSkipReason macro_body_unsupported_reason(const TypeChecker &tc,
     }
     case ast::NodeKind::ForStmt: {
         const auto *fs = static_cast<const ast::ForStmt *>(s);
-        if (fs->init) {
-            auto r = macro_body_unsupported_reason(tc, fs->init.get());
+        for (const auto &in : fs->init) {
+            auto r = macro_body_unsupported_reason(tc, in.get());
             if (!r.empty()) return r;
         }
         if (fs->cond) {
             auto r = macro_body_unsupported_reason_expr(tc, fs->cond.get());
             if (!r.empty()) return r;
         }
-        if (fs->step) {
-            auto r = macro_body_unsupported_reason_expr(tc, fs->step.get());
+        for (const auto &st : fs->step) {
+            auto r = macro_body_unsupported_reason_expr(tc, st.get());
             if (!r.empty()) return r;
         }
         return macro_body_unsupported_reason(tc, fs->body.get());
@@ -1173,9 +1173,12 @@ bool macro_body_forwards_expr_capture(const TypeChecker &tc,
     }
     case ast::NodeKind::ForStmt: {
         const auto *fs = static_cast<const ast::ForStmt *>(s);
-        return macro_body_forwards_expr_capture(tc, fs->init.get()) ||
-               macro_body_forwards_expr_capture_expr(tc, fs->cond.get()) ||
-               macro_body_forwards_expr_capture_expr(tc, fs->step.get()) ||
+        for (const auto &in : fs->init)
+            if (macro_body_forwards_expr_capture(tc, in.get())) return true;
+        for (const auto &st : fs->step)
+            if (macro_body_forwards_expr_capture_expr(tc, st.get()))
+                return true;
+        return macro_body_forwards_expr_capture_expr(tc, fs->cond.get()) ||
                macro_body_forwards_expr_capture(tc, fs->body.get());
     }
     default: return false;
@@ -1305,9 +1308,11 @@ void annotate_macro_param_idents(
     }
     case ast::NodeKind::ForStmt: {
         auto *fs = static_cast<ast::ForStmt *>(s);
-        if (fs->init) annotate_macro_param_idents(fs->init.get(), param_types);
+        for (auto &in : fs->init)
+            annotate_macro_param_idents(in.get(), param_types);
         if (fs->cond) walk_expr(fs->cond.get());
-        if (fs->step) walk_expr(fs->step.get());
+        for (auto &st : fs->step)
+            walk_expr(st.get());
         annotate_macro_param_idents(fs->body.get(), param_types);
         break;
     }

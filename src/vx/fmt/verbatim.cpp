@@ -116,15 +116,31 @@ void mark_verbatim_calls(std::vector<Piece> &pieces,
         // que en una expresion no cabe.
         int depth = 0;
         size_t j = i + 1;
-        bool is_decl = false, has_statement = false;
+        bool is_decl = false;
+        bool has_statement = false;
+        /* Un `;` dentro del CUERPO de una lambda (`n.times((i64 i) => { c++;
+         * })`) es codigo, no texto: el cuerpo es un bloque de sentencias y las
+         * lleva.  Tomarlo por la senal 3 copiaba la llamada entera tal cual --
+         * sin reindentar -- y la linea siguiente perdia su sangria.  El cuerpo
+         * es la llave que sigue a `=>`; se cuenta hasta su cierre. */
+        int braces = 0;
+        int lambda_body_from = -1; // nivel de llave donde empezo; -1 = fuera
         for (; j < pieces.size(); ++j) {
             if (is(pieces[j], TokenKind::LPAREN))
                 ++depth;
             else if (is(pieces[j], TokenKind::RPAREN)) {
                 if (--depth == 0) break;
+            } else if (is(pieces[j], TokenKind::LBRACE)) {
+                if (lambda_body_from < 0 &&
+                    is(pieces[j - 1], TokenKind::FAT_ARROW))
+                    lambda_body_from = braces;
+                ++braces;
+            } else if (is(pieces[j], TokenKind::RBRACE)) {
+                if (--braces == lambda_body_from) lambda_body_from = -1;
             } else if (depth == 1 && is_word(pieces[j], "expr"))
                 is_decl = true;
-            else if (is(pieces[j], TokenKind::SEMICOLON))
+            else if (is(pieces[j], TokenKind::SEMICOLON) &&
+                     lambda_body_from < 0)
                 has_statement = true;
         }
         if (is_decl) continue;

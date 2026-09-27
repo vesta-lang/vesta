@@ -1,11 +1,17 @@
 namespace ejemplos.math_builtins;
 
-// Math builtins delegando a stdlib/native/math/vesta_math.dll.
-// Cubre: sqrt, pow, fabs, floor, ceil, round, fmin, fmax, log, log2,
-// log10, sin, cos, tan, abs (i64), imin, imax, clamp.  El lowering los
-// detecta como nombres reservados en try_lower_builtin_call y emite
-// CALLN al simbolo vmath_<name> con los bits IEEE 754 como uint64_t
-// (BITCAST evita FTOI que convertiria el VALOR).
+// Math builtins.  Cubre: sqrt, pow, floor, ceil, round, log, log2, log10,
+// sin, cos, tan, y los GENERICOS NUMERICOS abs, min, max y clamp.
+//
+// Los genericos son del tipo de sus argumentos: `min(i32, i32)` es un i32,
+// `min(f32, f32)` un f32 y `max(u8, u8)` un u8.  Con tipos mezclados se usa el
+// que no pierde nada -- `min(i32, i64)` es un i64 --.  Por dentro cada uno es
+// una instruccion por clase de tipo: con signo, sin signo o real.  Antes eran
+// siete nombres de un solo tipo (imin, iminu, fmin, fabs...), y un i32 volvia
+// convertido en i64.
+//
+// Las trascendentes (pow, log, sin...) llaman a vesta_math con los bits IEEE
+// 754 como uint64_t (BITCAST evita FTOI, que convertiria el VALOR).
 i32 main() {
 	f64 a = 16.0_f64;
 	f64 r = sqrt(a); // 4.0
@@ -26,13 +32,13 @@ i32 main() {
 	if (ce < 3.99 || ce > 4.01) return 4;
 	if (ro < 3.99 || ro > 4.01) return 5;
 
-	f64 ab = fabs(-7.5); // 7.5
-	println("fabs(-7.5)=${ab}");
+	f64 ab = abs(-7.5); // 7.5
+	println("abs(-7.5)=${ab}");
 	if (ab < 7.49 || ab > 7.51) return 6;
 
-	f64 mx = fmax(2.5, 9.9); // 9.9
-	f64 mn = fmin(2.5, 9.9); // 2.5
-	println("fmax=${mx} fmin=${mn}");
+	f64 mx = max(2.5, 9.9); // 9.9
+	f64 mn = min(2.5, 9.9); // 2.5
+	println("max=${mx} min=${mn}");
 	if (mx < 9.89 || mx > 9.91) return 7;
 	if (mn < 2.49 || mn > 2.51) return 8;
 
@@ -51,16 +57,37 @@ i32 main() {
 	if (l2 < 2.99 || l2 > 3.01) return 12;
 	if (l10 < 2.99 || l10 > 3.01) return 13;
 
-	// int builtins
+	// Los mismos nombres con enteros.
 	i64 av  = abs(-42);         // 42
-	i64 imx = imax(7, 13);      // 13
-	i64 imn = imin(7, 13);      // 7
+	i64 imx = max(7, 13);       // 13
+	i64 imn = min(7, 13);       // 7
 	i64 cl  = clamp(20, 5, 10); // 10
-	println("abs(-42)=${av} imax=${imx} imin=${imn} clamp=${cl}");
+	println("abs(-42)=${av} max=${imx} min=${imn} clamp=${cl}");
 	if (av != 42) return 14;
 	if (imx != 13) return 15;
 	if (imn != 7) return 16;
 	if (cl != 10) return 17;
+
+	// Del tipo de los argumentos: un i8 sigue siendo un i8, un u8 compara
+	// sin signo (200 > 100) y un f32 no pasa por f64.
+	i8  pequeno = abs(-100_i8);          // 100
+	u8  sin_sig = max(200_u8, 100_u8);   // 200
+	f32 corto   = min(1.5_f32, 2.5_f32); // 1.5
+	f64 acotado = clamp(-0.5, 0.0, 1.0); // 0.0
+	if (pequeno != 100) return 18;
+	if (sin_sig != 200) return 19;
+	if (corto != 1.5_f32) return 20;
+	if (acotado != 0.0) return 21;
+
+	// Mezclados: `min(i32, i64)` es de i64, el que no pierde nada.  Si se
+	// quedara en i32, el i64 se truncaria y saldria otro numero.
+	i32 corto_i =  5_i32;
+	i64 largo_i = -10_000_000_000_i64;
+	if (min(corto_i, largo_i) != largo_i) return 22;
+
+	// Y con punto, como cualquier funcion: `a.max(b)`.
+	f64 cadena = (-2.25).max(1.0).min(3.0); // 1.0
+	if (cadena != 1.0) return 23;
 
 	return 42;
 }

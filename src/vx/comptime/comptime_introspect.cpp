@@ -584,8 +584,9 @@ static bool stmt_contains_asm_ci(const ast::Stmt *s) {
             static_cast<const ast::DoWhileStmt *>(s)->body.get());
     case ast::NodeKind::ForStmt: {
         const auto *fs = static_cast<const ast::ForStmt *>(s);
-        return stmt_contains_asm_ci(fs->init.get()) ||
-               stmt_contains_asm_ci(fs->body.get());
+        for (const auto &in : fs->init)
+            if (stmt_contains_asm_ci(in.get())) return true;
+        return stmt_contains_asm_ci(fs->body.get());
     }
     default: return false;
     }
@@ -658,9 +659,11 @@ static bool stmt_calls_naked_ci(const TypeChecker &tc, const ast::Stmt *s) {
     }
     case ast::NodeKind::ForStmt: {
         const auto *fs = static_cast<const ast::ForStmt *>(s);
-        return stmt_calls_naked_ci(tc, fs->init.get()) ||
-               expr_calls_naked_ci(tc, fs->cond.get()) ||
-               expr_calls_naked_ci(tc, fs->step.get()) ||
+        for (const auto &in : fs->init)
+            if (stmt_calls_naked_ci(tc, in.get())) return true;
+        for (const auto &st : fs->step)
+            if (expr_calls_naked_ci(tc, st.get())) return true;
+        return expr_calls_naked_ci(tc, fs->cond.get()) ||
                stmt_calls_naked_ci(tc, fs->body.get());
     }
     default: return false;
@@ -730,8 +733,9 @@ static bool stmt_uses_io_ci(const ast::Stmt *s) {
             static_cast<const ast::DoWhileStmt *>(s)->body.get());
     case ast::NodeKind::ForStmt: {
         const auto *fs = static_cast<const ast::ForStmt *>(s);
-        return stmt_uses_io_ci(fs->init.get()) ||
-               stmt_uses_io_ci(fs->body.get());
+        for (const auto &in : fs->init)
+            if (stmt_uses_io_ci(in.get())) return true;
+        return stmt_uses_io_ci(fs->body.get());
     }
     default: return false;
     }
@@ -923,6 +927,37 @@ static bool apply_comptime_assign(TypeChecker::ComptimeConst &dst,
 }
 
 /**
+ * @brief Evalua en compile-time UN paso de un `for` (`i = i + 1`, `k++`).
+ *
+ * Una asignacion a una variable comptime se aplica directamente, para que
+ * actualice el binding; cualquier otra expresion se evalua por sus efectos.
+ *
+ * @param tc   El comprobador, con el ambito comptime del `for` abierto.
+ * @param step El paso.
+ * @return false si no se puede evaluar: la asignacion no es a una variable
+ *         comptime mutable, o su valor no se sabe al compilar.
+ */
+static bool comptime_eval_for_step(TypeChecker &tc, const ast::Expr *step) {
+    if (step->kind != ast::NodeKind::AssignExpr) {
+        (void)comptime_eval_expr(tc, step);
+        return true;
+    }
+    auto *ae = static_cast<const ast::AssignExpr *>(step);
+    if (!ae->target || ae->target->kind != ast::NodeKind::IdentExpr)
+        return false;
+    auto *id = static_cast<const ast::IdentExpr *>(ae->target.get());
+    auto *binding = find_comptime_local_mut(tc, id->name);
+    if (!binding || !binding->is_mutable) return false; // no es comptime var
+    // Camino rapido de `s = s + X`.
+    if (try_self_concat_fast_path(tc, *binding, id->name, ae->value.get(),
+                                  ae->op))
+        return true;
+    ComptimeEvalResult rhs = comptime_eval_expr(tc, ae->value.get());
+    if (!rhs.ok) return false;
+    return apply_comptime_assign(*binding, rhs, ae->op);
+}
+
+/**
  * @brief Evalua un Stmt en compile-time.  Maneja control de flujo
  * completo (return/break/continue) via @c ComptimeControl.
  */
@@ -1054,9 +1089,11 @@ bool comptime_eval_stmt(TypeChecker &tc, const ast::Stmt *s,
         /* C-style for: init + cond + step + body. */
         auto *fs = static_cast<const ast::ForStmt *>(s);
         tc.push_comptime_scope();
-        if (fs->init && !comptime_eval_stmt(tc, fs->init.get(), ctrl)) {
-            tc.pop_comptime_scope();
-            return false;
+        for (const auto &in : fs->init) {
+            if (!comptime_eval_stmt(tc, in.get(), ctrl)) {
+                tc.pop_comptime_scope();
+                return false;
+            }
         }
         int iter = 0;
         const int MAX_ITER = 1000000;
@@ -1081,51 +1118,11 @@ bool comptime_eval_stmt(TypeChecker &tc, const ast::Stmt *s,
             if (ctrl.continue_seen) {
                 ctrl.continue_seen = false;
             }
-            /* A.41: el step es una expresion que puede ser un
-             * AssignExpr (e.g. `i = i + 1`).  Lo procesamos como
-             * ExprStmt sintetico via comptime_eval_stmt para que
-             * la asignacion actualice el binding correctamente. */
-            if (fs->step) {
-                if (fs->step->kind == ast::NodeKind::AssignExpr) {
-                    /* Aplicar asignacion directamente. */
-                    auto *ae =
-                        static_cast<const ast::AssignExpr *>(fs->step.get());
-                    if (ae->target &&
-                        ae->target->kind == ast::NodeKind::IdentExpr) {
-                        auto *id = static_cast<const ast::IdentExpr *>(
-                            ae->target.get());
-                        auto *binding = find_comptime_local_mut(tc, id->name);
-                        if (binding && binding->is_mutable) {
-                            /* A.43.19 fast path: `s = s + X`. */
-                            if (try_self_concat_fast_path(
-                                    tc, *binding, id->name, ae->value.get(),
-                                    ae->op)) {
-                                /* OK -- continuar. */
-                            } else {
-                                ComptimeEvalResult rhs =
-                                    comptime_eval_expr(tc, ae->value.get());
-                                if (!rhs.ok) {
-                                    tc.pop_comptime_scope();
-                                    return false;
-                                }
-                                if (!apply_comptime_assign(*binding, rhs,
-                                                           ae->op)) {
-                                    tc.pop_comptime_scope();
-                                    return false;
-                                }
-                            }
-                        } else {
-                            /* No es comptime var -- error. */
-                            tc.pop_comptime_scope();
-                            return false;
-                        }
-                    } else {
-                        tc.pop_comptime_scope();
-                        return false;
-                    }
-                } else {
-                    /* Otra expresion: evaluamos por side effects. */
-                    (void)comptime_eval_expr(tc, fs->step.get());
+            // Los pasos, en orden.
+            for (const auto &st : fs->step) {
+                if (!comptime_eval_for_step(tc, st.get())) {
+                    tc.pop_comptime_scope();
+                    return false;
                 }
             }
         }

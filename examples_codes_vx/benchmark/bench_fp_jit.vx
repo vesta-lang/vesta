@@ -23,11 +23,11 @@ class FpOps {
 		while (i < n) {
 			f64 x = (f64)i;
 			acc   = acc + sqrt(x);
-			acc   = acc + fabs(x - 1000.0);
+			acc   = acc + abs(x - 1000.0);
 			acc   = acc + floor(x * 0.7);
 			acc   = acc + ceil(x * 0.3);
-			acc   = acc + fmin(x, 500_000.0);
-			acc   = acc + fmax(x, 100.0);
+			acc   = acc + min(x, 500_000.0);
+			acc   = acc + max(x, 100.0);
 			i     = i + 1;
 		}
 		return acc;

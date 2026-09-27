@@ -41,6 +41,12 @@ i32 main() {
 	f64 razon = 3.14_f64;
 	f32 corta = 1.5_f32;
 
+	// Tras un exponente el `_` separa el sufijo igual: las constantes que mas
+	// lo necesitan -- epsilones, minimos -- se escriben asi.  Y tras el `p` de
+	// un flotante hexadecimal, que da los bits exactos.
+	f64 epsilon = 2.220446049250313e-16_f64;
+	f64 exacto  = 0x1.8p+1_f64; // 1.5 * 2^1
+
 	println("con sufijo   = ${con_sufijo}");
 	println("sin sufijo   = ${sin_sufijo}");
 	println("grande       = ${grande}");
@@ -70,6 +76,8 @@ i32 main() {
 	if (minimo == -128) { ok = ok + 5; }
 	if (maximo == 127) { ok = ok + 5; }
 	if (truncado == 44) { ok = ok + 5; }
+	if (epsilon > 0.0 && epsilon < 1e-15) { ok = ok + 3; }
+	if (exacto == 3.0) { ok = ok + 2; }
 	println("ok = ${ok}");
 	return ok;
 }

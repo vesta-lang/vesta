@@ -61,9 +61,9 @@ typedef HANDLE    HGLRC;
 typedef HANDLE    HMENU;
 typedef HANDLE*   LPHANDLE;
 
-typedef BYTE*  LPBYTE;
-typedef DWORD* LPDWORD;
-typedef void*  LPCVOID;
+typedef       BYTE*  LPBYTE;
+typedef       DWORD* LPDWORD;
+typedef const void*  LPCVOID; // la `C` es de const: solo se lee a traves de el
 
 // GUID (128 bits): identificador global de Windows.
 typedef struct _GUID {

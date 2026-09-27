@@ -816,10 +816,18 @@ std::string render_stmt(StmtCtx &ctx, const ast::Stmt *s) {
     }
     case ast::NodeKind::ForStmt: {
         auto *fs = static_cast<const ast::ForStmt *>(s);
-        std::string init_id;
-        if (fs->init) {
-            std::string ip = render_stmt(ctx, fs->init.get());
-            auto bar = ip.find('|');
+        // El inicializador son varias sentencias: se encadenan en orden.
+        std::string init_entry;
+        std::string init_id; // la salida del ultimo
+        for (const auto &in : fs->init) {
+            const std::string ip = render_stmt(ctx, in.get());
+            const auto bar = ip.find('|');
+            const std::string ie =
+                (bar == std::string::npos) ? ip : ip.substr(0, bar);
+            if (init_entry.empty())
+                init_entry = ie;
+            else
+                emit_edge(ctx, init_id, ie);
             init_id = (bar == std::string::npos) ? ip : ip.substr(bar + 1);
         }
         std::string head = emit_node_diamond(
@@ -827,9 +835,9 @@ std::string render_stmt(StmtCtx &ctx, const ast::Stmt *s) {
             fs->cond ? ("for " + fmt_expr(fs->cond.get())) : "for (true)",
             "stmtLoop");
         std::string step_id;
-        if (fs->step) {
-            step_id = emit_node(
-                ctx, "step", "step: " + fmt_expr(fs->step.get()), "stmtLoop");
+        if (!fs->step.empty()) {
+            step_id = emit_node(ctx, "step", "step: " + fmt_expr_list(fs->step),
+                                "stmtLoop");
         }
         std::string exit_id = emit_node(ctx, "fend", "(loop exit)", "stmtAux");
         std::string continue_target = step_id.empty() ? head : step_id;
@@ -858,7 +866,7 @@ std::string render_stmt(StmtCtx &ctx, const ast::Stmt *s) {
             emit_dotted(ctx, head, step_id, "step (skipped if return)");
             emit_edge(ctx, step_id, head, "back");
         }
-        std::string entry = init_id.empty() ? head : init_id;
+        std::string entry = init_entry.empty() ? head : init_entry;
         return entry + "|" + exit_id;
     }
     case ast::NodeKind::ForEachStmt: {

@@ -21,5 +21,8 @@ i64 main() {
 	i64 b = lib.ov.escala(3.0_f64);       // 500
 	i64 c = lib.ov.escala(10_i64, 6_i64); // 16
 	println("a=${a} b=${b} c=${c}");
+	// Con `in`: cada una a la suya, tambien la de f64.
+	if (lib.ov.doble(10.5_f64) != 21.0) return 1;
+	if (lib.ov.doble(4_i64) != 8) return 2;
 	return a + b + c - 480; // 6 + 500 + 16 - 480 = 42
 }

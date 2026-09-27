@@ -1351,9 +1351,11 @@ void Lowering::scan_read_names_stmt(const ast::Stmt *st,
     }
     case ast::NodeKind::ForStmt: {
         auto *fs = static_cast<const ast::ForStmt *>(st);
-        scan_read_names_stmt(fs->init.get(), out);
+        for (const auto &in : fs->init)
+            scan_read_names_stmt(in.get(), out);
         scan_read_names_expr(fs->cond.get(), out);
-        scan_read_names_expr(fs->step.get(), out);
+        for (const auto &sp : fs->step)
+            scan_read_names_expr(sp.get(), out);
         scan_read_names_stmt(fs->body.get(), out);
         return;
     }

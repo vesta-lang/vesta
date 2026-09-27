@@ -71,9 +71,10 @@ std::string mangle_args(const std::vector<Type> &args);
 std::unique_ptr<ast::TypeNode> type_node_from_type(const Type &a,
                                                    const SourceLoc &loc);
 
-/// @brief Clona un @c TypeNode aplicando la sustitucion @p g.
+/// @brief Clona un @c TypeNode aplicando la sustitucion @p g (default:
+///        vacia, o sea una copia exacta, marcas incluidas).
 std::unique_ptr<ast::TypeNode> clone_type_with_subst(const ast::TypeNode *t,
-                                                     const GenSubst &g);
+                                                     const GenSubst &g = {});
 
 /// @brief Clona una @c Expr aplicando la sustitucion @p g (default: vacia).
 std::unique_ptr<ast::Expr> clone_expr(const ast::Expr *e,

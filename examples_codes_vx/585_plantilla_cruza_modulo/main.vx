@@ -6,7 +6,8 @@
 // separa "compila" de "funciona": si cada instancia se llevara su copia del
 // global, la cuenta saldria a uno.
 
-import prueba.plantilla only mide, llamadas, bytes_vistos;
+import prueba.plantilla only mide, llamadas, bytes_vistos, cuadruple,
+ancho_en_bits;
 
 i32 main() {
 	i64 a = 20_i64;
@@ -22,6 +23,12 @@ i32 main() {
 	println("llamadas=${llamadas()}");
 	// Diez por llamada, o sea veinte: prueba que el global `__` es UNO solo.
 	println("bytes=${bytes_vistos()}");
+
+	// Una publica que llama a una PLANTILLA privada de su modulo: 3 * 4 = 12.
+	if (cuadruple<i64>(3_i64) != 12) return 1;
+	// Y una publica que llama a una comptime GENERICA privada.
+	if (ancho_en_bits<i32>() != 32) return 2;
+	if (ancho_en_bits<i64>() != 64) return 3;
 
 	// 41 + 11 = 52; 52 - 10 = 42
 	return (i32)(ra + rb - 10);

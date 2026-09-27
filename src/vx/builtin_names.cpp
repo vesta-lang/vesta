@@ -81,6 +81,8 @@ constexpr BuiltinEntry kTable[] = {
     {"cos", Builtin::Cos},
     {"ctz", Builtin::Ctz},
     {"log", Builtin::Log},
+    {"max", Builtin::Max},
+    {"min", Builtin::Min},
     {"ord", Builtin::Ord},
     {"pid", Builtin::Pid},
     {"pow", Builtin::Pow},
@@ -92,12 +94,7 @@ constexpr BuiltinEntry kTable[] = {
     {"Some", Builtin::Some},
     {"ceil", Builtin::Ceil},
     {"echo", Builtin::Echo},
-    {"fabs", Builtin::Fabs},
-    {"fmax", Builtin::Fmax},
-    {"fmin", Builtin::Fmin},
     {"free", Builtin::Free},
-    {"imax", Builtin::Imax},
-    {"imin", Builtin::Imin},
     {"isOk", Builtin::IsOk},
     {"lend", Builtin::Lend},
     {"log2", Builtin::Log2},
@@ -116,8 +113,6 @@ constexpr BuiltinEntry kTable[] = {
     {"flush", Builtin::Flush},
     {"fopen", Builtin::Fopen},
     {"ilog2", Builtin::Ilog2},
-    {"imaxu", Builtin::Imaxu},
-    {"iminu", Builtin::Iminu},
     {"log10", Builtin::Log10},
     {"panic", Builtin::Panic},
     {"print", Builtin::Print},
@@ -642,18 +637,13 @@ constexpr BuiltinFamily family_of(Builtin b) {
     case Builtin::Clz:
     case Builtin::Cos:
     case Builtin::Ctz:
-    case Builtin::Fabs:
     case Builtin::Floor:
-    case Builtin::Fmax:
-    case Builtin::Fmin:
     case Builtin::Ilog2:
-    case Builtin::Imax:
-    case Builtin::Imaxu:
-    case Builtin::Imin:
-    case Builtin::Iminu:
     case Builtin::Log:
     case Builtin::Log10:
     case Builtin::Log2:
+    case Builtin::Max:
+    case Builtin::Min:
     case Builtin::Popcount:
     case Builtin::Pow:
     case Builtin::Rotl:

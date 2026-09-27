@@ -51,6 +51,14 @@ namespace vx {
 std::string fmt_expr(const ast::Expr *e);
 
 /**
+ * @brief Texto de una lista de expresiones separadas por coma, como se
+ *        escriben los pasos de un `for`.
+ * @param list Las expresiones.
+ * @return Su texto; vacio si no hay ninguna.
+ */
+std::string fmt_expr_list(const std::vector<std::unique_ptr<ast::Expr>> &list);
+
+/**
  * @brief Texto de una expresion, acotado en profundidad.
  *
  * Cada expresion se reduce a una linea con lo justo para entender el flujo sin

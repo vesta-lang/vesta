@@ -310,9 +310,11 @@ void rewrite_refs_in_stmt_(
     }
     case ast::NodeKind::ForStmt: {
         auto *fr = static_cast<ast::ForStmt *>(s);
-        rewrite_refs_in_stmt_(fr->init.get(), rename_map);
+        for (auto &in : fr->init)
+            rewrite_refs_in_stmt_(in.get(), rename_map);
         rewrite_refs_in_expr_(fr->cond.get(), rename_map);
-        rewrite_refs_in_expr_(fr->step.get(), rename_map);
+        for (auto &st : fr->step)
+            rewrite_refs_in_expr_(st.get(), rename_map);
         rewrite_refs_in_stmt_(fr->body.get(), rename_map);
         break;
     }

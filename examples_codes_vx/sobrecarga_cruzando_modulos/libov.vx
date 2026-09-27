@@ -8,3 +8,11 @@ public i64 escala(i64 x) => x * 2;
 public i64 escala(f64 x) => 500;
 
 public i64 escala(i64 x, i64 y) => x + y;
+
+// Con `in`, que marca el parametro de solo lectura.  En el `.vxi` viaja como
+// `const i64` / `const f64`, y el lector no entendia el `const`: leia las dos
+// firmas como `(void)`, ninguna encajaba y se llamaba a la primera -- la de
+// enteros -- con un f64.
+public i64 doble(in i64 x) => x * 2;
+
+public f64 doble(in f64 x) => x * 2.0;

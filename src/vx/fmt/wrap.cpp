@@ -229,6 +229,17 @@ void try_join(const std::vector<Piece> &pieces, const Layout &layout,
     for (size_t k = open + 1; k <= close; ++k)
         if (pieces[k].trivia.find('/') != std::string_view::npos) return;
 
+    /* Ni si dentro va el cuerpo de BLOQUE de una lambda (`n.times((i64 i) => {
+     * ... })`): juntar la lista juntaria el bloque, y un bloque no se junta
+     * nunca (ver arriba).  Salian todas sus sentencias en un renglon, de mas de
+     * ochenta columnas, porque la cuenta de arriba no mide los espacios entre
+     * piezas.  Hasta ahora no pasaba porque esas llamadas se copiaban tal cual
+     * (`R110`, ver verbatim.cpp). */
+    for (size_t k = open + 1; k <= close; ++k)
+        if (kind_of(pieces[k]) == TokenKind::LBRACE &&
+            kind_of(pieces[k - 1]) == TokenKind::FAT_ARROW)
+            return;
+
     // Cabe: se quitan todos los saltos de dentro.
     for (size_t k = open + 1; k <= close; ++k)
         if (layout.line[k] != layout.line[k - 1]) breaks[k].join = true;
@@ -579,6 +590,14 @@ std::vector<Break> compute_breaks(const std::vector<Piece> &pieces,
                 c.first >= 2 && kind_of(pieces[c.first]) == TokenKind::LPAREN &&
                 kind_of(pieces[c.first - 2]) == TokenKind::AT;
             if (!has_comma && !anotacion) continue;
+            /* La cabecera de un `for` tampoco, aunque lleve comas: no es una
+             * lista sino tres partes separadas por `;`, y sus comas son las de
+             * dentro de una parte (`for (i64 a = 0, b = n; ...; a++, b--)`).
+             * Cortar por ellas mezclaba las partes en las mismas lineas.  Como
+             * en la condicion de un `if`, ahi el salto lo pone quien escribe. */
+            if (c.first >= 1 &&
+                kind_of(pieces[c.first - 1]) == TokenKind::KW_FOR)
+                continue;
             open = c.first;
             close = c.second;
             found = true;

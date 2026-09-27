@@ -70,7 +70,6 @@ constexpr const char *k_dispose[] = {"x"};
 constexpr const char *k_echo[] = {"value"};
 constexpr const char *k_error[] = {"r"};
 constexpr const char *k_expect[] = {"opt", "msg"};
-constexpr const char *k_fabs[] = {"x"};
 constexpr const char *k_fclose[] = {"fp"};
 constexpr const char *k_ffi_call[] = {"fn"};
 constexpr const char *k_ffi_open[] = {"lib"};
@@ -84,8 +83,6 @@ constexpr const char *k_field_set[] = {"obj", "field", "value"};
 constexpr const char *k_field_type[] = {"field"};
 constexpr const char *k_find_type[] = {"name"};
 constexpr const char *k_floor[] = {"x"};
-constexpr const char *k_fmax[] = {"a", "b"};
-constexpr const char *k_fmin[] = {"a", "b"};
 constexpr const char *k_fopen[] = {"path", "mode"};
 constexpr const char *k_forName[] = {"name"};
 constexpr const char *k_free[] = {"ptr"};
@@ -105,10 +102,8 @@ constexpr const char *k_has_method[] = {"name"};
 constexpr const char *k_hashmap[] = {"capacity"};
 constexpr const char *k_hashset[] = {"capacity"};
 constexpr const char *k_ilog2[] = {"x"};
-constexpr const char *k_imax[] = {"a", "b"};
-constexpr const char *k_imaxu[] = {"a", "b"};
-constexpr const char *k_imin[] = {"a", "b"};
-constexpr const char *k_iminu[] = {"a", "b"};
+constexpr const char *k_max[] = {"a", "b"};
+constexpr const char *k_min[] = {"a", "b"};
 constexpr const char *k_in_bounds[] = {"field_addr", "buf_size"};
 constexpr const char *k_isOk[] = {"r"};
 constexpr const char *k_isPresent[] = {"opt"};
@@ -251,7 +246,6 @@ constexpr Row kRows[] = {
     {"echo", k_echo, 1},
     {"error", k_error, 1},
     {"expect", k_expect, 2},
-    {"fabs", k_fabs, 1},
     {"fclose", k_fclose, 1},
     {"ffi_call", k_ffi_call, 1},
     {"ffi_open", k_ffi_open, 1},
@@ -266,8 +260,6 @@ constexpr Row kRows[] = {
     {"field.set", k_field_set, 3},
     {"field.type", k_field_type, 1},
     {"floor", k_floor, 1},
-    {"fmax", k_fmax, 2},
-    {"fmin", k_fmin, 2},
     {"fopen", k_fopen, 2},
     {"forName", k_forName, 1},
     {"free", k_free, 1},
@@ -285,10 +277,6 @@ constexpr Row kRows[] = {
     {"hashmap", k_hashmap, 1},
     {"hashset", k_hashset, 1},
     {"ilog2", k_ilog2, 1},
-    {"imax", k_imax, 2},
-    {"imaxu", k_imaxu, 2},
-    {"imin", k_imin, 2},
-    {"iminu", k_iminu, 2},
     {"isOk", k_isOk, 1},
     {"isPresent", k_isPresent, 1},
     {"lend", k_lend, 1},
@@ -298,7 +286,9 @@ constexpr Row kRows[] = {
     {"log10", k_log10, 1},
     {"log2", k_log2, 1},
     {"malloc", k_malloc, 1},
+    {"max", k_max, 2},
     {"method.has", k_has_method, 1},
+    {"min", k_min, 2},
     {"move", k_move, 1},
     {"msgsend", k_msgsend, 2},
     {"newInstance", k_newInstance, 1},

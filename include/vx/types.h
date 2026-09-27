@@ -1327,6 +1327,44 @@ constexpr size_t primitive_size_bytes(PrimitiveKind k) noexcept {
 }
 
 /**
+ * @brief Si convertir un valor numerico de @p from a @p to lo conserva SIEMPRE.
+ *
+ * Es lo que separa ampliar de estrechar, y lo que decide que sobrecarga pide
+ * una llamada cuando ninguna encaja exacta: `f(i32, i64)` tiene que ir a la de
+ * `(i64, i64)`, que no pierde nada, y no a la de `(i32, i32)` que se declaro
+ * antes -- esa truncaba el i64 y daba otro valor --.
+ *
+ * - Entero a entero: el destino tiene que cubrir todo el rango del origen.  Del
+ *   mismo signo, basta con que no sea mas estrecho; de sin signo a con signo,
+ *   tiene que ser MAS ancho; de con signo a sin signo, nunca (los negativos).
+ * - Entero a real: exacto mientras el entero quepa en la mantisa -- 24 bits en
+ *   un f32, 53 en un f64 --, o sea hasta 16 bits a f32 y hasta 32 a f64.
+ * - Real a real: solo ampliar (f32 a f64).  Real a entero: nunca.
+ *
+ * @param from Tipo del valor.
+ * @param to   Tipo al que se lleva.
+ * @return @c true si ningun valor de @p from cambia; @c false tambien si alguno
+ *         de los dos no es numerico.
+ */
+constexpr bool is_lossless_conversion(PrimitiveKind from,
+                                      PrimitiveKind to) noexcept {
+    if (!is_numeric(from) || !is_numeric(to)) return false;
+    if (from == to) return true;
+    const size_t fb = primitive_size_bytes(from);
+    const size_t tb = primitive_size_bytes(to);
+    if (is_integral(from) && is_integral(to)) {
+        const bool fs = is_signed_integral(from);
+        const bool ts = is_signed_integral(to);
+        if (fs == ts) return tb >= fb;
+        return !fs && tb > fb; // sin signo a con signo, estrictamente mas ancho
+    }
+    if (is_integral(from)) // a real
+        return (to == PrimitiveKind::F64) ? fb <= 4 : fb <= 2;
+    if (is_integral(to)) return false; // real a entero
+    return to == PrimitiveKind::F64;   // f32 a f64
+}
+
+/**
  * @brief A cuantos bytes se alinea un valor de este tipo.
  *
  * No es lo mismo que su tamano, y confundirlos sale caro.  Un `Result` mide

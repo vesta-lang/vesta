@@ -1535,6 +1535,14 @@ struct LambdaExpr : Expr {
 /**
  * @struct VarDeclStmt
  * @brief Declaracion de variable local (dentro de un bloque o init de for).
+ *
+ * Una declaracion de VARIOS nombres (`f64 dx = a, dy = b;`) son varias de
+ * estas seguidas, una por nombre: nadie que recorra el arbol tiene que saber
+ * que se escribieron juntas.  Lo que se escribe UNA vez para todas -- el
+ * ALMACENAMIENTO: `const`, `static`, `comptime`, `shared`, `register`, la
+ * direccion, `auto` -- lo reparte `copy_decl_storage`
+ * (src/vx/parser/var_declarators.cpp): un campo nuevo de esa clase se anade
+ * tambien alli, o el segundo nombre no lo tendria.
  */
 struct VarDeclStmt : Stmt {
     std::unique_ptr<TypeNode> type;
@@ -1671,15 +1679,23 @@ struct DoWhileStmt : Stmt {
  * @struct ForStmt
  * @brief @c for(init; cond; step) body al estilo C.
  *
- * Cualquiera de los tres campos init/cond/step puede ser nulo:
- *   - init nulo  => no hay inicializador.
+ * El inicializador y el paso son LISTAS: `for (auto i = 0, next = f; ...;
+ * i = next(i), n++)` declara dos variables y da dos pasos, en ese orden.  Una
+ * lista, y no una expresion coma, porque la coma del lenguaje no es un
+ * operador: fuera del `for` separa argumentos, y hacerla expresion aqui la
+ * volveria ambigua en todo lo demas.
+ *   - init vacio => no hay inicializador.
  *   - cond nulo  => bucle infinito (semantica de while(true)).
- *   - step nulo  => no hay paso por iteracion.
+ *   - step vacio => no hay paso por iteracion.
  */
 struct ForStmt : Stmt {
-    std::unique_ptr<Stmt> init;
+    /// Declaraciones (una `VarDeclStmt` por nombre) o expresiones (`ExprStmt`),
+    /// en el orden en que se escribieron.  Lo declarado se ve en la condicion,
+    /// en el paso y en el cuerpo, y en ningun sitio mas.
+    std::vector<std::unique_ptr<Stmt>> init;
     std::unique_ptr<Expr> cond;
-    std::unique_ptr<Expr> step;
+    /// Los pasos, que se evaluan en orden al final de cada vuelta.
+    std::vector<std::unique_ptr<Expr>> step;
     std::unique_ptr<Stmt> body;
     ForStmt() : Stmt(NodeKind::ForStmt) {}
 };
@@ -3224,6 +3240,12 @@ struct GenericTemplateExport {
         0; ///< NodeKind del decl (Struct/Class/Function/Enum/Concept)
     std::string source; ///< texto fuente completo del decl
     bool is_public = true;
+    /// Es una funcion `comptime`/`@Macro` SIN parametros de tipo: viaja para
+    /// EJECUTARSE en quien importa, y si es privada la baja el modulo que la
+    /// declara, asi que no viaja como ayudante de una plantilla.  Una comptime
+    /// GENERICA (`comptime i64 f<T>()`) si es plantilla: sin su texto, quien
+    /// instancia a la publica que la llama no podria instanciarla.
+    bool is_plain_comptime = false;
 };
 
 struct ModuleNode : Node {

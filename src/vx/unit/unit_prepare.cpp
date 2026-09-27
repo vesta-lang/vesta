@@ -209,9 +209,11 @@ void rename_in_stmt(ast::Stmt *s, const RenameMap &rename_map) {
     }
     case ast::NodeKind::ForStmt: {
         auto *fr = static_cast<ast::ForStmt *>(s);
-        rename_in_stmt(fr->init.get(), rename_map);
+        for (auto &in : fr->init)
+            rename_in_stmt(in.get(), rename_map);
         rename_in_expr(fr->cond.get(), rename_map);
-        rename_in_expr(fr->step.get(), rename_map);
+        for (auto &st : fr->step)
+            rename_in_expr(st.get(), rename_map);
         rename_in_stmt(fr->body.get(), rename_map);
         break;
     }

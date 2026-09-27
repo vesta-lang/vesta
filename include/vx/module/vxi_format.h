@@ -77,7 +77,16 @@ inline constexpr uint32_t VXI_MAGIC = 0x49584556u;
 /* v22: cada dependencia lleva tambien su NAMESPACE (entrada de 16 a 24
  * bytes).  Con solo el nombre de fichero, dos dependencias homonimas eran
  * indistinguibles al validar la cache. */
-inline constexpr uint16_t VXI_FORMAT_VERSION = 22;
+/* v23: una plantilla puede viajar como AYUDANTE de otra (bit
+ * @ref kGenTplHelperOnly del campo `kind`).  Una plantilla privada que usaba
+ * una publica no viajaba, y al instanciar la publica en quien importa salia
+ * "funcion no declarada" en `<vxi-templates:>`. */
+inline constexpr uint16_t VXI_FORMAT_VERSION = 23;
+
+/// Bit del campo `kind` de una plantilla exportada: viaja solo porque otra
+/// plantilla la usa, y quien importa no la expone al codigo del usuario.  El
+/// `NodeKind` ocupa el byte bajo; este bit queda fuera de el.
+inline constexpr uint32_t kGenTplHelperOnly = 1u << 16;
 
 /// \brief Bit 0 de @ref VxiHeader::module_flags: el modulo declara clases.
 inline constexpr uint16_t VXI_MODULE_DECLARES_CLASSES = 1u << 0;
@@ -455,6 +464,9 @@ struct VxiModule {
         std::string source; ///< texto fuente completo del decl
         std::string
             ns_path; ///< NS.2 (v9): namespace declarado (vacio = ninguno)
+        /// v23: viaja solo porque otra plantilla la usa (era privada en su
+        /// modulo); quien importa no la expone al codigo del usuario.
+        bool helper_only = false;
     };
     std::vector<GenericTemplateSource> generic_templates;
 

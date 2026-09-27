@@ -1005,6 +1005,57 @@ void check_cuerpo_suelto() {
 }
 
 /**
+ * @brief Formatea un fragmento.
+ * @param s El fuente.
+ * @return El texto formateado.
+ */
+std::string format_text(const std::string &s) {
+    return vx::fmt::format(s, "<anidado>").text;
+}
+
+/**
+ * @brief Cuerpos sueltos ANIDADOS, lambdas de bloque dentro de una llamada y
+ *        el cuerpo `=>` que es una sentencia de control.
+ *
+ * Los tres dejaban la sangria del resto del fichero mal: en
+ * `for (...) if (c) return;` se abren dos cuerpos y un `;` los cierra a los
+ * dos; el `;` del cuerpo de una lambda se tomaba por texto (`R110`) y la
+ * llamada se copiaba tal cual; y la sentencia tras `=>` solo sangraba su
+ * primera linea.
+ */
+void check_cuerpos_anidados() {
+    const std::string anidado =
+        format_text("bool f(i64 n) {\nfor (i64 i = 0; i < n; i++) if (g(i)) "
+                    "return true;\nreturn false;\n}\n");
+    check(anidado.find("return true;\n\treturn false;\n}") != std::string::npos,
+          "tras un cuerpo suelto anidado la sangria vuelve a su sitio");
+
+    const std::string con_else =
+        format_text("void f(i64 s) {\nif (s > 0) for (i64 i = 0; i < 3; i++) "
+                    "g(i);\nelse for (i64 i = 0; i < 3; i++) h(i);\n}\n");
+    check(con_else.find("\n\telse for") != std::string::npos,
+          "el `else` de un cuerpo suelto anidado va a la altura de su `if`");
+
+    const std::string lambda =
+        format_text("i64 f(i64 n) {\ni64 c = 0;\nn.times((i64 i) => {\n"
+                    "if (i > 1) c++;\nc = c + 1;\n});\nreturn c;\n}\n");
+    check(lambda.find("\t\t\tif (i > 1) c++;\n\t\t\tc = c + 1;\n\t\t});") !=
+              std::string::npos,
+          "el cuerpo de una lambda dentro de una llamada se reindenta");
+    check(lambda.find("});\n\treturn c;") != std::string::npos,
+          "y lo que la sigue conserva su sangria");
+
+    const std::string flecha =
+        format_text("void f(i64 s) =>\nif (s > 0) {\ng(s);\n} else {\nh(s);\n}\n"
+                    "\ni32 main() {\nreturn 0;\n}\n");
+    check(flecha.find("=>\n\tif (s > 0) {\n\t\tg(s);\n\t} else {\n\t\th(s);\n\t}"
+                      "\n") != std::string::npos,
+          "el cuerpo `=>` que es una sentencia va entero un nivel adentro");
+    check(flecha.find("\ni32 main()") != std::string::npos,
+          "y la declaracion siguiente vuelve al nivel cero");
+}
+
+/**
  * @brief Comentarios de bloque (`R21`, `R21b`).
  *
  * Los dos casos se distinguen por una sola cosa: si las lineas de
@@ -1169,6 +1220,7 @@ int main(int argc, char **argv) {
     check_spacing_lote();
     check_una_por_linea();
     check_cuerpo_suelto();
+    check_cuerpos_anidados();
     check_comentarios_bloque();
     check_cadenas();
     check_reglas_de_token();

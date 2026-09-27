@@ -804,10 +804,18 @@ std::string render_stmt(StmtCtx &ctx, const ast::Stmt *s) {
     }
     case ast::NodeKind::ForStmt: {
         auto *fs = static_cast<const ast::ForStmt *>(s);
-        std::string init_id;
-        if (fs->init) {
-            std::string ip = render_stmt(ctx, fs->init.get());
-            auto bar = ip.find('|');
+        // El inicializador son varias sentencias: se encadenan en orden.
+        std::string init_entry;
+        std::string init_id; // la salida del ultimo
+        for (const auto &in : fs->init) {
+            const std::string ip = render_stmt(ctx, in.get());
+            const auto bar = ip.find('|');
+            const std::string ie =
+                (bar == std::string::npos) ? ip : ip.substr(0, bar);
+            if (init_entry.empty())
+                init_entry = ie;
+            else
+                emit_edge(ctx.os, init_id, ie);
             init_id = (bar == std::string::npos) ? ip : ip.substr(bar + 1);
         }
         std::string head = emit_stmt_node(
@@ -815,9 +823,10 @@ std::string render_stmt(StmtCtx &ctx, const ast::Stmt *s) {
             fs->cond ? ("for " + fmt_expr(fs->cond.get())) : "for (true)",
             ST_LOOP, "L" + std::to_string(fs->loc.line));
         std::string step_id;
-        if (fs->step) {
-            step_id = emit_stmt_node(
-                ctx, "step", "step: " + fmt_expr(fs->step.get()), ST_LOOP_BODY);
+        if (!fs->step.empty()) {
+            step_id = emit_stmt_node(ctx, "step",
+                                     "step: " + fmt_expr_list(fs->step),
+                                     ST_LOOP_BODY);
         }
         std::string exit_id =
             emit_stmt_node(ctx, "fend", "(loop exit)", ST_AUX);
@@ -846,7 +855,7 @@ std::string render_stmt(StmtCtx &ctx, const ast::Stmt *s) {
                       EdgeKind::Dotted);
             emit_edge(ctx.os, step_id, head, "back", EdgeKind::Bold);
         }
-        std::string entry = init_id.empty() ? head : init_id;
+        std::string entry = init_entry.empty() ? head : init_entry;
         return entry + "|" + exit_id;
     }
     case ast::NodeKind::ForEachStmt: {

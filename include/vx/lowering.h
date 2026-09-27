@@ -936,6 +936,22 @@ class Lowering {
                                  ir::IrValueId &out_value);
 
     /**
+     * @brief Baja una operacion generica numerica (`min`, `max`, `abs`,
+     *        `clamp`) en el tipo de sus argumentos.
+     *
+     * Los argumentos se llevan al tipo del resultado -- el de la firma que
+     * eligio el comprobador --, se opera a 64 bits con la instruccion de su
+     * clase (con signo, sin signo, real) y el resultado vuelve a ese tipo.
+     *
+     * @param e         La llamada.
+     * @param b         Que operacion es.
+     * @param out_value Donde dejar el resultado.
+     * @return @c true si @p b era de esta familia y quedo bajado.
+     */
+    bool try_lower_numeric_builtin(ast::CallExpr *e, Builtin b,
+                                   ir::IrValueId &out_value);
+
+    /**
      * @brief Intenta bajar una llamada como uno de los builtins que miran los
      *        TIPOS al compilar.
      *

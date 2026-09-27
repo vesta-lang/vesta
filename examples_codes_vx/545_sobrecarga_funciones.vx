@@ -51,6 +51,13 @@ i64 suma(i64... xs) => suma_de_array(xs, vacount());
 i64 cual(i64 x) => 1;
 i64 cual(f64 x) => 2;
 
+// --- 2b. sin exacta, la que no PIERDE nada ---------------------------------
+// `menor(i32, i64)` no encaja exacta en ninguna.  Iba a la de `(i32, i32)` por
+// estar declarada antes y truncaba el i64 -- otro valor, con un aviso como
+// unica pista --; ahora va a la de `(i64, i64)`, que no pierde nada.
+i32 menor(i32 a, i32 b) => a < b ? a : b;
+i64 menor(i64 a, i64 b) => a < b ? a : b;
+
 // --- 4. retornos DISTINTOS, en los dos ordenes ------------------------------
 i64 ent_primero(i64 x) => 10;
 f64 ent_primero(f64 x) => 20.0;
@@ -163,6 +170,11 @@ i32 main() {
 	// 2 y 3. tipo, y la exacta gana a la compatible
 	i64 c = cual(n); // 1
 	i64 e = cual(d); // 2
+
+	// 2b. mezclados: gana la que amplia, no la primera declarada
+	i32 corto =  5_i32;
+	i64 largo = -10_000_000_000_i64;
+	if (menor(corto, largo) != largo) return 1;
 
 	// 4 y 5. el retorno sale de la elegida, en los dos ordenes de declaracion
 	i64 f = ent_primero(n);  // 10  (si se colara la de f64, saldria basura)

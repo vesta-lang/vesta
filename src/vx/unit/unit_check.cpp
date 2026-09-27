@@ -35,7 +35,14 @@ bool check_unit(const UnitEnv &env, size_t i,
             if (req.is_plain) {
                 // Plain `import "x";` registra @c x como Symbol::Namespace.
                 // Si el namespace alias nunca se accedio, warning.
-                if (refs.find(req.local_name) == refs.end()) {
+                /* Un import POR NAMESPACE (`import std.math;`) se usa
+                 * escribiendo la ruta entera -- `std.math.min3(...)` --, y esa
+                 * llamada apunta la ruta, no el nombre corto: sin mirarla, el
+                 * aviso salia sobre un import que si se estaba usando. */
+                const bool used =
+                    refs.find(req.local_name) != refs.end() ||
+                    (req.by_namespace && refs.find(req.ns_path) != refs.end());
+                if (!used) {
                     // Con alias, se dice el alias: es el nombre que no se usa.
                     if (!req.local_name.empty() &&
                         req.local_name != req.module_name)

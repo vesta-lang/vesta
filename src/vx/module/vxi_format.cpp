@@ -713,7 +713,7 @@ std::vector<uint8_t> vxi_emit(const VxiModule &mod) {
         GenTplOff go{};
         go.name_off = pool.intern(g.name);
         go.name_len = static_cast<uint32_t>(g.name.size());
-        go.kind = g.kind;
+        go.kind = g.kind | (g.helper_only ? kGenTplHelperOnly : 0u);
         go.src_off = pool.intern(g.source);
         go.src_len = static_cast<uint32_t>(g.source.size());
         go.ns_off = pool.intern(g.ns_path);
@@ -1779,7 +1779,8 @@ VxiParseResult vxi_parse(const uint8_t *data, size_t size) {
             return r;
         }
         VxiModule::GenericTemplateSource g;
-        g.kind = static_cast<uint8_t>(kind);
+        g.kind = static_cast<uint8_t>(kind & 0xFFu);
+        g.helper_only = (kind & kGenTplHelperOnly) != 0;
         if (!read_name(data, size, n_off, n_len, pool_start, g.name) ||
             !read_name(data, size, s_off, s_len, pool_start, g.source)) {
             r.error_message = "gen template name/source fuera de bounds";

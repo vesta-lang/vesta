@@ -30,12 +30,26 @@
 
 #include "vx/fmt/fmt_internal.h"
 
+#include "util/alloc/small_vector.h"
 #include "vx/fmt/width.h"
 #include "vx/token.h"
 
 namespace vx {
 namespace fmt {
 namespace {
+
+/// Donde empezo un cuerpo suelto: su nivel de llave y cuantas listas
+/// (parentesis, corchetes) habia abiertas.  Los dos hacen falta: el cuerpo de
+/// un `if` dentro de una lambda pasada a una llamada va entre parentesis, y
+/// los `;` de la cabecera de un `for` tambien.
+struct LooseBody {
+    int level; ///< nivel de llave
+    int cont;  ///< listas abiertas
+};
+
+/// Los cuerpos sueltos abiertos; se anidan poco (`for (...) if (...) x;`),
+/// asi que caben en linea.
+using LooseBodies = util::SmallVector<LooseBody, 4>;
 
 /// @brief Indica si la pieza es el token @p kind.
 inline bool is(const Piece &p, TokenKind kind) {
@@ -230,6 +244,16 @@ std::string reindent(const std::vector<Piece> &pieces, std::string_view tail,
      * se INDENTE: al nivel de su `if` se lee como la sentencia siguiente, que
      * es exactamente el enganio del `goto fail`. */
     int cuerpo_suelto = 0;
+    /* El nivel de LLAVE en que empezo cada cuerpo suelto abierto; hay
+     * `cuerpo_suelto` de ellos.
+     *
+     * Un contador no bastaba: en `for (...) if (c) return;` se abren dos
+     * cuerpos y UN `;` los cierra a los dos -- el de dentro es la ultima
+     * sentencia del de fuera --, y restando de uno en uno quedaba uno colgando
+     * y todo el fichero siguiente salia un nivel adentro.  Al reves, un `;`
+     * DENTRO de un bloque (`for (...) if (c) { a; b; }`) no cierra el cuerpo
+     * de fuera: por eso se guarda el nivel y no solo cuantos. */
+    LooseBodies nivel_suelto;
     /// El `)` que cierra la cabecera de control en curso.  Arranca FUERA de
     /// rango: con cero, el token de indice uno lo cumplia y sangraba el
     /// fichero entero.
@@ -414,9 +438,26 @@ std::string reindent(const std::vector<Piece> &pieces, std::string_view tail,
          * que se apunta cual es al ver la palabra clave.  Sin esa
          * comprobacion, `(a + b)
          * c` tambien se habria sangrado. */
+        /* El cuerpo `=>` de una funcion que es una SENTENCIA de control
+         * (`void f() => if (c) { ... } else { ... }`) es tambien un cuerpo
+         * suelto: va entero un nivel adentro de la firma hasta que acaba, y no
+         * solo su primera linea.  Fuera de toda lista, porque el `=>` de una
+         * lambda va entre los parentesis de una llamada.  Llaves no se le
+         * ponen: `=> {` no es un cuerpo. */
+        const bool cuerpo_flecha =
+            idx > 0 && cont == 0 && is(pieces[idx - 1], TokenKind::FAT_ARROW) &&
+            (is(p, TokenKind::KW_IF) || is(p, TokenKind::KW_FOR) ||
+             is(p, TokenKind::KW_WHILE) || is(p, TokenKind::KW_DO) ||
+             (p.kind == static_cast<int>(TokenKind::IDENTIFIER) &&
+              p.text == "foreach"));
+        if (cuerpo_flecha) {
+            ++cuerpo_suelto;
+            nivel_suelto.push_back({level, cont});
+        }
         if (idx > 0 && ctrl_close == idx - 1 && !is(p, TokenKind::LBRACE) &&
             !is(p, TokenKind::SEMICOLON) && !is(p, TokenKind::RBRACE)) {
             ++cuerpo_suelto;
+            nivel_suelto.push_back({level, cont});
             /* Se APUNTA que este cuerpo puede necesitar llaves (`R6`); se
              * decide mas abajo, cuando el salto de linea ya este escrito o no.
              * Solo las necesita el que acabo en otra linea: uno que cupo junto
@@ -424,11 +465,36 @@ std::string reindent(const std::vector<Piece> &pieces, std::string_view tail,
             llave_pendiente = true;
         }
 
-        /* Al llegar al `;` que cierra ese cuerpo, se deshace la sangria.  Va
-         * antes de escribirlo para que el `;` salga en la misma linea. */
-        if (cuerpo_suelto > 0 && idx > 0 &&
-            is(pieces[idx - 1], TokenKind::SEMICOLON) && cont == 0) {
-            --cuerpo_suelto;
+        /* Al acabar la sentencia que cierra esos cuerpos, se deshace la
+         * sangria de TODOS los que empezaron en su nivel de llave.  Acaba en
+         * un `;`, o en la `}` de un bloque que no sigue con `else`, `catch`,
+         * `finally` o el `while` de un `do`.  Va antes de escribir la pieza
+         * siguiente, para que el `;` salga en la misma linea.
+         *
+         * El nivel de la sentencia es el de ANTES de esta pieza: si es una
+         * `}`, `level` ya bajo mas arriba. */
+        const int nivel_sentencia = closes ? level + 1 : level;
+        bool acaba_sentencia = false;
+        if (cuerpo_suelto > 0 && idx > 0) {
+            const Piece &prev = pieces[idx - 1];
+            if (is(prev, TokenKind::SEMICOLON))
+                acaba_sentencia = true;
+            else if (is(prev, TokenKind::RBRACE))
+                acaba_sentencia =
+                    !is(p, TokenKind::KW_ELSE) && !is(p, TokenKind::KW_CATCH) &&
+                    !is(p, TokenKind::KW_FINALLY) && !is(p, TokenKind::KW_WHILE);
+        }
+        int cerrados = 0;
+        /* Y en las mismas listas abiertas: un `;` de la cabecera de un `for`
+         * va dentro de su parentesis y no acaba el cuerpo de fuera. */
+        while (acaba_sentencia && !nivel_suelto.empty() &&
+               nivel_suelto.back().level == nivel_sentencia &&
+               nivel_suelto.back().cont == cont) {
+            nivel_suelto.pop_back();
+            ++cerrados;
+        }
+        if (cerrados > 0) {
+            cuerpo_suelto -= cerrados;
             // Y la llave que cierra, a la altura de la cabecera.
             if (cierra_cuerpo) {
                 cierra_cuerpo = false;
@@ -624,6 +690,8 @@ std::string reindent(const std::vector<Piece> &pieces, std::string_view tail,
              * el mismo hecho contado dos veces, y lo cuenta `cuerpo_suelto`,
              * que ademas sabe cuando deshacerlo. */
             if (ctrl_close == idx - 1) continuacion = 0;
+            // Y lo mismo el cuerpo `=>` que es una sentencia de control.
+            if (cuerpo_flecha) continuacion = 0;
         }
 
         const bool parte_sentencia =

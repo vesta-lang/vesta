@@ -255,6 +255,15 @@ std::string fmt_expr(const ast::Expr *e) {
     return fmt_expr_brief(e, 32);
 }
 
+std::string fmt_expr_list(const std::vector<std::unique_ptr<ast::Expr>> &list) {
+    std::string out;
+    for (const auto &e : list) {
+        if (!out.empty()) out += ", ";
+        out += fmt_expr(e.get());
+    }
+    return out;
+}
+
 std::string fmt_type_helper(const ast::TypeNode *tn) {
     if (!tn) return "?";
     switch (tn->kind) {

@@ -80,23 +80,17 @@ struct MathBuiltin {
     bool integral;
 };
 
-/// Las veintiocho.  El orden no significa nada: cada una aparece una vez.
+/// Las de un solo tipo.  El orden no significa nada: cada una aparece una vez.
+/// Las genericas numericas (`min`, `max`, `abs`, `clamp`) van en
+/// `kNumericBuiltins`.
 constexpr MathBuiltin kMathBuiltins[] = {
     // Reales, con instruccion propia en el procesador.
     {Builtin::Sqrt, 1, nullptr, ir::IrOp::FSQRT, false},
-    {Builtin::Fabs, 1, nullptr, ir::IrOp::FABS, false},
-    {Builtin::Fmin, 2, nullptr, ir::IrOp::FMIN, false},
-    {Builtin::Fmax, 2, nullptr, ir::IrOp::FMAX, false},
     {Builtin::Floor, 1, nullptr, ir::IrOp::FFLOOR, false},
     {Builtin::Ceil, 1, nullptr, ir::IrOp::FCEIL, false},
     {Builtin::Round, 1, nullptr, ir::IrOp::FROUND, false},
     {Builtin::Trunc, 1, nullptr, ir::IrOp::FTRUNC, false},
     // Enteros y bits, tambien con instruccion propia.
-    {Builtin::Abs, 1, nullptr, ir::IrOp::IABS, true},
-    {Builtin::Imin, 2, nullptr, ir::IrOp::IMIN, true},
-    {Builtin::Imax, 2, nullptr, ir::IrOp::IMAX, true},
-    {Builtin::Iminu, 2, nullptr, ir::IrOp::IMINU, true},
-    {Builtin::Imaxu, 2, nullptr, ir::IrOp::IMAXU, true},
     {Builtin::Ilog2, 1, nullptr, ir::IrOp::ILOG2, true},
     {Builtin::Popcount, 1, nullptr, ir::IrOp::POPCNT, true},
     {Builtin::Clz, 1, nullptr, ir::IrOp::CLZ, true},
@@ -112,8 +106,6 @@ constexpr MathBuiltin kMathBuiltins[] = {
     {Builtin::Sin, 1, "vmath_sin", ir::IrOp::NOP, false},
     {Builtin::Cos, 1, "vmath_cos", ir::IrOp::NOP, false},
     {Builtin::Tan, 1, "vmath_tan", ir::IrOp::NOP, false},
-    // Y acotar, que aun no tiene instruccion.
-    {Builtin::Clamp, 3, "vmath_clamp", ir::IrOp::NOP, true},
 };
 
 /// @return La entrada de @p b, o nulo si @p b no es una operacion matematica.
@@ -121,6 +113,49 @@ constexpr const MathBuiltin *math_builtin_for(Builtin b) {
     for (const MathBuiltin &m : kMathBuiltins)
         if (m.b == b) return &m;
     return nullptr;
+}
+
+/**
+ * @brief Una operacion GENERICA NUMERICA: su tipo es el de sus argumentos.
+ *
+ * Una instruccion por clase de tipo -- entero con signo, sin signo y real --,
+ * que es lo unico que cambia entre `min(i32, i32)` y `min(f64, f64)`.  La
+ * firma que eligio el comprobador dice cual; aqui solo se lee.
+ */
+struct NumericBuiltin {
+    Builtin b;              ///< Que operacion es.
+    uint8_t nargs;          ///< Cuantos argumentos exige.
+    ir::IrOp signed_op;     ///< Con enteros con signo.
+    ir::IrOp unsigned_op;   ///< Con enteros sin signo; NOP = el valor tal cual.
+    ir::IrOp float_op;      ///< Con reales.
+};
+
+/// `clamp` no tiene instruccion: es `min(max(x, lo), hi)`, y se baja asi con
+/// las de `max` y `min`.
+constexpr NumericBuiltin kNumericBuiltins[] = {
+    {Builtin::Min, 2, ir::IrOp::IMIN, ir::IrOp::IMINU, ir::IrOp::FMIN},
+    {Builtin::Max, 2, ir::IrOp::IMAX, ir::IrOp::IMAXU, ir::IrOp::FMAX},
+    // El valor absoluto de un entero sin signo es el mismo valor.
+    {Builtin::Abs, 1, ir::IrOp::IABS, ir::IrOp::NOP, ir::IrOp::FABS},
+    {Builtin::Clamp, 3, ir::IrOp::NOP, ir::IrOp::NOP, ir::IrOp::NOP},
+};
+
+/// @return La entrada de @p b, o nulo si @p b no es generica numerica.
+constexpr const NumericBuiltin *numeric_builtin_for(Builtin b) {
+    for (const NumericBuiltin &n : kNumericBuiltins)
+        if (n.b == b) return &n;
+    return nullptr;
+}
+
+/**
+ * @brief La instruccion de @p n para la clase de @p k.
+ * @param n La operacion.
+ * @param k El tipo del resultado, que es el de los argumentos.
+ * @return La instruccion; NOP si el valor queda tal cual.
+ */
+constexpr ir::IrOp numeric_op_for(const NumericBuiltin &n, PrimitiveKind k) {
+    if (is_floating(k)) return n.float_op;
+    return is_signed_integral(k) ? n.signed_op : n.unsigned_op;
 }
 
 } // namespace
@@ -133,8 +168,70 @@ constexpr const MathBuiltin *math_builtin_for(Builtin b) {
  * @param out_value Donde dejar el resultado.
  * @return @c true si @p b era de esta familia y quedo bajado.
  */
+bool Lowering::try_lower_numeric_builtin(ast::CallExpr *e, Builtin b,
+                                         ir::IrValueId &out_value) {
+    const NumericBuiltin *const n = numeric_builtin_for(b);
+    if (!n) return false;
+    if (e->args.size() != n->nargs) {
+        return builtin_error(e->loc,
+                             std::string("'") + std::string(builtin_name(b)) +
+                                 "': " + std::to_string(n->nargs) + " arg(s)",
+                             out_value);
+    }
+    /* El tipo del resultado es el de la firma que eligio el comprobador, y es
+     * tambien el de cada argumento: a el se llevan -- con la conversion
+     * implicita de siempre -- y de ahi a los 64 bits en que opera la
+     * instruccion, con la ampliacion de su signo. */
+    const PrimitiveKind rk = e->result_type.kind;
+    if (!is_numeric(rk)) {
+        return builtin_error(e->loc,
+                             std::string("'") + std::string(builtin_name(b)) +
+                                 "': the checker did not resolve a numeric "
+                                 "type",
+                             out_value);
+    }
+    const ir::IrType result_ir = ir_type_from_primitive(rk);
+    const ir::IrType work = is_floating(rk) ? ir::IrType::F64 : ir::IrType::I64;
+    const uint32_t line = e->loc.line;
+
+    std::vector<ir::IrValueId> vals;
+    vals.reserve(n->nargs);
+    for (auto &a : e->args) {
+        ir::IrValueId v = lower_expr(a.get());
+        if (v == ir::IR_NO_VALUE) {
+            out_value = ir::IR_NO_VALUE;
+            return true;
+        }
+        v = cast_if_needed(v, fn_->values[v].type, result_ir, a->loc);
+        vals.push_back(cast_if_needed(v, result_ir, work, line, true));
+    }
+
+    ir::IrValueId r = ir::IR_NO_VALUE;
+    if (b == Builtin::Clamp) {
+        // min(max(x, lo), hi), con las instrucciones de su clase.
+        const ir::IrOp max_op = numeric_op_for(*numeric_builtin_for(Builtin::Max), rk);
+        const ir::IrOp min_op = numeric_op_for(*numeric_builtin_for(Builtin::Min), rk);
+        const ir::IrValueId lo = emit_ir_binop(max_op, vals[0], vals[1], work, line);
+        r = emit_ir_binop(min_op, lo, vals[2], work, line);
+    } else {
+        const ir::IrOp op = numeric_op_for(*n, rk);
+        if (op == ir::IrOp::NOP)
+            r = vals[0]; // el valor tal cual (`abs` de un sin signo)
+        else if (n->nargs == 1)
+            r = emit_ir_unop(op, vals[0], work, line);
+        else
+            r = emit_ir_binop(op, vals[0], vals[1], work, line);
+    }
+    // Y de vuelta al tipo del resultado: el valor cabe, es uno de los de
+    // entrada o su valor absoluto.
+    out_value = cast_if_needed(r, work, result_ir, line, true);
+    return true;
+}
+
 bool Lowering::try_lower_math_builtins(ast::CallExpr *e, Builtin b,
                                        ir::IrValueId &out_value) {
+    // Las genericas numericas tienen su propia tabla.
+    if (try_lower_numeric_builtin(e, b, out_value)) return true;
     /* Estar en la tabla es lo que hace que @p b sea de esta familia: no hay una
      * lista de miembros aparte de la que dice como se baja cada uno, asi que no
      * se puede pertenecer sin decir como. */

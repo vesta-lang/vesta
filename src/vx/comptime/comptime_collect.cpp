@@ -215,9 +215,11 @@ void collect_calls_stmt(const ast::Stmt *s,
     }
     case ast::NodeKind::ForStmt: {
         const auto *f = static_cast<const ast::ForStmt *>(s);
-        collect_calls_stmt(f->init.get(), out);
+        for (const auto &in : f->init)
+            collect_calls_stmt(in.get(), out);
         collect_calls_expr(f->cond.get(), out);
-        collect_calls_expr(f->step.get(), out);
+        for (const auto &st : f->step)
+            collect_calls_expr(st.get(), out);
         collect_calls_stmt(f->body.get(), out);
         break;
     }

@@ -185,12 +185,16 @@ bool mc_extract_vec_loop(ast::Stmt *s, VecLoop &out) {
     };
     if (s->kind == NodeKind::ForStmt) {
         auto *f = static_cast<ForStmt *>(s);
-        if (!f->cond || !f->body || !f->init || !f->step) return false;
+        // El patron es el bucle de contador simple: UNA declaracion y UN paso.
+        if (!f->cond || !f->body || f->init.size() != 1 ||
+            f->step.size() != 1)
+            return false;
         if (!parse_cond(f->cond.get())) return false;
-        if (f->init->kind != NodeKind::VarDeclStmt) return false;
-        auto *vd = static_cast<VarDeclStmt *>(f->init.get());
+        if (f->init[0]->kind != NodeKind::VarDeclStmt) return false;
+        auto *vd = static_cast<VarDeclStmt *>(f->init[0].get());
         if (vd->name != out.idx_name || !vd->init) return false;
-        if (!mc_is_increment_expr(f->step.get(), out.idx_name)) return false;
+        if (!mc_is_increment_expr(f->step[0].get(), out.idx_name))
+            return false;
         // cuerpo = 1 sentencia (ExprStmt directo o Block de 1).
         ast::Expr *be = nullptr;
         if (f->body->kind == NodeKind::ExprStmt) {
@@ -430,7 +434,9 @@ bool Lowering::try_lower_memcpy_idiom_for(ast::ForStmt *s) {
     if (current_fn_no_idiom_) return false;
     using namespace ast;
     static const bool MC_DBG = util::flag_on(util::FlagId::McIdiomDebug);
-    if (!s->cond || !s->body || !s->init || !s->step) return false;
+    // El patron es el bucle de contador simple: UNA declaracion y UN paso.
+    if (!s->cond || !s->body || s->init.size() != 1 || s->step.size() != 1)
+        return false;
 
     // cond = (idx < limit).
     std::string idx_name;
@@ -440,12 +446,12 @@ bool Lowering::try_lower_memcpy_idiom_for(ast::ForStmt *s) {
     // init DECLARA la var del loop con inicializador -> loop-local (sin
     // writeback de scope tras el loop).  Otras formas de init bailan (el
     // lower_for normal las maneja).
-    if (s->init->kind != NodeKind::VarDeclStmt) return false;
-    auto *vd = static_cast<VarDeclStmt *>(s->init.get());
+    if (s->init[0]->kind != NodeKind::VarDeclStmt) return false;
+    auto *vd = static_cast<VarDeclStmt *>(s->init[0].get());
     if (vd->name != idx_name || !vd->init) return false;
 
     // step = incremento de idx.
-    if (!mc_is_increment_expr(s->step.get(), idx_name)) return false;
+    if (!mc_is_increment_expr(s->step[0].get(), idx_name)) return false;
 
     // body = la copia dst[idx]=src[idx] (bloque de 1 stmt o ExprStmt directo).
     ast::Expr *copy_expr = nullptr;
@@ -1803,11 +1809,13 @@ bool Lowering::try_vectorize_unary_for(ast::Stmt *s) {
         if (!cl->callee || cl->callee->kind != NodeKind::IdentExpr)
             return false;
         if (!cl->type_args.empty() || cl->args.size() != 1) return false;
-        const std::string &fname =
-            static_cast<IdentExpr *>(cl->callee.get())->name;
-        if (fname == "fabs")
+        /* Por el builtin que es, no por como se escribe.  `abs` es generico:
+         * solo el de reales es un `fabs`; el de enteros no se vectoriza aqui. */
+        const Builtin fb = builtin_from_name(
+            static_cast<IdentExpr *>(cl->callee.get())->name);
+        if (fb == Builtin::Abs && is_floating(cl->result_type.kind))
             subop = 2;
-        else if (fname == "sqrt")
+        else if (fb == Builtin::Sqrt)
             subop = 3;
         else
             return false;

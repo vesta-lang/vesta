@@ -165,8 +165,63 @@ std::unique_ptr<ast::TypeNode> type_node_from_type(const Type &a,
     }
 }
 
+namespace {
+
+/**
+ * @brief Pasa a @p to las marcas que el TIPO escrito lleva ademas de su
+ *        forma: `nonnull`, `const` y `volatile` por nivel, `VirtualPtr` y lo
+ *        que un tipo funcion dice de su ABI.
+ *
+ * Los casos del clon solo copiaban la forma, asi que una plantilla con
+ * `const T*` se instanciaba con un puntero mutable y escribir por el
+ * compilaba; lo mismo `nonnull`, `volatile`, `fn(T...) -> R` y la ABI por
+ * parametro de un `cfn`.  Estan aqui, en un sitio, para que ningun caso
+ * pueda olvidarlas.  Las tres marcas de nivel se SUMAN: el tipo sustituido
+ * por un parametro (`const T` con `T = i64`) conserva lo que ya traia.
+ *
+ * @param from El nodo original.
+ * @param to   El clon.
+ */
+void copy_type_marks(const ast::TypeNode &from, ast::TypeNode &to) {
+    to.is_nonnull = to.is_nonnull || from.is_nonnull;
+    to.is_const = to.is_const || from.is_const;
+    to.is_volatile = to.is_volatile || from.is_volatile;
+    if (from.kind == ast::NodeKind::PointerTypeNode &&
+        to.kind == ast::NodeKind::PointerTypeNode)
+        static_cast<ast::PointerTypeNode &>(to).is_virtual =
+            static_cast<const ast::PointerTypeNode &>(from).is_virtual;
+    if (from.kind == ast::NodeKind::FunctionTypeNode &&
+        to.kind == ast::NodeKind::FunctionTypeNode) {
+        const auto &src = static_cast<const ast::FunctionTypeNode &>(from);
+        auto &dst = static_cast<ast::FunctionTypeNode &>(to);
+        dst.is_variadic = src.is_variadic;
+        dst.param_abi_regs = src.param_abi_regs;
+        dst.param_dirs = src.param_dirs;
+    }
+}
+
+/**
+ * @brief Clona la FORMA de un tipo; las marcas las pone quien lo llama.
+ * @param t El tipo.
+ * @param g La sustitucion de parametros de tipo.
+ * @return El clon, o nulo si @p t es nulo.
+ */
+std::unique_ptr<ast::TypeNode> clone_type_shape(const ast::TypeNode *t,
+                                                const GenSubst &g);
+
+} // namespace
+
 std::unique_ptr<ast::TypeNode> clone_type_with_subst(const ast::TypeNode *t,
                                                      const GenSubst &g) {
+    std::unique_ptr<ast::TypeNode> out = clone_type_shape(t, g);
+    if (out) copy_type_marks(*t, *out);
+    return out;
+}
+
+namespace {
+
+std::unique_ptr<ast::TypeNode> clone_type_shape(const ast::TypeNode *t,
+                                                const GenSubst &g) {
     if (!t) return nullptr;
     switch (t->kind) {
     case ast::NodeKind::PrimitiveTypeNode: {
@@ -254,6 +309,8 @@ std::unique_ptr<ast::TypeNode> clone_type_with_subst(const ast::TypeNode *t,
     default: return nullptr;
     }
 }
+
+} // namespace
 
 std::unique_ptr<ast::Expr> clone_expr(const ast::Expr *e, const GenSubst &g) {
     if (!e) return nullptr;
@@ -573,9 +630,13 @@ std::unique_ptr<ast::Stmt> clone_stmt(const ast::Stmt *s, const GenSubst &g) {
         auto *src = static_cast<const ast::ForStmt *>(s);
         auto x = std::make_unique<ast::ForStmt>();
         x->loc = src->loc;
-        x->init = clone_stmt(src->init.get(), g);
+        x->init.reserve(src->init.size());
+        for (const auto &in : src->init)
+            x->init.push_back(clone_stmt(in.get(), g));
         x->cond = clone_expr(src->cond.get(), g);
-        x->step = clone_expr(src->step.get(), g);
+        x->step.reserve(src->step.size());
+        for (const auto &st : src->step)
+            x->step.push_back(clone_expr(st.get(), g));
         x->body = clone_stmt(src->body.get(), g);
         return x;
     }
@@ -850,9 +911,11 @@ void rename_in_stmt(ast::Stmt *s) {
     }
     case ast::NodeKind::ForStmt: {
         auto *f = static_cast<ast::ForStmt *>(s);
-        rename_in_stmt(f->init.get());
+        for (auto &in : f->init)
+            rename_in_stmt(in.get());
         rename_in_expr(f->cond.get());
-        rename_in_expr(f->step.get());
+        for (auto &st : f->step)
+            rename_in_expr(st.get());
         rename_in_stmt(f->body.get());
         return;
     }
