@@ -8,6 +8,8 @@
 #include "vx/unit/compile_unit.h"
 
 #include "util/crash_report.h" // dejar dicho QUE modulo se esta compilando
+#include "vx/comptime/macro_report.h"
+#include "vx/diagram/source_diagrams.h"
 #include "vx/project/module_work.h"
 #include "vx/type_checker.h"
 
@@ -53,6 +55,14 @@ void compile_unit(const UnitEnv &env, size_t i) {
         pm.ok = false;
         return;
     }
+    /* Las llamadas a `@Macro` que el comprobador resolvio, por la misma
+     * funcion que el camino de fichero suelto. */
+    collect_macro_expectations(*pm.tc, pm.macro_expectations);
+    /* Los diagramas del arbol y de los tipos del raiz, en el mismo momento
+     * que el camino de fichero suelto: tipado y todavia sin bajar.  El raiz
+     * se compila solo en su nivel, asi que escribir en el resultado no
+     * compite con nadie. */
+    if (is_root) fill_source_diagrams(*pm.ast, *env.opts, *env.res);
     if (!lower_unit(env, i)) {
         pm.ok = false;
         return;

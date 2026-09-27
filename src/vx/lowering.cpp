@@ -227,10 +227,9 @@ Lowering::Lowering(ast::ModuleNode &mod, const TypeChecker &tc,
 // contra ciclos via marca de visitados (el type checker ya rechaza ciclos de
 // herencia, pero el DFS no debe colgarse si reaparece uno).
 
-// Forward-decl del chequeo de lowereabilidad de macros (definido mas abajo) +
-// definicion del contexto force-lower, para que el pre-pase de run() los use.
-std::string macro_body_unsupported_reason(const TypeChecker &tc,
-                                          const ast::Stmt *s);
+// El chequeo de lowereabilidad de macros lo declara `lowering_internal.h`;
+// aqui va la definicion del contexto force-lower, para que el pre-pase de
+// run() lo use.
 
 /* El estado por hilo del bajado de macros va en las ranuras propias del
  * proyecto (util/os/thread_slot.h) y no en `thread_local`.

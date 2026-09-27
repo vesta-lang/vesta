@@ -91,10 +91,7 @@ void create_unit_checker(const UnitEnv &env, size_t i,
      * @ref vx::GenericInstanceRegistry para lo que costaba no hacerlo. */
     pm.tc->set_generic_instances(env.generic_instances, i);
 
-    for (const auto &kv : *env.target_skipped) {
-        for (const auto &spec : kv.second)
-            pm.tc->register_target_skipped(kv.first, spec);
-    }
+    pm.tc->register_target_skipped_all(*env.target_skipped);
 
     for (const auto &ins : inline_namespaces) {
         const uint32_t ns_idx =

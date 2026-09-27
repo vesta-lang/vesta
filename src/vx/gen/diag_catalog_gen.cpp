@@ -617,6 +617,16 @@ const CatEntry kEntries[] = {
     {"VXT119", {"some field references the managed heap", "algun campo referencia el heap gestionado"}},
     {"VXT120", {"expected {0}B, inferred {1}B", "esperado {0}B, inferido {1}B"}},
     {"VXT121", {"the function is not in the intermediate code", "la funcion no esta en el codigo intermedio"}},
+    {"VXT122", {"reads the comptime string global '{0}'", "lee la global comptime de cadena '{0}'"}},
+    {"VXT123", {"reads the mutable comptime global '{0}', shared with the tree evaluator", "lee la global comptime mutable '{0}', compartida con el evaluador de arbol"}},
+    {"VXT124", {"calls an introspection builtin with type arguments (sizeof<T>, ...)", "llama a un builtin de introspeccion con argumentos de tipo (sizeof<T>, ...)"}},
+    {"VXT125", {"calls the compile-time-only builtin '{0}'", "llama al builtin '{0}', que solo existe al compilar"}},
+    {"VXT126", {"calls the virtual comptime function '{0}', which has no bytecode symbol", "llama a la funcion comptime virtual '{0}', que no tiene simbolo de bytecode"}},
+    {"VXT127", {"calls the comptime function '{0}', which is not a @Macro", "llama a la funcion comptime '{0}', que no es un @Macro"}},
+    {"VXT128", {"declares a local of struct type '{0}'", "declara una local de tipo struct '{0}'"}},
+    {"VXT129", {"contains a comptime block or a comptime for", "contiene un bloque comptime o un comptime for"}},
+    {"VXT130", {"forwards an `expr` parameter to a helper that captures the expression", "reenvia un parametro `expr` a una auxiliar que captura la expresion"}},
+    {"VXT131", {"through the comptime helper '{0}': {1}", "a traves de la auxiliar comptime '{0}': {1}"}},
     {"VXW001", {"the contracts of '{0}' ({1}) are NOT being verified: {2} -- a contract is a CHECK, so one that cannot be checked promises without guarding anything: keep it as documented intent, or drop it, but do not read it as proven", "los contratos de '{0}' ({1}) NO se estan verificando: {2} -- un contrato es una COMPROBACION, asi que uno que no se puede comprobar promete sin guardar nada: dejalo como intencion documentada, o quitalo, pero no lo leas como demostrado"}},
     {"VXW002", {"'{0}' declares {1}({2}) and only {3} was proven -- tightening it makes the promise say what the code really does", "'{0}' declara {1}({2}) y solo se demostro {3} -- apretarlo hace que la promesa diga lo que el codigo hace de verdad"}},
     {"VXW003", {"'{0}' provably satisfies {1} and does not declare it -- declaring it turns today's fact into a promise the compiler will enforce", "'{0}' cumple {1} de forma demostrable y no lo declara -- declararlo convierte un hecho de hoy en una promesa que el compilador hara cumplir"}},
@@ -859,7 +869,7 @@ const CatEntry kEntries[] = {
     {"use_def.unused", {"'{2}' is never used", "'{2}' no se usa en ningun sitio"}},
     {"value_shape.none", {"it has no values with components", "no tiene valores con componentes"}},
 };
-const int kEntryCount = 838;
+const int kEntryCount = 848;
 
 } // namespace
 

@@ -3967,7 +3967,7 @@ nlohmann::json Inspector::macro_expand(const std::string &uri) {
     nlohmann::json expansions = nlohmann::json::array();
     for (const auto &e : res.macro_expectations) {
         nlohmann::json je;
-        je["macro_name"] = e.macro_name;
+        je["macro_name"] = e.macro_name.str();
         je["call_site_loc"] = e.src_loc;
         nlohmann::json jargs = nlohmann::json::array();
         for (uint64_t a : e.args)
@@ -3980,8 +3980,11 @@ nlohmann::json Inspector::macro_expand(const std::string &uri) {
     nlohmann::json skipped = nlohmann::json::array();
     for (const auto &s : res.macro_skip_reasons) {
         nlohmann::json js;
-        js["name"] = s.first;
-        js["reason"] = s.second;
+        js["name"] = s.macro.str();
+        // La frase, del catalogo y en el idioma activo; el codigo, para quien
+        // quiera decidir sin leer texto.
+        js["reason"] = vx::macro_skip_text(s.why);
+        js["code"] = s.why.code;
         skipped.push_back(std::move(js));
     }
 

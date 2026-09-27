@@ -45,6 +45,7 @@
 #include "vx/diagram/mermaid_diagrams.h"
 #include "vx/diagram/graphviz_diagrams.h"
 #include "vx/diagram/html_diagrams.h"
+#include "vx/diagram/source_diagrams.h" // los del AST y los tipos, en su momento
 #include "vx/module/namespace_flatten.h"
 #include "vx/parser.h"
 #include <iostream>
@@ -293,59 +294,70 @@ static bool name_tail_is(const std::string &name,
  * es saber donde esta el otro.
  *
  * @param res        Recibe el diagnostico y se marca no-ok si ya estaba dado.
- * @param loc        Donde situar el error: el modulo, no una declaracion.
+ * @param tc         El comprobador del modulo: dice como se ESCRIBIO cada
+ *                   nombre, que es como hay que citarlo.
+ * @param loc        Donde situar el error: la declaracion que sobra.
  * @param annotation Nombre de la anotacion, para el mensaje.
- * @param fn_name    La funcion que dice ser el sustituto.
+ * @param fn_name    La funcion que dice ser el sustituto (su simbolo).
  * @param slot       Donde se guarda; vacio = todavia libre.
  * @return true si el sitio era suyo y quedo apuntado; false si ya estaba dado.
  */
-static bool claim_override_slot(CompileResult &res, const SourceLoc &loc,
-                                const char *annotation,
+static bool claim_override_slot(CompileResult &res, const TypeChecker &tc,
+                                const SourceLoc &loc, const char *annotation,
                                 const std::string &fn_name, std::string &slot) {
     if (slot.empty()) {
         slot = fn_name;
         return true;
     }
     res.ok = false;
-    res.diagnostics.diag(loc, DiagLevel::ERR, "VX2118",
-                         {annotation, slot, fn_name});
+    /* Lo que se guarda es el SIMBOLO; lo que se cita, el nombre escrito: con
+     * `namespace`, el simbolo es `ns__f`, que no esta en el fuente. */
+    res.diagnostics.diag(
+        loc, DiagLevel::ERR, "VX2118",
+        {annotation, tc.written_name(slot), tc.written_name(fn_name)});
     return false;
 }
 
 bool collect_string_sync_overrides(const ast::ModuleNode &mod,
-                                   const std::string &module_name,
-                                   CompileResult &res) {
-    const SourceLoc mod_loc{util::intern_name(module_name), 0, 0};
+                                   const TypeChecker &tc, CompileResult &res) {
+    /* Donde esta la mitad del par `@SyncImpl` que SI se declaro: si falta la
+     * otra, el error se situa ahi, que es donde hay que escribirla al lado. */
+    SourceLoc sync_loc;
     for (const auto &decl : mod.decls) {
         if (!decl || decl->kind != ast::NodeKind::FunctionDecl) continue;
         const auto *fd = static_cast<const ast::FunctionDecl *>(decl.get());
+        /* Los choques se situan en la SEGUNDA declaracion, la que sobra; el
+         * mensaje nombra ademas la primera. */
         if (fd->is_string_concat_override &&
-            !claim_override_slot(res, mod_loc, "StringConcat", fd->name,
+            !claim_override_slot(res, tc, fd->loc, "StringConcat", fd->name,
                                  res.string_concat_override))
             return false;
         if (fd->is_string_eq_override &&
-            !claim_override_slot(res, mod_loc, "StringEq", fd->name,
+            !claim_override_slot(res, tc, fd->loc, "StringEq", fd->name,
                                  res.string_eq_override))
             return false;
         if (!fd->is_sync_impl) continue;
         if (name_tail_is(fd->name, "monitor_enter")) {
-            if (!claim_override_slot(res, mod_loc, "SyncImpl monitor_enter",
-                                     fd->name, res.sync_enter_override))
+            if (!claim_override_slot(res, tc, fd->loc,
+                                     "SyncImpl monitor_enter", fd->name,
+                                     res.sync_enter_override))
                 return false;
+            sync_loc = fd->loc;
         } else if (name_tail_is(fd->name, "monitor_exit")) {
-            if (!claim_override_slot(res, mod_loc, "SyncImpl monitor_exit",
+            if (!claim_override_slot(res, tc, fd->loc, "SyncImpl monitor_exit",
                                      fd->name, res.sync_exit_override))
                 return false;
+            sync_loc = fd->loc;
         } else {
             res.diagnostics.diag(fd->loc, DiagLevel::WARN, "VXW935",
-                                 {fd->name});
+                                 {tc.written_name(fd->name)});
         }
     }
     /* El par de `@SyncImpl` se exige COMPLETO: a medias, el cerrojo se toma de
      * una forma y se suelta de otra. */
     if (res.sync_enter_override.empty() != res.sync_exit_override.empty()) {
         res.ok = false;
-        res.diagnostics.diag(mod_loc, DiagLevel::ERR, "VX2119",
+        res.diagnostics.diag(sync_loc, DiagLevel::ERR, "VX2119",
                              {res.sync_enter_override.empty()
                                   ? "monitor_enter"
                                   : "monitor_exit"});
@@ -460,6 +472,10 @@ CompileResult compile_vx_source(const std::string &source,
      * codigo que se ejecuta al compilar tiene bytecode desde el primer call
      * site, sin releer ningun fichero. */
     tc.set_comptime_artifact(opts.comptime_artifact);
+    /* Lo que `@Target` descarto en este fichero, para que usarlo diga
+     * "declarado para otro objetivo" y no "no declarado" -- como en el camino
+     * de proyecto --. */
+    tc.register_target_skipped_all(mod->target_skipped);
     // Registrar namespaces inline en el checker ANTES de run().
     for (const auto &ins : inline_namespaces) {
         const uint32_t ns_idx =
@@ -499,22 +515,9 @@ CompileResult compile_vx_source(const std::string &source,
     // por el TypeChecker (al evaluar via AST) hacia la CompileResult.
     // El caller (main.cpp probe / shadow-eval mode) las reaplica
     // sobre una nueva ComptimeRuntime tras cargar el bytecode y
-    // ejecuta shadow_validate.  Cero coste si no hay @Macros.
-    const auto &ctr_ro = tc.comptime_runtime();
-    const size_t n_exp = ctr_ro.expectation_count();
-    res.macro_expectations.reserve(n_exp);
-    for (size_t i = 0; i < n_exp; ++i) {
-        auto v = ctr_ro.expectation_at(i);
-        if (!v.macro_name || !v.args || !v.expected_str || !v.src_loc) {
-            continue;
-        }
-        CompileResult::MacroExpectation e;
-        e.macro_name = *v.macro_name;
-        e.args = *v.args;
-        e.expected_str = *v.expected_str;
-        e.src_loc = *v.src_loc;
-        res.macro_expectations.push_back(std::move(e));
-    }
+    // ejecuta shadow_validate.  Cero coste si no hay @Macros.  Por la misma
+    // funcion que el camino de proyecto.
+    collect_macro_expectations(tc, res.macro_expectations);
 
     // 2.4. (opcional) Volcar los valores comptime computados.  Estrictamente
     // gateado por @c dump_comptime_values (default false): si esta apagado,
@@ -582,40 +585,10 @@ CompileResult compile_vx_source(const std::string &source,
         }
     }
 
-    // 2.5. (opcional) Diagrama Mermaid del AST post type-check.  Lo
-    // generamos AHORA porque ya tenemos los result_type rellenos pero
-    // antes de que el lowering altere el AST.  Util para ver la
-    // estructura del programa Vesta (clases, herencia, anotaciones,
-    // tipos resueltos) sin saturar con detalles de lowering.
-    if (opts.dump_mermaid_ast) {
-        res.mermaid_ast = mermaid_from_ast(*mod);
-    }
-    // Variante Graphviz del AST.  Se llena en paralelo si el flag
-    // correspondiente esta activo.  Comparte el mismo punto de entrada
-    // (post type-check, pre lowering) para garantizar paridad de info
-    // con la version Mermaid.
-    if (opts.dump_graphviz_ast) {
-        res.graphviz_ast = graphviz_from_ast(*mod);
-    }
-    // Variante HTML interactiva del AST.  Reutiliza el generador
-    // Graphviz internamente (paridad de info); produce un .html
-    // autocontenido con pan/zoom + panel de detalle.
-    if (opts.dump_html_ast) {
-        res.html_ast = html_from_ast(*mod);
-    }
-    // Diagrama de tipos (classDiagram): clases/herencia/interfaces/structs/
-    // enums/conceptos.  Vista de alto nivel de la POO, independiente del AST
-    // detallado.  Cada formato se llena solo si su flag esta activo.
-    if (opts.dump_mermaid_types) {
-        res.mermaid_types = mermaid_types_from_ast(*mod);
-    }
-    if (opts.dump_graphviz_types) {
-        res.graphviz_types = graphviz_types_from_ast(*mod);
-    }
-    if (opts.dump_html_types) {
-        res.html_types =
-            html_from_dot(graphviz_types_from_ast(*mod), "Tipos", "types");
-    }
+    // 2.5. (opcional) Diagramas del AST y de los tipos: ahora, con los tipos
+    // resueltos y antes de que el lowering altere el arbol.  Por la misma
+    // funcion que el camino de proyecto.
+    fill_source_diagrams(*mod, opts, res);
 
     res.tiempos.tipos_us = cerrar_fase();
     phases.close(res.tiempos.tipos_us);
@@ -645,7 +618,7 @@ CompileResult compile_vx_source(const std::string &source,
      * copiado aqui el de proyecto se quedo sin el.  Eso no daba un error --
      * daba un `@StringConcat` que compilaba y no ruteaba nada --, y saltaba
      * en cuanto un fichero cambiaba de camino por cualquier otro motivo. */
-    if (!collect_string_sync_overrides(*mod, opts.module_name, res)) return res;
+    if (!collect_string_sync_overrides(*mod, tc, res)) return res;
     for (auto &decl : mod->decls) {
         if (!decl || decl->kind != ast::NodeKind::FunctionDecl) continue;
         auto *fd = static_cast<ast::FunctionDecl *>(decl.get());
@@ -930,8 +903,8 @@ CompileResult compile_vx_source(const std::string &source,
         res.unresolved_inject_arg = tc.asm_body_pending_arg();
     }
 
-    /* +: copiar las razones de skip del lowering a la
-     * CompileResult para que main.cpp las imprima via VESTA_VERBOSE. */
+    /* Las razones de skip del lowering, para que el servidor de lenguaje
+     * pueda decir por que un @Macro no fue a la maquina de compilacion. */
     res.macro_skip_reasons = lo.macro_skip_reasons();
 
     // 3.5. (opcional) Volcar el IR pre-optimizacion al campo

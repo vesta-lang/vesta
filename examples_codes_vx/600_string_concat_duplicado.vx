@@ -1,0 +1,23 @@
+namespace ejemplos.string_concat_duplicado;
+
+// DOS sustitutos del `+` de `string`: tiene que FALLAR al compilar.
+//
+// Dos candidatos no son una sobrecarga: son una pregunta sin respuesta,
+// porque cual gana lo decidiria el orden en que estan escritos.  El error se
+// situa en la SEGUNDA declaracion -- la que sobra -- y nombra las dos.
+//
+// Con `namespace` a proposito: asi se compila por el camino de proyecto, que
+// antes seguia adelante con el primero y no cortaba.
+//
+// Resultado esperado: error VX2118 en la linea de `second_concat`.
+
+@StringConcat
+string first_concat(string a, string b) => "A";
+
+@StringConcat
+string second_concat(string a, string b) => "B";
+
+i32 main() {
+	string s = "x" + "y";
+	return 42;
+}

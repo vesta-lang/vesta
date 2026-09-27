@@ -697,9 +697,10 @@ uint64_t Lowering::get_or_create_comptime_global_slot(const std::string &name) {
  * @brief  MC.1 -- detecta si el body de un @Macro contiene
  * caracteristicas que el IR runtime NO soporta todavia.
  *
- * Devuelve la primera razon encontrada (string descriptivo) o cadena
- * vacia si el body es lowerable.  Used by @c lower_function para
- * decidir si lowear o saltar el body al IR.
+ * Devuelve la primera razon encontrada -- codigo del catalogo y el nombre al
+ * que se refiere, sin frase: la escribe quien la muestra -- o una vacia si el
+ * body es lowerable.  La usa @c lower_function para decidir si lowear o
+ * saltar el body al IR.  Declarada en `lowering_internal.h`.
  *
  * Patrones detectados como NO soportados (todavia):
  *   - Calls a builtins comptime-only (`comptime_concat`, `to_str`,
@@ -714,11 +715,23 @@ uint64_t Lowering::get_or_create_comptime_global_slot(const std::string &name) {
  * En sprints posteriores (MC.4, MC.5) cada categoria se vuelve
  * "soportada" anadiendo un FFI runtime + bridge de memoria.
  */
-std::string macro_body_unsupported_reason(const TypeChecker &tc,
-                                          const ast::Stmt *s);
 
-std::string macro_body_unsupported_reason_expr(const TypeChecker &tc,
-                                               const ast::Expr *e);
+namespace {
+
+/**
+ * @brief Un motivo con su codigo y, si lo hay, el nombre al que se refiere.
+ * @param code    Codigo `VXT...` del catalogo.
+ * @param subject El nombre, o vacio.
+ * @return El motivo.
+ */
+MacroSkipReason skip_reason(const char *code, const std::string &subject = {}) {
+    MacroSkipReason r;
+    r.code = code;
+    if (!subject.empty()) r.subject = util::InternedName::intern(subject);
+    return r;
+}
+
+} // namespace
 
 /* Force-lower de comptime helpers: cuando el estado de force-lower esta puesto,
  * el chequeo de lowereabilidad NO rechaza las llamadas a comptime fns no-macro,
@@ -729,9 +742,9 @@ std::string macro_body_unsupported_reason_expr(const TypeChecker &tc,
  * porque M8 compila modulos en paralelo (cada thread con su propio contexto).
  * (Definidos arriba, antes de Lowering::run.) */
 
-std::string macro_body_unsupported_reason_expr(const TypeChecker &tc,
-                                               const ast::Expr *e) {
-    if (!e) return "";
+MacroSkipReason macro_body_unsupported_reason_expr(const TypeChecker &tc,
+                                                   const ast::Expr *e) {
+    if (!e) return {};
     switch (e->kind) {
     case ast::NodeKind::IdentExpr: {
         /*  MC.17.2: refs a `comptime const` (INMUTABLES)
@@ -748,9 +761,7 @@ std::string macro_body_unsupported_reason_expr(const TypeChecker &tc,
         const auto *id = static_cast<const ast::IdentExpr *>(e);
         auto cit = tc.comptime_const_values().find(id->name);
         if (cit != tc.comptime_const_values().end()) {
-            if (cit->second.is_str) {
-                return "ref a comptime global string '" + id->name + "'";
-            }
+            if (cit->second.is_str) return skip_reason("VXT122", id->name);
             if (cit->second.is_mutable) {
                 /* comptime var MUTABLE global: se comparte entre lectores
                  * AST-eval (p.ej. `static_assert(g == 3)` top-level, otros
@@ -764,19 +775,17 @@ std::string macro_body_unsupported_reason_expr(const TypeChecker &tc,
                  * (incl. static_assert) leyera el slot de la VM, lo que
                  * exigiria ejecutar la VM en cada eval comptime -- fuera de
                  * alcance. */
-                return "ref a comptime var (mutable) global '" + id->name + "'";
+                return skip_reason("VXT123", id->name);
             }
             /* comptime const int (INMUTABLE) OK: slot static_data read-only. */
-            return "";
+            return {};
         }
-        return "";
+        return {};
     }
     case ast::NodeKind::CallExpr: {
         const auto *ce = static_cast<const ast::CallExpr *>(e);
         /* Calls con type-args -> introspect: NO soportado v1. */
-        if (!ce->type_args.empty()) {
-            return "introspect builtin con type_args (sizeof<T>, etc.)";
-        }
+        if (!ce->type_args.empty()) return skip_reason("VXT124");
         /* Calls a builtins comptime-only por nombre. */
         if (ce->callee && ce->callee->kind == ast::NodeKind::IdentExpr) {
             const auto *id =
@@ -815,9 +824,8 @@ std::string macro_body_unsupported_reason_expr(const TypeChecker &tc,
                 "comptime_compile", "comptime_emit_expr", "type.of",
                 "compile",          "emit_expr",
             };
-            if (COMPTIME_ONLY.count(id->name)) {
-                return "builtin comptime-only '" + id->name + "'";
-            }
+            if (COMPTIME_ONLY.count(id->name))
+                return skip_reason("VXT125", id->name);
             /* MC.23 fix (bug 161): los nombres registrados como virtual
              * comptime fns bajo `vesta_comptime`
              * (comptime_type_sizeof/alignof/kind, comptime_compile,
@@ -838,7 +846,7 @@ std::string macro_body_unsupported_reason_expr(const TypeChecker &tc,
                 !(FOLDABLE_TYPE_META.count(id->name) && ce->args.size() == 1 &&
                   ce->args[0] &&
                   ce->args[0]->kind == ast::NodeKind::StringLitExpr)) {
-                return "virtual comptime fn '" + id->name + "'";
+                return skip_reason("VXT126", id->name);
             }
             /*  MC.17.3: calls a @Macros user-defined SE ACEPTAN
              * (la callee tambien se baja a IR con nombre
@@ -860,7 +868,7 @@ std::string macro_body_unsupported_reason_expr(const TypeChecker &tc,
                             macro_body_unsupported_reason_expr(tc, a.get());
                         if (!ra.empty()) return ra;
                     }
-                    return "";
+                    return {};
                 }
                 /* Llamada a una comptime fn NO-macro.  Con force-lower activo
                  * (con force-lower puesto): recurrir en su body; si es
@@ -872,10 +880,10 @@ std::string macro_body_unsupported_reason_expr(const TypeChecker &tc,
                 if (force_lower && fn_it->second && fn_it->second->body) {
                     const std::string &hn = fn_it->first; // nombre registrado
                     if (visiting->count(hn)) {
-                        return ""; // ciclo: asumir OK (el otro nivel decide)
+                        return {}; // ciclo: asumir OK (el otro nivel decide)
                     }
                     visiting->insert(hn);
-                    std::string sub = macro_body_unsupported_reason(
+                    MacroSkipReason sub = macro_body_unsupported_reason(
                         tc, fn_it->second->body.get());
                     visiting->erase(hn);
                     if (sub.empty()) {
@@ -892,12 +900,15 @@ std::string macro_body_unsupported_reason_expr(const TypeChecker &tc,
                                 macro_body_unsupported_reason_expr(tc, a.get());
                             if (!ra.empty()) return ra;
                         }
-                        return "";
+                        return {};
                     }
-                    return "helper comptime no-lowereable '" + id->name +
-                           "': " + sub;
+                    /* Por la auxiliar que se llama DESDE el cuerpo: es la que
+                     * el programador ve escrita en su macro.  Cada nivel pisa
+                     * al de dentro, asi que queda la mas externa. */
+                    sub.via = util::InternedName::intern(id->name);
+                    return sub;
                 }
-                return "call a comptime fn user-defined '" + id->name + "'";
+                return skip_reason("VXT127", id->name);
             }
         }
         /* Recurse en args. */
@@ -905,9 +916,7 @@ std::string macro_body_unsupported_reason_expr(const TypeChecker &tc,
             auto r = macro_body_unsupported_reason_expr(tc, a.get());
             if (!r.empty()) return r;
         }
-        auto r = macro_body_unsupported_reason_expr(tc, ce->callee.get());
-        if (!r.empty()) return r;
-        return "";
+        return macro_body_unsupported_reason_expr(tc, ce->callee.get());
     }
     case ast::NodeKind::BinaryExpr: {
         const auto *bn = static_cast<const ast::BinaryExpr *>(e);
@@ -928,7 +937,7 @@ std::string macro_body_unsupported_reason_expr(const TypeChecker &tc,
             auto r = macro_body_unsupported_reason_expr(tc, ie.get());
             if (!r.empty()) return r;
         }
-        return "";
+        return {};
     }
     case ast::NodeKind::InitListExpr: {
         /* Init list `{a, b, c}` de un array local: el lowering del macro lo
@@ -940,7 +949,7 @@ std::string macro_body_unsupported_reason_expr(const TypeChecker &tc,
             auto r = macro_body_unsupported_reason_expr(tc, el.get());
             if (!r.empty()) return r;
         }
-        return "";
+        return {};
     }
     case ast::NodeKind::IndexExpr: {
         /* Array indexing `arr[i]`: lowereable en macro body cuando `arr` es un
@@ -969,13 +978,13 @@ std::string macro_body_unsupported_reason_expr(const TypeChecker &tc,
         if (!r.empty()) return r;
         return macro_body_unsupported_reason_expr(tc, ae->value.get());
     }
-    default: return "";
+    default: return {};
     }
 }
 
-std::string macro_body_unsupported_reason(const TypeChecker &tc,
-                                          const ast::Stmt *s) {
-    if (!s) return "";
+MacroSkipReason macro_body_unsupported_reason(const TypeChecker &tc,
+                                              const ast::Stmt *s) {
+    if (!s) return {};
     switch (s->kind) {
     case ast::NodeKind::BlockStmt: {
         const auto *bs = static_cast<const ast::BlockStmt *>(s);
@@ -983,7 +992,7 @@ std::string macro_body_unsupported_reason(const TypeChecker &tc,
             auto r = macro_body_unsupported_reason(tc, st.get());
             if (!r.empty()) return r;
         }
-        return "";
+        return {};
     }
     case ast::NodeKind::VarDeclStmt: {
         const auto *vd = static_cast<const ast::VarDeclStmt *>(s);
@@ -1010,7 +1019,7 @@ std::string macro_body_unsupported_reason(const TypeChecker &tc,
                 if (vd->init)
                     return macro_body_unsupported_reason_expr(tc,
                                                               vd->init.get());
-                return "";
+                return {};
             }
             if (t->kind == ast::NodeKind::NamedTypeNode) {
                 /* Si el nombre matchea un struct declarado, es
@@ -1019,15 +1028,14 @@ std::string macro_body_unsupported_reason(const TypeChecker &tc,
                 const auto *nt = static_cast<const ast::NamedTypeNode *>(t);
                 if (tc.struct_layouts().find(nt->name) !=
                     tc.struct_layouts().end()) {
-                    return "var local de tipo struct '" + nt->name +
-                           "' en macro body (usa AST eval)";
+                    return skip_reason("VXT128", nt->name);
                 }
             }
         }
         if (vd->init) {
             return macro_body_unsupported_reason_expr(tc, vd->init.get());
         }
-        return "";
+        return {};
     }
     case ast::NodeKind::ExprStmt: {
         const auto *es = static_cast<const ast::ExprStmt *>(s);
@@ -1046,7 +1054,7 @@ std::string macro_body_unsupported_reason(const TypeChecker &tc,
         if (is->else_branch) {
             return macro_body_unsupported_reason(tc, is->else_branch.get());
         }
-        return "";
+        return {};
     }
     case ast::NodeKind::WhileStmt: {
         const auto *ws = static_cast<const ast::WhileStmt *>(s);
@@ -1078,8 +1086,8 @@ std::string macro_body_unsupported_reason(const TypeChecker &tc,
     }
     case ast::NodeKind::ComptimeBlockStmt:
     case ast::NodeKind::ComptimeForStmt:
-        return "comptime block/for en macro body (requiere MC.5)";
-    default: return "";
+        return skip_reason("VXT129");
+    default: return {};
     }
 }
 

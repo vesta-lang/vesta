@@ -114,6 +114,13 @@ ModuleCacheKey module_cache_key(const ModuleCacheKeyInput &in) {
     // stack/heap nativo (calloc + dtor RAII).  Son IR distintos para el mismo
     // fuente, y sin esto un `.vxir` de `-m vm` se reusaria en `-m aot`.
     if (opts.native_poo) h = util::hash_combine(h, 0xA07A07A07A07A07AULL);
+    /* Y en modo nativo, el ancho SIMD: la vectorizacion del BAJADO lo usa,
+     * asi que dos anchos dan IR distinto para el mismo fuente.  Solo si no es
+     * el de por defecto, para no invalidar lo guardado sin motivo. */
+    if (opts.native_poo && (opts.aot_vec_width != 16 || opts.aot_auto_vec)) {
+        h = util::hash_combine(h, opts.aot_vec_width);
+        h = util::hash_combine(h, opts.aot_auto_vec ? 1u : 0u);
+    }
     key.source_hash = h;
 
     // Un modulo SOLO es especifico del objetivo si usa @Target (que descarta

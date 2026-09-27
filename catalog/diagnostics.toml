@@ -2009,6 +2009,52 @@ es = "esperado {0}B, inferido {1}B"
 en = "the function is not in the intermediate code"
 es = "la funcion no esta en el codigo intermedio"
 
+# --- por que un @Macro se queda en el evaluador de arbol ---
+#
+# El bajado de un @Macro renuncia cuando su cuerpo usa algo que la maquina de
+# compilacion no sabe hacer todavia.  El motivo se guarda como codigo + nombre
+# y se escribe aqui; `{0}` es el nombre al que se refiere.
+
+[VXT122]
+en = "reads the comptime string global '{0}'"
+es = "lee la global comptime de cadena '{0}'"
+
+[VXT123]
+en = "reads the mutable comptime global '{0}', shared with the tree evaluator"
+es = "lee la global comptime mutable '{0}', compartida con el evaluador de arbol"
+
+[VXT124]
+en = "calls an introspection builtin with type arguments (sizeof<T>, ...)"
+es = "llama a un builtin de introspeccion con argumentos de tipo (sizeof<T>, ...)"
+
+[VXT125]
+en = "calls the compile-time-only builtin '{0}'"
+es = "llama al builtin '{0}', que solo existe al compilar"
+
+[VXT126]
+en = "calls the virtual comptime function '{0}', which has no bytecode symbol"
+es = "llama a la funcion comptime virtual '{0}', que no tiene simbolo de bytecode"
+
+[VXT127]
+en = "calls the comptime function '{0}', which is not a @Macro"
+es = "llama a la funcion comptime '{0}', que no es un @Macro"
+
+[VXT128]
+en = "declares a local of struct type '{0}'"
+es = "declara una local de tipo struct '{0}'"
+
+[VXT129]
+en = "contains a comptime block or a comptime for"
+es = "contiene un bloque comptime o un comptime for"
+
+[VXT130]
+en = "forwards an `expr` parameter to a helper that captures the expression"
+es = "reenvia un parametro `expr` a una auxiliar que captura la expresion"
+
+[VXT131]
+en = "through the comptime helper '{0}': {1}"
+es = "a traves de la auxiliar comptime '{0}': {1}"
+
 # --- lo que cuesta una frontera (VXW004) ---
 #
 # La unica familia del linter que puede CUANTIFICAR lo que pierdes: cuantas

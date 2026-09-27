@@ -4704,8 +4704,8 @@ int main(int argc, char *argv[]) {
          * via VESTA_MC_VERBOSE para que el usuario sepa por que. */
         if (verbose_mc && cr.ok && !cr.macro_skip_reasons.empty()) {
             for (const auto &sk : cr.macro_skip_reasons) {
-                std::cerr << "[mc-lower] " << sk.first << ": AST-only ("
-                          << sk.second << ")\n";
+                std::cerr << "[mc-lower] " << sk.macro.str() << ": AST-only ("
+                          << vx::macro_skip_text(sk.why) << ")\n";
             }
         }
 
@@ -5849,8 +5849,11 @@ int main(int argc, char *argv[]) {
                      * AST evaluator).  Cero coste si no hay expectacioes. */
                     if (!cr.macro_expectations.empty()) {
                         for (const auto &e : cr.macro_expectations) {
-                            ctr.record_expectation(e.macro_name, e.args,
-                                                   e.expected_str, e.src_loc);
+                            ctr.record_expectation(
+                                e.macro_name.str(),
+                                std::vector<uint64_t>(e.args.begin(),
+                                                      e.args.end()),
+                                e.expected_str, e.src_loc);
                         }
                         std::vector<vx::ComptimeRuntime::ShadowMismatch> report;
                         const size_t mismatches = ctr.shadow_validate(report);

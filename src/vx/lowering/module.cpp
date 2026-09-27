@@ -956,9 +956,10 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
         if (has_expr_param &&
             macro_body_forwards_expr_capture(tc_, fd->body.get())) {
             ++macro_skipped_count_;
-            macro_skip_reasons_.emplace_back(
-                fd->name,
-                "forwarding de `expr` a helper expr-capture (AST-eval)");
+            MacroSkip skip;
+            skip.macro = util::InternedName::intern(fd->name);
+            skip.why.code = "VXT130";
+            macro_skip_reasons_.push_back(skip);
             return;
         }
         /* @Macro: intentar lowear el body al IR.  Si contiene
@@ -971,17 +972,18 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
         set_macro_force_lower(&comptime_fns_to_force_lower_);
         std::unordered_set<std::string> ml_visiting;
         set_macro_visiting(&ml_visiting);
-        const std::string reason =
+        const MacroSkipReason reason =
             macro_body_unsupported_reason(tc_, fd->body.get());
         set_macro_force_lower(nullptr);
         set_macro_visiting(nullptr);
         if (!reason.empty()) {
-            /* No soportado -- fallback silencioso al AST eval.
-             * Capturamos el reason para diagnostico via
-             * VESTA_MC_VERBOSE (el usuario lo ve como
-             * "[mc-lower] M_xxx: AST-only (usa Y)"). */
+            /* No soportado: se queda en el evaluador de arbol.  El motivo se
+             * guarda para que el servidor de lenguaje pueda decir por que. */
             ++macro_skipped_count_;
-            macro_skip_reasons_.emplace_back(fd->name, reason);
+            MacroSkip skip;
+            skip.macro = util::InternedName::intern(fd->name);
+            skip.why = reason;
+            macro_skip_reasons_.push_back(skip);
             return;
         }
         /* Pre-pase de annotation: los macros no pasan por

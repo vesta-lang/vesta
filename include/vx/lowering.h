@@ -63,6 +63,7 @@
 #include "vx/asm/asm_lift_reason.h" // AsmMotivoOpaco: POR QUE no se pudo elevar
 #include "vx/builtin_names.h" // Builtin: el nombre ya resuelto, no la cadena
 #include "vx/ast.h"
+#include "vx/comptime/macro_report.h" // por que un @Macro no se bajo
 #include "vx/diagnostic.h"
 #include "vx/hook_points.h"  // vocabulario de @Hook: puntos y campos
 #include "vx/module_index.h" // que declara el modulo, indexado una vez
@@ -3495,13 +3496,12 @@ class Lowering {
     /// comptime fn como fn runtime normal en vez de elidirla).
     std::unordered_set<std::string> comptime_fns_to_force_lower_;
 
-    /// por cada @Macro que el lowering rechazo (usa
-    /// builtins comptime-only no aliasables, comptime globals, etc.),
-    /// guarda @c (macro_name, reason).  El compiler los propaga al
-    /// @c CompileResult y main.cpp los imprime via
-    /// @c VESTA_MC_VERBOSE para que el usuario entienda por que
-    /// ciertos macros no se benefician del path VM.
-    std::vector<std::pair<std::string, std::string>> macro_skip_reasons_;
+    /// Por cada @Macro que el lowering rechazo (usa builtins comptime-only no
+    /// aliasables, comptime globals, etc.), el macro y el motivo.  El
+    /// compilador los propaga al @c CompileResult y el servidor de lenguaje
+    /// los ensena, para que se entienda por que ciertos macros no van por la
+    /// maquina de compilacion.
+    MacroSkips macro_skip_reasons_;
 
     /**
      * @brief Que declaracion produjo cada simbolo emitido.
@@ -3628,8 +3628,7 @@ class Lowering {
     uint32_t macro_skipped_count() const noexcept {
         return macro_skipped_count_;
     }
-    const std::vector<std::pair<std::string, std::string>> &
-    macro_skip_reasons() const noexcept {
+    const MacroSkips &macro_skip_reasons() const noexcept {
         return macro_skip_reasons_;
     }
 

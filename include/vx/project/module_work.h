@@ -15,6 +15,7 @@
 #include "ir/ssa_ir.h"
 #include "util/name_pool.h"
 #include "vx/ast.h"
+#include "vx/comptime/macro_report.h" // lo que se informa de cada @Macro
 #include "vx/diagnostic.h"
 #include "vx/module/vxi_format.h"
 #include "vx/type_checker.h"
@@ -89,6 +90,12 @@ struct ProjectModuleWork {
     /// Los contratos de huella declarados en su fuente, ya con la clave con la
     /// que el analizador vera la funcion.
     analyze::FunctionContractMap contracts;
+    /// Las llamadas a `@Macro` que su comprobador resolvio, y los `@Macro`
+    /// que su bajado no llevo a la maquina de compilacion.  Se juntan al
+    /// final en el resultado del proyecto, como en el camino de fichero
+    /// suelto.  Un modulo servido de la cache no trae ninguno: no se evaluo.
+    MacroExpectations macro_expectations;
+    MacroSkips macro_skips;
     ///@}
 
     /**

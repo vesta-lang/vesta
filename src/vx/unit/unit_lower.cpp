@@ -26,10 +26,11 @@ namespace {
  * @param env Entorno del proyecto.
  * @param pm  El modulo raiz.
  * @param lo  Su lowering.
+ * @return false si los sustitutos chocan o vienen a medias: el error ya esta
+ *         dicho y el modulo no se baja.
  */
-void apply_root_overrides(const UnitEnv &env, ProjectModuleWork &pm,
+bool apply_root_overrides(const UnitEnv &env, ProjectModuleWork &pm,
                           Lowering &lo) {
-    const CompileOptions &opts = *env.opts;
     CompileResult &res = *env.res;
     const auto &aot_helper_override_syms = *env.root.helper_overrides;
     auto itmc = aot_helper_override_syms.find("memcpy");
@@ -50,15 +51,15 @@ void apply_root_overrides(const UnitEnv &env, ProjectModuleWork &pm,
      * nadie.  Saltaba en cuanto un fichero pasaba a compilarse como
      * proyecto por cualquier otro motivo -- por ejemplo por traer el
      * asignador de la stdlib --, o sea lejos de donde se escribio. */
-    /* El valor de vuelta no se mira aqui porque de este sitio no se
-     * puede abandonar: la funcion no devuelve el resultado.  No hace
-     * falta -- al fallar, el barrido ya marco `res.ok` y dejo su
-     * diagnostico, que es lo que corta mas arriba --. */
-    (void)collect_string_sync_overrides(*pm.ast, opts.module_name, res);
+    /* Si choca, se corta AQUI, como en el camino de fichero suelto: bajar el
+     * modulo con uno de los dos candidatos elegido por el orden en que estan
+     * escritos seria dar por buena una pregunta sin respuesta. */
+    if (!collect_string_sync_overrides(*pm.ast, *pm.tc, res)) return false;
     lo.set_string_op_overrides(res.string_concat_override,
                                res.string_eq_override);
     lo.set_sync_impl_overrides(res.sync_enter_override,
                                res.sync_exit_override);
+    return true;
 }
 
 /**
@@ -116,13 +117,19 @@ bool lower_unit(const UnitEnv &env, size_t i) {
     // proyecto para x86-32 se emitian registros de 64 bits y el ensamblado
     // fallaba, tumbando la funcion entera al interprete.
     lo.set_asm_target_bits(opts.asm_target_bits);
+    /* El ancho SIMD de `--float-isa`, que la vectorizacion del bajado usa en
+     * modo nativo.  Solo lo pasaba el camino de fichero suelto: un proyecto
+     * AOT vectorizaba siempre a 16 bytes, pidiera lo que pidiera.  Entra en
+     * la clave de cache del modulo (`module_cache_key`). */
+    lo.set_aot_vec_width(opts.aot_vec_width);
+    lo.set_aot_auto_vec(opts.aot_auto_vec);
     // CPU dispatch Inc 5b: aplicar los @HelperOverride agregados (root +
     // imports, ya resueltos por precedencia en el pre-pase) SOLO al
     // modulo ROOT, que es quien emite __vx_memcpy_init / __vx_strdisp_init.
     // El fp de cada init apunta entonces a la fn del override (que puede
     // vivir en un modulo importado; su simbolo se resuelve en el IR
     // mergeado via el reloc fnsym del LABEL_ADDR).
-    if (is_root) apply_root_overrides(env, pm, lo);
+    if (is_root && !apply_root_overrides(env, pm, lo)) return false;
     if (!opts.instrument_mode.empty() && opts.instrument_mode != "none") {
         lo.set_instrument_mode(opts.instrument_mode);
     }
@@ -140,6 +147,13 @@ bool lower_unit(const UnitEnv &env, size_t i) {
         lo.set_hook_counters(*env.root.hook_counters);
     const std::string &mod_name = pm.module_name.str();
     if (!lo.run(pm.ir, mod_name)) return false;
+    /* Los `@Macro` que no fueron a la maquina de compilacion, y por que.  Se
+     * juntan con los de los demas modulos al acabar. */
+    pm.macro_skips = lo.macro_skip_reasons();
+    /* La autocomprobacion del intermedio recien bajado, como en el camino de
+     * fichero suelto: sin ella, un modulo de proyecto solo se verificaba ya
+     * fusionado, donde un fallo no dice de que modulo vino. */
+    ir::ir_verify_if_asked(pm.ir, "lowered", pm.canonical_path.str());
 
     /* De que fichero salio cada funcion.  Aqui y no mas tarde: este es el
      * ultimo punto en que el modulo y su fuente se ven a la vez -- despues

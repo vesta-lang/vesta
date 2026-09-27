@@ -242,9 +242,14 @@ bool wants_stage_(const CompileOptions &opts, const char *stage) {
  *
  * Se recuerda por RUTA: el manifiesto no cambia a mitad de compilacion y
  * parsearlo por modulo seria releerlo decenas de veces para la misma respuesta.
+ *
+ * Con cerrojo: el memo es del PROCESO, y el servidor de lenguaje compila
+ * documentos desde varios hilos a la vez.
  */
 uint32_t analysis_unused_runs_for_(const std::string &source_path) {
+    static std::mutex memo_mtx;
     static std::unordered_map<std::string, uint32_t> memo;
+    std::lock_guard<std::mutex> lk(memo_mtx);
     auto it = memo.find(source_path);
     if (it != memo.end()) return it->second;
 
@@ -3527,6 +3532,17 @@ CompileResult compile_vx_project(
     /* Del resumen, no del comprobador de tipos: se le pregunto al acabar cada
      * modulo, que es cuando existia.  Lo que se guardaba para poder hacer esta
      * pregunta era un objeto de decenas de megabytes por modulo. */
+    /* Lo que se informa de cada `@Macro`, de TODOS los modulos y en su orden.
+     * Solo lo recogia el camino de fichero suelto, asi que el servidor de
+     * lenguaje no veia nada en cuanto el documento traia un `import`. */
+    for (const auto &pm : work) {
+        res.macro_expectations.insert(res.macro_expectations.end(),
+                                      pm.macro_expectations.begin(),
+                                      pm.macro_expectations.end());
+        res.macro_skip_reasons.insert(res.macro_skip_reasons.end(),
+                                      pm.macro_skips.begin(),
+                                      pm.macro_skips.end());
+    }
     for (const auto &pm : work) {
         if (pm.inject_pending) {
             res.has_lowerable_macros = true;
@@ -3574,25 +3590,12 @@ CompileResult compile_vx_project(
     }
     res.ok = !res.diagnostics.has_errors();
 
-    // Diagramas (Mermaid / Graphviz) del AST del root + IR mergeado +
-    // .vel final.  En el path project compile (multi-fichero) el AST
-    // que se diagrama es el root (work.back() en topo order).  Los IR
-    // pre y post-opt se diagraman desde @c merged (sin distincion de
-    // pre vs post porque @c ir_optimize ya corrio sobre merged; el
-    // diagrama "pre" es identico al "post" en project compile -- esto
-    // es una limitacion documentada del modelo merge IR).
-    const auto &root_pm = work.back();
-    if (root_pm.ast) {
-        if (opts.dump_mermaid_ast) {
-            res.mermaid_ast = mermaid_from_ast(*root_pm.ast);
-        }
-        if (opts.dump_graphviz_ast) {
-            res.graphviz_ast = graphviz_from_ast(*root_pm.ast);
-        }
-        if (opts.dump_html_ast) {
-            res.html_ast = html_from_ast(*root_pm.ast);
-        }
-    }
+    // Diagramas del IR mergeado y del .vel final.  Los del AST y los tipos
+    // del raiz ya los saco `compile_unit`, en el mismo momento que el camino
+    // de fichero suelto.  Los IR pre y post-opt se diagraman desde @c merged
+    // (sin distincion de pre vs post porque @c ir_optimize ya corrio sobre
+    // merged; el diagrama "pre" es identico al "post" en project compile --
+    // esto es una limitacion documentada del modelo merge IR).
     if (opts.dump_mermaid_ir_pre || opts.dump_mermaid_ir_post) {
         std::string ir_text =
             mermaid_from_ir_module(merged, "IR (merged + optimized)");

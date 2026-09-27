@@ -36,6 +36,7 @@
 #include "ir/ssa_ir_serialize.h" // los buffers del intermedio y su clase
 #include "vx/builtin_names.h"    // que builtin cubre un `@Provides`
 #include "vx/comptime/comptime_unit_names.h" // los nombres del conjunto comptime
+#include "vx/comptime/macro_report.h" // lo que se informa de cada @Macro
 #include "vx/diagnostic.h"
 #include "port/port_options.h"
 #include "analyze/fingerprint.h"     // FunctionContracts
@@ -713,15 +714,9 @@ struct CompileResult {
      * Si los conteos del shadow validate divergen, indica un bug
      * en la lowering del @Macro a IR (o en el AST evaluator).
      * Cuando todo coincide, MC.9 podra hacer el switch a VM-only
-     * con confianza.
+     * con confianza.  En un proyecto, las de TODOS sus modulos.
      */
-    struct MacroExpectation {
-        std::string macro_name;
-        std::vector<uint64_t> args;
-        std::string expected_str;
-        std::string src_loc;
-    };
-    std::vector<MacroExpectation> macro_expectations;
+    MacroExpectations macro_expectations;
 
     /**
      * @brief @c true si el modulo contiene AL MENOS
@@ -816,13 +811,12 @@ struct CompileResult {
     bool has_ctpe_candidates = false;
 
     /**
-     * @brief por cada @Macro que el lowering rechazo
-     * por usar features no soportados en el path VM (builtins
-     * comptime-only, comptime globals, etc.), guarda
-     * @c (macro_name, reason).  El main.cpp los imprime via
-     * @c VESTA_MC_VERBOSE para diagnostico.
+     * @brief Por cada @Macro que el lowering rechazo por usar algo que la
+     * maquina de compilacion no soporta (builtins comptime-only, comptime
+     * globals, etc.), el macro y el motivo.  Lo ensena el servidor de
+     * lenguaje.  En un proyecto, los de TODOS sus modulos.
      */
-    std::vector<std::pair<std::string, std::string>> macro_skip_reasons;
+    MacroSkips macro_skip_reasons;
 
     /**
      * @brief  M5.B: rutas canonicas (absolutas + normalizadas) de
@@ -896,18 +890,21 @@ struct CompileResult {
  * compilaba y no ruteaba nada.  El dia que un fichero cambio de camino por un
  * motivo que no tenia que ver, su override dejo de aplicarse en silencio.
  *
- * @param mod         Modulo ya parseado cuyas declaraciones se barren.
- * @param module_name Nombre del modulo, para situar los errores que no cuelgan
- *                    de una declaracion concreta.
- * @param res         Recibe los nombres.  Se marca @c ok a false y se emite el
- *                    diagnostico si algo esta declarado dos veces, o si el par
- *                    de `@SyncImpl` viene a medias -- un monitor que se
- *                    adquiere y no se libera es peor que ninguno --.
+ * Los errores se situan en la declaracion que los causa: la que sobra, o la
+ * mitad del par que no tiene pareja.
+ *
+ * @param mod Modulo ya parseado cuyas declaraciones se barren.
+ * @param tc  Su comprobador, ya ejecutado: los mensajes citan cada funcion
+ *            como se escribio, no por su simbolo aplanado.
+ * @param res Recibe los nombres.  Se marca @c ok a false y se emite el
+ *            diagnostico si algo esta declarado dos veces, o si el par de
+ *            `@SyncImpl` viene a medias -- un monitor que se adquiere y no se
+ *            libera es peor que ninguno --.
  * @return false si hubo un error fatal; el llamante debe abandonar.
  */
+class TypeChecker;
 bool collect_string_sync_overrides(const ast::ModuleNode &mod,
-                                   const std::string &module_name,
-                                   CompileResult &res);
+                                   const TypeChecker &tc, CompileResult &res);
 
 CompileResult compile_vx_source(const std::string &source,
                                 const std::string &filename,

@@ -427,7 +427,15 @@ std::vector<FlattenedNamespace> prepare_unit(const UnitEnv &env, size_t i) {
      * comptime -- la stdlib
      * -- llegan por el camino de PROYECTO, asi que sin esto la medida se
      * tomaba sobre casos sinteticos y la granularidad del artefacto se
-     * elegia por arquitectura en vez de por dato.  Solo diagnostico. */
+     * elegia por arquitectura en vez de por dato.
+     *
+     * TAMBIEN cuando esta compilacion es la del propio conjunto, al
+     * reves que en el camino de fichero suelto.  Aqui lo recogido se guarda
+     * en el `.vxi` del modulo, y la clave de su cache no distingue una
+     * compilacion de la otra: saltarselo dejaria en la cache el modulo con
+     * el conjunto VACIO, y la siguiente compilacion normal lo serviria asi,
+     * con un artefacto al que le faltan funciones y sin error.  Que el
+     * conjunto no se construya a si mismo lo corta quien orquesta. */
     collect_unit_comptime(pm, inline_namespaces);
 
     /* Los `comptime { }` de modulo, a funciones comptime, igual que en el

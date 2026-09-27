@@ -480,6 +480,8 @@ add_library(vx_lib STATIC
     diagram/mermaid_diagrams.cpp
     diagram/graphviz_diagrams.cpp
     diagram/html_diagrams.cpp
+    # Los del AST y los tipos, en su momento: los usan los dos caminos.
+    diagram/source_diagrams.cpp
     # Subsistema de coste Big-O (modo --analyze).  Solo depende de
     # ir::IrModule; vive aqui para que los renderers de diagramas puedan
     # anotar el coste por funcion (--diagram-cost).
@@ -511,6 +513,9 @@ add_library(vx_lib STATIC
     comptime/comptime_collect.cpp
     # `comptime { }` de modulo -> funcion comptime: lo usan los dos caminos.
     comptime/comptime_blocks.cpp
+    # Lo que se informa de cada `@Macro` (que genero, por que no se bajo): lo
+    # recogen los dos caminos.
+    comptime/macro_report.cpp
     # El artefacto comptime por contenido: compila el conjunto una vez y lo
     # reusa via el CAS
     comptime/comptime_artifact.cpp

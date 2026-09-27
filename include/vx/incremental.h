@@ -52,9 +52,12 @@ using MerkleKey = uint64_t;
  *
  *   - @c ir_fingerprint(): dimensiones que cambian el IR PRE-OPTIMIZE (lo que
  *     cachea hoy el CAS de modulo).  La OPTIMIZACIoN + el CODEGEN son
- *     POSTERIORES (post-merge), asi que @c opt_level, @c aot_vec_width y el
- *     os/arch de codegen NO entran aqui -> el IR se comparte entre esas
- *     configuraciones (mas reuso, sin perder correctitud).
+ *     POSTERIORES (post-merge), asi que @c opt_level y el os/arch de codegen
+ *     NO entran aqui -> el IR se comparte entre esas configuraciones (mas
+ *     reuso, sin perder correctitud).  El ancho SIMD SI cambia el IR en modo
+ *     nativo -- lo usa la vectorizacion del bajado --, y por eso entra en la
+ *     huella del fuente del modulo (`module_cache_key`), que esta clave ya
+ *     incluye.
  *   - @c full_fingerprint(): TODAS las dimensiones.  Lo usara el cache del
  *     ARTEFACTO FINAL (.velb / .exe AOT), que SI depende de arch/os/opt/perfil.
  *

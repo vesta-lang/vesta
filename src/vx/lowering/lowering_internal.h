@@ -26,6 +26,7 @@
 #include "ir/ssa_ir.h"
 #include "ir/runtime_symbols.h" // lo que el codigo bajado le pide al runtime
 #include "vx/ast.h"
+#include "vx/comptime/macro_report.h" // el motivo por el que un @Macro no baja
 #include "vx/type_checker.h"
 
 #include <cstdint>
@@ -154,10 +155,10 @@ void set_macro_visiting(std::unordered_set<std::string> *p);
  * ejecutarse antes de tiempo.
  * @{
  */
-std::string macro_body_unsupported_reason(const TypeChecker &tc,
-                                          const ast::Stmt *s);
-std::string macro_body_unsupported_reason_expr(const TypeChecker &tc,
-                                               const ast::Expr *e);
+MacroSkipReason macro_body_unsupported_reason(const TypeChecker &tc,
+                                              const ast::Stmt *s);
+MacroSkipReason macro_body_unsupported_reason_expr(const TypeChecker &tc,
+                                                   const ast::Expr *e);
 bool macro_body_forwards_expr_capture(const TypeChecker &tc,
                                       const ast::Stmt *s);
 bool macro_body_forwards_expr_capture_expr(const TypeChecker &tc,

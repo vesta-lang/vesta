@@ -1,0 +1,20 @@
+namespace ejemplos.syncimpl_a_medias;
+
+// Un `@SyncImpl` SIN su pareja: tiene que FALLAR al compilar.
+//
+// El par se exige completo: a medias, el cerrojo se tomaria con la funcion
+// del programa y se soltaria con la del lenguaje.  Un monitor que se adquiere
+// y no se libera es peor que ninguno.  El error se situa en la mitad que SI
+// esta, que es donde hay que escribir la otra al lado.
+//
+// Resultado esperado: error VX2119 (falta `monitor_exit`) en la linea de
+// `monitor_enter`.
+
+i64 __enters = 0_i64;
+
+@SyncImpl
+void monitor_enter(i64* obj) {
+	__enters = __enters + 1;
+}
+
+i32 main() => 42;

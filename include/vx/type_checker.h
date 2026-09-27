@@ -4408,6 +4408,25 @@ class TypeChecker {
         if (std::find(v.begin(), v.end(), spec) == v.end()) v.push_back(spec);
     }
 
+    /**
+     * @brief Registra de golpe todo lo que `@Target` descarto: nombre ->
+     *        condiciones bajo las que si existe.
+     *
+     * Lo usan los dos caminos de compilacion.  El de fichero suelto no lo
+     * hacia, y un nombre descartado por `@Target` se daba por "no declarado"
+     * en vez de por "declarado para otro objetivo".
+     *
+     * @param skipped El mapa, tal como lo deja el parser (o su union de
+     *                todos los modulos).
+     */
+    void register_target_skipped_all(
+        const std::unordered_map<std::string, std::vector<std::string>>
+            &skipped) {
+        for (const auto &kv : skipped)
+            for (const auto &spec : kv.second)
+                register_target_skipped(kv.first, spec);
+    }
+
     /// Condiciones @Target bajo las que @p nombre si existe, o nullptr si el
     /// nombre no lo descarto ningun @Target.
     const std::vector<std::string> *
