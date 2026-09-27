@@ -70,6 +70,7 @@ void BorrowChecker::reset() {
     borrows_.clear();
     anon_borrows_.clear();
     pending_last_use_.clear();
+    pointer_targets_.clear();
 }
 
 void BorrowChecker::declare_owner(const std::string &owner_name,
@@ -77,12 +78,12 @@ void BorrowChecker::declare_owner(const std::string &owner_name,
     // La categoria es de la RAIZ, no de cada lugar: que `p` sea un parametro
     // no cambia porque se preste `p.a`.  Si ya estaba (registrada al vuelo por
     // un prestamo), solo se corrige la categoria.
-    owners_[owner_name].owner_kind = kind;
+    owners_[util::InternedName::intern(owner_name)].owner_kind = kind;
 }
 
 OwnerKind
-BorrowChecker::owner_kind_of(const std::string &owner_name) const noexcept {
-    auto it = owners_.find(owner_name);
+BorrowChecker::owner_kind_of(util::InternedName owner_root) const noexcept {
+    auto it = owners_.find(owner_root);
     if (it == owners_.end()) return OwnerKind::Local; // defensivo
     return it->second.owner_kind;
 }
@@ -125,8 +126,9 @@ BorrowChecker::root_owner_of(const std::string &borrower_name) const {
         // Caso self-referencial (param borrow registrado como
         // borrow de si mismo); su owner es el mismo nombre y aqui
         // paramos.
-        if (it->second.owner.root == cur) return cur;
-        cur = it->second.owner.root;
+        const std::string &next = it->second.owner.root.str();
+        if (next == cur) return cur;
+        cur = next;
     }
     return cur;
 }
@@ -163,7 +165,7 @@ void BorrowChecker::advance_stmt(uint32_t current_stmt_idx) {
         // Param borrows self-referenciales (owner == borrower) NO
         // se dropean por NLL porque su lifetime cubre la funcion
         // entera y el "uso" es implicito al final.
-        if (kv.second.owner.root == kv.first) continue;
+        if (kv.second.owner.root.str() == kv.first) continue;
         if (kv.second.last_use_idx > 0 &&
             current_stmt_idx > kv.second.last_use_idx) {
             to_drop.push_back(kv.first);
@@ -193,9 +195,7 @@ void BorrowChecker::advance_stmt(uint32_t current_stmt_idx) {
 void BorrowChecker::register_borrow(const std::string &borrower_name,
                                     const std::string &owner_name,
                                     bool is_mut) {
-    borrow::Place p;
-    p.root = owner_name;
-    register_borrow(borrower_name, p, is_mut);
+    register_borrow(borrower_name, borrow::Place::of_root(owner_name), is_mut);
 }
 
 void BorrowChecker::register_borrow(const std::string &borrower_name,
@@ -260,17 +260,15 @@ void BorrowChecker::mark_as_reborrow(const std::string &reborrower_name,
 bool BorrowChecker::on_lend(const std::string &owner_name,
                             const std::string &borrower_name,
                             SourceLoc loc_borrow, bool is_mut) {
-    borrow::Place p;
-    p.root = owner_name;
-    return on_lend(p, borrower_name, loc_borrow, is_mut);
+    return on_lend(borrow::Place::of_root(owner_name), borrower_name,
+                   loc_borrow, is_mut);
 }
 
 bool BorrowChecker::on_lend_anon(const std::string &owner_name, uint32_t key,
                                  SourceLoc loc_borrow, bool is_mut,
                                  uint32_t last_use_idx) {
-    borrow::Place p;
-    p.root = owner_name;
-    return on_lend_anon(p, key, loc_borrow, is_mut, last_use_idx);
+    return on_lend_anon(borrow::Place::of_root(owner_name), key, loc_borrow,
+                        is_mut, last_use_idx);
 }
 
 bool BorrowChecker::on_lend(const borrow::Place &place,
@@ -462,9 +460,8 @@ void BorrowChecker::release_place_(const BorrowMeta &m) {
 
 bool BorrowChecker::on_owner_use(const std::string &owner_name,
                                  SourceLoc loc_use, bool is_mutation) {
-    borrow::Place p;
-    p.root = owner_name;
-    return on_owner_use(p, loc_use, is_mutation);
+    return on_owner_use(borrow::Place::of_root(owner_name), loc_use,
+                        is_mutation);
 }
 
 bool BorrowChecker::on_owner_use(const borrow::Place &place, SourceLoc loc_use,
@@ -494,9 +491,7 @@ bool BorrowChecker::on_owner_use(const borrow::Place &place, SourceLoc loc_use,
 
 bool BorrowChecker::on_owner_move(const std::string &owner_name,
                                   SourceLoc loc_move) {
-    borrow::Place p;
-    p.root = owner_name;
-    return on_owner_move(p, loc_move);
+    return on_owner_move(borrow::Place::of_root(owner_name), loc_move);
 }
 
 bool BorrowChecker::on_owner_move(const borrow::Place &place,
@@ -518,25 +513,58 @@ bool BorrowChecker::on_borrow_escape(const std::string &borrower_name,
     // Buscamos el owner via borrows_; si no esta registrado, hay
     // un bug de ordering -> conservador: tratar como Local.
     auto it = borrows_.find(borrower_name);
-    std::string owner = "?";
-    OwnerKind ok = OwnerKind::Local;
-    if (it != borrows_.end()) {
-        /* La categoria es de la RAIZ -- que `p` sea un parametro no cambia
-         * porque lo prestado sea `p.a` --, pero al usuario se le cita el LUGAR,
-         * que es lo que escribio. */
-        ok = owner_kind_of(it->second.owner.root);
-        owner = it->second.owner.text();
-    }
-    // Param, Global, Field -> lifetime cubre la funcion -> escape valido.
+    // Sin registro hay un fallo de orden: conservador, como un local.
+    if (it == borrows_.end())
+        return check_escape_(borrow::Place{}, borrower_name, loc_escape,
+                             escape_kind);
+    return check_escape_(it->second.owner, borrower_name, loc_escape,
+                         escape_kind);
+}
+
+bool BorrowChecker::on_place_escape(const borrow::Place &owner,
+                                    SourceLoc loc_escape,
+                                    const std::string &escape_kind) {
+    return check_escape_(owner, std::string(), loc_escape, escape_kind);
+}
+
+bool BorrowChecker::check_escape_(const borrow::Place &owner,
+                                  const std::string &cite,
+                                  SourceLoc loc_escape,
+                                  const std::string &escape_kind) {
+    /* La categoria es de la RAIZ -- que `p` sea un parametro no cambia porque
+     * lo prestado sea `p.a` o `(*p).v` --, pero al usuario se le cita el
+     * LUGAR, que es lo que escribio. */
+    const OwnerKind ok =
+        owner.valid() ? owner_kind_of(owner.root) : OwnerKind::Local;
+    // Param, Global, Field -> la region vive mas que la funcion: vale.
     if (ok == OwnerKind::Param || ok == OwnerKind::Global ||
-        ok == OwnerKind::Field) {
+        ok == OwnerKind::Field)
         return true;
-    }
-    // Owner es local -> el borrow no puede sobrevivir a la funcion.
-    diags_.diag(loc_escape, DiagLevel::ERR, "VX2037",
-                {owner, borrower_name, escape_kind});
+    // La region es de un local: el prestamo no puede sobrevivir a la funcion.
+    const std::string where = owner.valid() ? owner.text() : std::string("?");
+    if (cite.empty())
+        diags_.diag(loc_escape, DiagLevel::ERR, "VX2144", {where, escape_kind});
+    else
+        diags_.diag(loc_escape, DiagLevel::ERR, "VX2037",
+                    {where, cite, escape_kind});
     diags_.diag(loc_escape, DiagLevel::NOTE, "VX2038", {});
     return false;
+}
+
+void BorrowChecker::note_pointer_target(const std::string &ptr_name,
+                                        borrow::Place pointee) {
+    const util::InternedName key = util::InternedName::intern(ptr_name);
+    if (pointee.valid())
+        pointer_targets_[key] = std::move(pointee);
+    else
+        pointer_targets_.erase(key);
+}
+
+borrow::Place
+BorrowChecker::pointer_target_of(const std::string &ptr_name) const {
+    const auto it =
+        pointer_targets_.find(util::InternedName::intern(ptr_name));
+    return it != pointer_targets_.end() ? it->second : borrow::Place{};
 }
 
 // -----------------------------------------------------------------------

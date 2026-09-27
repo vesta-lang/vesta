@@ -2165,6 +2165,24 @@ class Lowering {
     ir::IrValueId cast_if_needed(ir::IrValueId v, ir::IrType from,
                                  ir::IrType to, const SourceLoc &loc,
                                  bool is_explicit = false);
+    /**
+     * @brief Deja un argumento del MISMO tipo IR que su parametro.
+     *
+     * Una llamada del IR promete que cada argumento es del tipo del
+     * parametro.  Si no lo es -- un literal `5` (i64) a un `i32` --, quien
+     * inlinea sustituye el parametro por un valor mas ancho y el cuerpo cambia
+     * de anchura: un `store` de 4 bytes pasaba a ser de 8 y pisaba el campo
+     * vecino.  Enteros y flotantes se convierten; punteros, structs y demas
+     * pasan tal cual.  La conversion entera no avisa: el comprobador ya dio la
+     * llamada por buena.
+     *
+     * @param v     El argumento ya bajado.
+     * @param param Tipo del parametro.
+     * @param line  Linea de origen.
+     * @return El argumento convertido, o @p v si ya coincidia.
+     */
+    ir::IrValueId coerce_arg_to_param(ir::IrValueId v, const Type &param,
+                                      uint32_t line);
 
     // -----------------------------------------------------------------
     // Lowering por categoria.
@@ -2815,6 +2833,109 @@ class Lowering {
     void emit_struct_init_fields(ir::IrValueId base_addr,
                                  const StructLayout &lay, ast::InitListExpr *il,
                                  uint32_t line);
+    /**
+     * @brief Rellena un struct YA reservado en @p addr desde una lista: lo
+     *        pone a cero, fija su vptr si es polimorfico y escribe defaults y
+     *        campos listados.
+     * @param addr Donde esta el struct.
+     * @param lay  Layout del struct.
+     * @param il   La lista.
+     * @param line Linea de origen.
+     */
+    void emit_struct_fill_from_init_list(ir::IrValueId addr,
+                                         const StructLayout &lay,
+                                         ast::InitListExpr *il, uint32_t line);
+    /**
+     * @brief Construye un struct nuevo desde una lista `{...}`: lo reserva en
+     *        memoria del anfitrion y lo rellena
+     *        (@ref emit_struct_fill_from_init_list).
+     *
+     * Es el valor de un `(T){...}`, de una declaracion `T x = {...}` y de una
+     * lista tipada por su destino (`a[i] = {...}`, `return {...}`).
+     *
+     * @param lay  Layout del struct.
+     * @param il   La lista.
+     * @param line Linea de origen.
+     * @return La direccion del struct construido.
+     */
+    ir::IrValueId emit_struct_from_init_list(const StructLayout &lay,
+                                             ast::InitListExpr *il,
+                                             uint32_t line);
+    /**
+     * @brief Rellena un array `T[N]` YA reservado en @p addr desde una lista
+     *        posicional: lo pone a cero -- los huecos que la lista no nombra
+     *        valen cero -- y escribe cada elemento en su sitio.
+     * @param addr Donde esta el array.
+     * @param arr  Tipo del array (elemento y tamano).
+     * @param il   La lista.
+     * @param line Linea de origen.
+     */
+    void emit_array_fill_from_init_list(ir::IrValueId addr, const Type &arr,
+                                        ast::InitListExpr *il, uint32_t line);
+    /**
+     * @brief Construye un array `T[N]` nuevo desde una lista `{...}`: lo
+     *        reserva en memoria del anfitrion y lo rellena.
+     * @param arr  Tipo del array.
+     * @param il   La lista.
+     * @param line Linea de origen.
+     * @return La direccion del array construido.
+     */
+    ir::IrValueId emit_array_from_init_list(const Type &arr,
+                                            ast::InitListExpr *il,
+                                            uint32_t line);
+    /**
+     * @brief Escribe en el hueco @p slot, de tipo @p t, un elemento de una
+     *        lista: una lista anidada se rellena ahi mismo, un agregado se
+     *        copia y un escalar se convierte y se guarda.
+     *
+     * Es lo que comparten un campo de struct y un elemento de array.
+     *
+     * @param slot Direccion del hueco.
+     * @param t    Tipo del hueco.
+     * @param elem El elemento de la lista.
+     * @param line Linea de origen.
+     */
+    void emit_init_slot(ir::IrValueId slot, const Type &t, ast::Expr *elem,
+                        uint32_t line);
+    /**
+     * @brief Escribe @p value en el campo de bits @p f de la palabra que hay
+     *        en @p word_addr, sin tocar los demas bits.
+     * @param word_addr Direccion de la palabra que guarda el campo.
+     * @param f         El campo.
+     * @param value     El valor, ya del tipo de la palabra.
+     * @param line      Linea de origen.
+     */
+    void emit_bit_field_store(ir::IrValueId word_addr, const StructFieldInfo &f,
+                              ir::IrValueId value, uint32_t line);
+    /**
+     * @brief Baja una lista `{...}` usada como VALOR: el struct o el array
+     *        que el comprobador le anoto.  Sin anotar no hay nada que
+     *        construir y se dice (VX3008).
+     * @param il La lista.
+     * @return La direccion de lo construido, o @c IR_NO_VALUE con el error.
+     */
+    ir::IrValueId lower_init_list_value(ast::InitListExpr *il);
+
+    /**
+     * @brief Apunta la llamada al destructor de un struct LOCAL para la
+     *        salida de su ambito, si declara `~Struct()` y no escapa.
+     *
+     * CALL directo a `<Struct>__dtor(addr)` (dispatch estatico; inlineable,
+     * asi que un destructor trivial no cuesta nada).  Si el struct ESCAPA
+     * (return/store, @c escaping_locals_) no se apunta: move-on-return, y
+     * quien recibe la copia registra el suyo -- un solo destructor --.
+     *
+     * Era solo de la declaracion SIN lista: `T x = {...}` construia el struct
+     * por otro camino y su destructor no corria nunca, sin aviso.
+     *
+     * @param var  Nombre de la variable.
+     * @param addr Direccion del struct.
+     * @param lay  Su layout.
+     * @param line Linea de origen.
+     */
+    void register_struct_dtor_cleanup(const std::string &var,
+                                      ir::IrValueId addr,
+                                      const StructLayout &lay, uint32_t line);
     /// Materializa un struct cuyo valor fue calculado en compile-time.
     /// Cuando una funcion @c comptime devuelve un struct por valor, el
     /// resultado llega como un valor de compile-time con un campo por cada
@@ -3064,6 +3185,24 @@ class Lowering {
      *         o struct desconocido).
      */
     size_t size_of_type(const Type &t) const;
+
+    /**
+     * @brief Si un valor de tipo @p t vive INLINE donde se guarda -- en un
+     *        campo, un elemento de array, un hueco -- y su valor SSA es la
+     *        DIRECCION de esos bytes: un struct (no una vista `@overlay`, que
+     *        guarda un handle), un array de tamano fijo, un `Optional` o
+     *        `Result` (su buffer) y una lambda (`fn(...)`, el par
+     *        {fn_addr, env} de 16 bytes; un `cfn(...)` son 8 bytes crudos y
+     *        NO).
+     *
+     * Es LA regla de "se copia sus bytes / se lee devolviendo su direccion".
+     * Repetida a mano en cada sitio, a unos les faltaba la lambda y a otros el
+     * array: un array de lambdas guardaba un puntero a un par de la pila.
+     *
+     * @param t El tipo.
+     * @return true si es un agregado inline; @ref size_of_type da sus bytes.
+     */
+    bool is_inline_aggregate(const Type &t) const;
 
     /**
      * @brief De que memoria es lo que devuelve una funcion `extern`.

@@ -1,0 +1,9 @@
+// Mas elementos en la lista que huecos en el array: antes el bajado lo
+// rechazaba con un texto propio; ahora lo dice el comprobador, con cuantos
+// trae y cuantos caben.  Este programa NO compila (VX2142).
+
+i32 main() {
+	i32[2] a = {1, 2};
+	a        = {1, 2, 3};
+	return a[0];
+}

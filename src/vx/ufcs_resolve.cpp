@@ -94,8 +94,8 @@ bool TypeChecker::try_ufcs_type_receiver(ast::CallExpr *e,
      * `Punto` como si fuera un valor. */
     std::string plantilla;
     if (!current_ns_prefix_.empty() &&
-        is_generic_fn_template(current_ns_prefix_ + fa->field_name)) {
-        plantilla = current_ns_prefix_ + fa->field_name;
+        is_generic_fn_template(current_ns_prefix_.str() + fa->field_name)) {
+        plantilla = current_ns_prefix_.str() + fa->field_name;
     } else if (is_generic_fn_template(fa->field_name)) {
         plantilla = fa->field_name;
     } else if (is_comptime_builtin_name(fa->field_name)) {
@@ -164,7 +164,8 @@ bool TypeChecker::report_ufcs_clash(const Type &recv, const std::string &name,
      * nombre para esta cabeza de tipo, no cual de ellas ganaria.  Es una sonda
      * en una tabla, asi que el metodo cuyo nombre no comparte ninguna libre --
      * que son casi todos -- no paga por esta regla. */
-    if (ufcs_.find(ufcs_key_type(recv), name, current_ns_prefix_) == nullptr)
+    if (ufcs_.find(ufcs_key_type(recv), name, current_ns_prefix_.str()) ==
+        nullptr)
         return false;
     diags_.diag(loc, DiagLevel::ERR, "VX2068", {name, owner});
     return true;
@@ -439,9 +440,9 @@ bool TypeChecker::try_ufcs_call(ast::CallExpr *e, ast::FieldAccessExpr *fa,
     const ufcs::Candidates *cand_slots =
         (hole_pre != kUfcsNoHole && hole_pre != kUfcsHoleBad)
             ? ufcs_.find_any(ufcs_key_type(recv), fa->field_name,
-                             current_ns_prefix_, &chosen)
+                             current_ns_prefix_.str(), &chosen)
             : ufcs_.find(ufcs_key_type(recv), fa->field_name,
-                         current_ns_prefix_, &chosen);
+                         current_ns_prefix_.str(), &chosen);
     /* Un literal de cadena es un `ptr` a datos estaticos y solo se PROMUEVE a
      * `string` donde hace falta -- por eso `grita("hola")` compila --, asi que
      * si no hay nada para el puntero se pregunta tambien por la cadena.  Sin
@@ -452,9 +453,9 @@ bool TypeChecker::try_ufcs_call(ast::CallExpr *e, ast::FieldAccessExpr *fa,
         cand_slots =
             (hole_pre != kUfcsNoHole && hole_pre != kUfcsHoleBad)
                 ? ufcs_.find_any(Type{PrimitiveKind::STRING}, fa->field_name,
-                                 current_ns_prefix_, &chosen)
+                                 current_ns_prefix_.str(), &chosen)
                 : ufcs_.find(Type{PrimitiveKind::STRING}, fa->field_name,
-                             current_ns_prefix_, &chosen);
+                             current_ns_prefix_.str(), &chosen);
 
     /* Y si tampoco, por el PUNTERO.  Un primer parametro se puede declarar por
      * valor o por puntero, y el receptor tiene que valer donde una llamada
@@ -486,9 +487,9 @@ bool TypeChecker::try_ufcs_call(ast::CallExpr *e, ast::FieldAccessExpr *fa,
         const ufcs::Candidates *por_ptr =
             (hole_pre != kUfcsNoHole && hole_pre != kUfcsHoleBad)
                 ? ufcs_.find_any(ufcs_key_type(como_ptr), fa->field_name,
-                                 current_ns_prefix_, &chosen)
+                                 current_ns_prefix_.str(), &chosen)
                 : ufcs_.find(ufcs_key_type(como_ptr), fa->field_name,
-                             current_ns_prefix_, &chosen);
+                             current_ns_prefix_.str(), &chosen);
         if (por_ptr != nullptr && !por_ptr->empty()) {
             cand_slots = por_ptr;
             recv_efectivo = std::move(como_ptr);

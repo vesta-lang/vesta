@@ -23,6 +23,7 @@
 #include "vx/lowering.h"
 #include "vx/collection_intrinsics.h"
 #include "ir/ir_type_info.h" // vocabulario UNICO de anchura/clase de un IrType
+#include "vx/type_classify.h" // el destructor de un tipo
 #include <algorithm>
 #include <functional>
 #include <map>
@@ -191,65 +192,13 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
     // Array init C-style: `i32 arr[N] = {e0, e1, ...};`.
     if (sem_type.kind == PrimitiveKind::ARRAY && vd->init &&
         vd->init->kind == ast::NodeKind::InitListExpr) {
-        auto *il = static_cast<ast::InitListExpr *>(vd->init.get());
-        if (il->is_designated) {
-            error_at(vd->loc,
-                     "lowering: init designado '.field=' no aplica a arrays");
-            return;
-        }
-        const Type elem_t = sem_type.pointee ? *sem_type.pointee : Type{};
-        const uint32_t elem_sz = (uint32_t)primitive_size_bytes(elem_t.kind);
-        if (elem_sz == 0) {
-            error_at(vd->loc, "lowering: tipo del elemento sin sizeof");
-            return;
-        }
-        const uint32_t arr_size = sem_type.array_size > 0
-                                      ? (uint32_t)sem_type.array_size
-                                      : (uint32_t)il->elements.size();
-        if (il->elements.size() > arr_size) {
-            error_at(vd->loc, "lowering: init list excede tamano de array");
-            return;
-        }
-        ir::IrValueId addr = fn_->new_value(ir::IrType::PTR);
-        ir::IrInstr al{};
-        al.op = ir::IrOp::ALLOCA;
-        al.type = ir::IrType::I8;
-        al.dst = addr;
-        al.imm = (uint64_t)arr_size * elem_sz;
-        al.source_line = vd->loc.line;
-        /* Buffer en memoria HOST, como en las demas rutas de array local:
-         * todo lo que lo consume (`a` decaido a `T*`, `&a[i]`, la funcion que
-         * lo recibe) emite accesos de host, asi que dejarlo en la pila de la
-         * VM mata el proceso en cuanto se recorre. */
-        al.host_alloca = true;
-        fn_->values[addr].memory = ir::MemorySpace::HostByConstruction;
-        emit(current_block_, std::move(al));
-        const ir::IrType ir_elem = ir_type_from_primitive(elem_t.kind);
-        for (size_t i = 0; i < il->elements.size(); ++i) {
-            ir::IrValueId v_val = lower_expr(il->elements[i].get());
-            if (v_val == ir::IR_NO_VALUE) continue;
-            // Suprimir warning de narrowing si el elemento es literal
-            // (`{10, 20, ...}` con i64-defaulted literals encajando en
-            // el tipo de elemento).  Mismo razonamiento que en
-            // var-decl con init literal.
-            const bool elem_is_literal =
-                il->elements[i]->kind == ast::NodeKind::IntLitExpr ||
-                il->elements[i]->kind == ast::NodeKind::FloatLitExpr ||
-                il->elements[i]->kind == ast::NodeKind::BoolLitExpr ||
-                il->elements[i]->kind == ast::NodeKind::CharLitExpr ||
-                il->elements[i]->kind == ast::NodeKind::NullLitExpr;
-            v_val = cast_if_needed(v_val, fn_->values[v_val].type, ir_elem,
-                                   vd->loc.line,
-                                   /*is_explicit=*/elem_is_literal);
-            ir::IrValueId v_addr_i = addr;
-            if (i > 0) {
-                ir::IrValueId v_off = emit_const(
-                    ir::IrType::I64, (uint64_t)(i * elem_sz), vd->loc.line);
-                v_addr_i = emit_ptr_add(addr, v_off, vd->loc.line);
-            }
-            emit_store_typed(v_addr_i, v_val, ir_elem, vd->loc.line);
-        }
-        bind(vd->name, addr);
+        // El comprobador anoto el array (con el tamano de la lista si se
+        // escribio `T[]`) y ya dijo si la lista no cabe o es designada; lo
+        // construye el mismo camino que cualquier otra lista, a cero incluido
+        // -- `i32[5] a = {1, 2}` deja 0 en el resto, no lo que hubiera --.
+        const ir::IrValueId addr = lower_init_list_value(
+            static_cast<ast::InitListExpr *>(vd->init.get()));
+        if (addr != ir::IR_NO_VALUE) bind(vd->name, addr);
         return;
     }
 
@@ -321,12 +270,7 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
         auto it_cls = class_layouts.find(sem_type.struct_name);
         if (it_cls != class_layouts.end()) {
             const ClassLayout &lay = it_cls->second;
-            const ClassMethodInfo *dtor = nullptr;
-            for (const auto &mi : lay.methods)
-                if (mi.is_destructor) {
-                    dtor = &mi;
-                    break;
-                }
+            const ClassMethodInfo *dtor = find_destructor(lay.methods);
             // Solo registrar si el dtor NO es polimorfico (dispatch estatico:
             // sin super, sin interfaces, sin subclases).  Si fuera virtual, el
             // finalizador tendria que resolver por vtable (fuera del contrato
@@ -361,13 +305,7 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
         auto it_cls = class_layouts.find(sem_type.struct_name);
         if (it_cls != class_layouts.end()) {
             const ClassLayout &lay = it_cls->second;
-            const ClassMethodInfo *dtor = nullptr;
-            for (const auto &mi : lay.methods) {
-                if (mi.is_destructor) {
-                    dtor = &mi;
-                    break;
-                }
-            }
+            const ClassMethodInfo *dtor = find_destructor(lay.methods);
             //  AOT.2.b/c/d: POO nativa -> al exit del scope, para una
             // instancia HEAP (`= new`): invocar `~T()` (si existe) y luego
             // liberar la memoria (RAW_FREE).  RAII determinista, sin GC, sin
@@ -588,23 +526,20 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
                     // cleanup NO haga RAW_FREE del host_ptr (que es un
                     // host_ptr a un objeto GC, no a memoria RAW_ALLOC).
                     act.inner_is_gc_class = true;
-                    const ClassLayout &ilay = it_cls->second;
-                    for (const auto &mi : ilay.methods) {
-                        if (mi.is_destructor) {
-                            act.inner_has_dtor = true;
-                            act.inner_dtor_vtable_index = mi.vtable_index;
-                            // Nombre directo del dtor (<owner>__<dtor>) para
-                            // CALL directo en native_poo (AOT).
-                            act.inner_dtor_func_name = method_symbol_of(mi);
-                            // Polimorfico si la clase de dentro tiene tabla de
-                            // metodos: el destructor hay que buscarlo por lo
-                            // que el objeto ES, no por como se declaro.
-                            act.inner_dtor_virtual =
-                                class_has_vtable(sem_type.pointee->struct_name);
-                            act.inner_dtor_proven = proven_dispatch_callee(
-                                sem_type.pointee->struct_name, mi, false);
-                            break;
-                        }
+                    if (const ClassMethodInfo *mi =
+                            find_destructor(it_cls->second.methods)) {
+                        act.inner_has_dtor = true;
+                        act.inner_dtor_vtable_index = mi->vtable_index;
+                        // Nombre directo del dtor (<owner>__<dtor>) para
+                        // CALL directo en native_poo (AOT).
+                        act.inner_dtor_func_name = method_symbol_of(*mi);
+                        // Polimorfico si la clase de dentro tiene tabla de
+                        // metodos: el destructor hay que buscarlo por lo
+                        // que el objeto ES, no por como se declaro.
+                        act.inner_dtor_virtual =
+                            class_has_vtable(sem_type.pointee->struct_name);
+                        act.inner_dtor_proven = proven_dispatch_callee(
+                            sem_type.pointee->struct_name, *mi, false);
                     }
                 }
             }
@@ -680,202 +615,13 @@ bool Lowering::try_lower_struct_init_list(ast::VarDeclStmt *vd,
                  "lowering: struct '" + sem_type.struct_name + "' sin layout");
         return true;
     }
-    const StructLayout &lay = it_l->second;
-    ir::IrValueId addr = fn_->new_value(ir::IrType::PTR);
-    ir::IrInstr al{};
-    al.op = ir::IrOp::ALLOCA;
-    al.type = ir::IrType::I8;
-    al.dst = addr;
-    al.imm = (uint64_t)lay.size_bytes;
-    // Host SIEMPRE: ver el comentario extenso de la rama sin init-list.
-    al.host_alloca = true;
-    fn_->values[addr].memory = ir::MemorySpace::HostByConstruction;
-    al.source_line = vd->loc.line;
-    emit(current_block_, std::move(al));
-    // Seguridad: zero-inicializar TODO el struct antes de escribir los
-    // campos listados.  Asi los campos NO presentes en el init-list quedan
-    // a 0 (no basura de la pila).  Subsume el zero de los bit fields.
-    emit_zero_fill(addr, (uint64_t)lay.size_bytes, vd->loc.line);
-    // Valores por defecto de los campos (`u8 a = 0x10`); el init-list
-    // explicito de abajo sobrescribe los campos que liste.
-    emit_struct_field_defaults(addr, lay, vd->loc.line);
-    // @Virtual: fijar el vptr del struct polimorfico a su vtable (tras el
-    // zero_fill; el init-list solo escribe campos, no el vptr en offset 0).
-    if (lay.is_polymorphic) emit_struct_vptr_init(addr, lay, vd->loc.line);
-    // Zero los storage words de bit fields antes del
-    // loop para evitar que el RMW lea basura del ALLOCA.  Los
-    // unique (offset, size) ya estan en lay.fields para bit
-    // fields; emit STORE 0 una sola vez por word.
-    std::set<std::pair<uint32_t, uint32_t>> zeroed_bf;
-    for (const auto &f : lay.fields) {
-        if (f.bit_width == 0) continue;
-        auto key = std::make_pair(f.offset, f.size);
-        if (!zeroed_bf.insert(key).second) continue;
-        ir::IrType ft_zero = ir_type_from_primitive(f.type.kind);
-        ir::IrValueId v_zero = emit_const(ft_zero, 0, vd->loc.line);
-        ir::IrValueId v_addr_w = addr;
-        if (f.offset > 0) {
-            ir::IrValueId v_off =
-                emit_const(ir::IrType::I64, (uint64_t)f.offset, vd->loc.line);
-            v_addr_w = emit_ptr_add(addr, v_off, vd->loc.line);
-        }
-        emit_store_typed(v_addr_w, v_zero, ft_zero, vd->loc.line);
-    }
-    for (size_t i = 0; i < il->elements.size(); ++i) {
-        const StructFieldInfo *fi = nullptr;
-        if (il->is_designated) {
-            const std::string &fname = il->field_names[i];
-            fi = find_field(lay, fname);
-            if (!fi) {
-                error_at(vd->loc, "lowering: campo '" + fname + "' no existe");
-                continue;
-            }
-        } else {
-            if (i >= lay.fields.size()) {
-                error_at(vd->loc, "lowering: init list excede campos");
-                break;
-            }
-            fi = &lay.fields[i];
-        }
-        // Campo STRUCT inicializado con un init-list ANIDADO
-        // (`{.min = {.x=.., .y=..}}` o `{.min = Punto{...}}`): se rellena
-        // RECURSIVAMENTE in-place en la direccion del campo.  lower_expr no
-        // baja un InitListExpr como valor -> hay que tratarlo aqui.
-        if (fi->type.kind == PrimitiveKind::STRUCT &&
-            il->elements[i]->kind == ast::NodeKind::InitListExpr) {
-            ir::IrValueId v_faddr = addr;
-            if (fi->offset > 0) {
-                ir::IrValueId v_off = emit_const(
-                    ir::IrType::I64, (uint64_t)fi->offset, vd->loc.line);
-                v_faddr = emit_ptr_add(addr, v_off, vd->loc.line);
-            }
-            auto it_sl = tc_.struct_layouts().find(fi->type.struct_name);
-            if (it_sl == tc_.struct_layouts().end()) {
-                error_at(vd->loc, "lowering: struct '" + fi->type.struct_name +
-                                      "' sin layout (init anidado)");
-                continue;
-            }
-            emit_struct_init_fields(
-                v_faddr, it_sl->second,
-                static_cast<ast::InitListExpr *>(il->elements[i].get()),
-                vd->loc.line);
-            continue;
-        }
-        ir::IrValueId v_val = lower_expr(il->elements[i].get());
-        if (v_val == ir::IR_NO_VALUE) continue;
-        const ir::IrType ir_ft = ir_type_from_primitive(fi->type.kind);
-        const bool elem_is_literal =
-            il->elements[i]->kind == ast::NodeKind::IntLitExpr ||
-            il->elements[i]->kind == ast::NodeKind::FloatLitExpr ||
-            il->elements[i]->kind == ast::NodeKind::BoolLitExpr ||
-            il->elements[i]->kind == ast::NodeKind::CharLitExpr ||
-            il->elements[i]->kind == ast::NodeKind::NullLitExpr;
-        v_val =
-            cast_if_needed(v_val, fn_->values[v_val].type, ir_ft, vd->loc.line,
-                           /*is_explicit=*/elem_is_literal);
-        ir::IrValueId v_addr = addr;
-        if (fi->offset > 0) {
-            ir::IrValueId v_off =
-                emit_const(ir::IrType::I64, (uint64_t)fi->offset, vd->loc.line);
-            v_addr = emit_ptr_add(addr, v_off, vd->loc.line);
-        }
-        // Campo AGREGADO inline (struct/array value-type): @c v_val es la
-        // DIRECCION del agregado origen -> copia memberwise (qword a
-        // qword) sus bytes al campo, NO un STORE escalar (que guardaria la
-        // direccion origen).  Sin esto un `Outer o = {.w = inner}`
-        // guardaba &inner en o.w y leer o.w.v devolvia la direccion
-        // (bug struct-en-struct, value-type anidado).
-        // Un campo de tipo `@overlay struct` NO es un agregado inline:
-        // guarda el HANDLE de la vista (8 bytes) -> STORE escalar (abajo).
-        /* Una lambda (`fn(...) -> R`) es otro agregado inline: 16 bytes, el
-         * par {fn_addr, env}, y su valor es la DIRECCION del par.  Un
-         * `cfn(...)` no: son 8 bytes crudos y se guardan tal cual. */
-        if ((fi->type.kind == PrimitiveKind::STRUCT &&
-             !type_is_overlay(fi->type)) ||
-            fi->type.kind == PrimitiveKind::ARRAY ||
-            (fi->type.kind == PrimitiveKind::FUNCTION && !fi->type.fn_is_raw)) {
-            uint64_t sz = size_of_type(fi->type);
-            if (fi->type.kind == PrimitiveKind::FUNCTION) sz = 16;
-            if (sz == 0 && fi->type.kind == PrimitiveKind::STRUCT) {
-                auto it_sl = tc_.struct_layouts().find(fi->type.struct_name);
-                if (it_sl != tc_.struct_layouts().end())
-                    sz = (uint64_t)it_sl->second.size_bytes;
-            }
-            if (sz == 0) sz = 8;
-            emit_memberwise_copy(v_addr, v_val, sz, vd->loc.line);
-            if (fi->type.kind == PrimitiveKind::STRUCT) {
-                auto it_sl = tc_.struct_layouts().find(fi->type.struct_name);
-                if (it_sl != tc_.struct_layouts().end() &&
-                    it_sl->second.has_copy_hook) {
-                    emit_struct_method_on_host_field(
-                        v_addr, fi->type.struct_name,
-                        fi->type.struct_name + "____clone__", vd->loc.line);
-                }
-            }
-            continue;
-        }
-        // Bit field en init list: read-modify-write.
-        // El ALLOCA inicial deja basura; debemos LOAD el storage
-        // word actual, limpiar los bits del rango con AND ~mask,
-        // OR con (val<<offset), STORE.  Igual que en lower_assign
-        // para bit fields.
-        if (fi->bit_width > 0) {
-            ir::IrValueId v_old = emit_load_typed(v_addr, ir_ft, vd->loc.line);
-            const uint64_t mask = (fi->bit_width == 64)
-                                      ? UINT64_MAX
-                                      : ((uint64_t(1) << fi->bit_width) - 1);
-            const uint64_t inv_mask = ~(mask << fi->bit_offset);
-            ir::IrValueId v_inv = emit_const(ir_ft, inv_mask, vd->loc.line);
-            ir::IrValueId v_clr = fn_->new_value(ir_ft);
-            {
-                ir::IrInstr an{};
-                an.op = ir::IrOp::AND;
-                an.type = ir_ft;
-                an.dst = v_clr;
-                an.operands = {v_old, v_inv};
-                an.source_line = vd->loc.line;
-                emit(current_block_, std::move(an));
-            }
-            ir::IrValueId v_msk = emit_const(ir_ft, mask, vd->loc.line);
-            ir::IrValueId v_tr = fn_->new_value(ir_ft);
-            {
-                ir::IrInstr an{};
-                an.op = ir::IrOp::AND;
-                an.type = ir_ft;
-                an.dst = v_tr;
-                an.operands = {v_val, v_msk};
-                an.source_line = vd->loc.line;
-                emit(current_block_, std::move(an));
-            }
-            ir::IrValueId v_sh = v_tr;
-            if (fi->bit_offset > 0) {
-                ir::IrValueId v_amt =
-                    emit_const(ir_ft, (uint64_t)fi->bit_offset, vd->loc.line);
-                v_sh = fn_->new_value(ir_ft);
-                ir::IrInstr sh{};
-                sh.op = ir::IrOp::SHL;
-                sh.type = ir_ft;
-                sh.dst = v_sh;
-                sh.operands = {v_tr, v_amt};
-                sh.source_line = vd->loc.line;
-                emit(current_block_, std::move(sh));
-            }
-            ir::IrValueId v_new = fn_->new_value(ir_ft);
-            {
-                ir::IrInstr or_{};
-                or_.op = ir::IrOp::OR;
-                or_.type = ir_ft;
-                or_.dst = v_new;
-                or_.operands = {v_clr, v_sh};
-                or_.source_line = vd->loc.line;
-                emit(current_block_, std::move(or_));
-            }
-            emit_store_typed(v_addr, v_new, ir_ft, vd->loc.line);
-            continue;
-        }
-        emit_store_typed(v_addr, v_val, ir_ft, vd->loc.line);
-    }
+    // El mismo relleno que cualquier otra lista (ver init_list_value.cpp):
+    // host siempre, a cero, vptr, defaults, listas anidadas, campos de bits.
+    const ir::IrValueId addr =
+        emit_struct_from_init_list(it_l->second, il, vd->loc.line);
     bind(vd->name, addr);
+    // Y su destructor, como el de la declaracion sin lista.
+    register_struct_dtor_cleanup(vd->name, addr, it_l->second, vd->loc.line);
     return true;
 }
 
@@ -1032,58 +778,11 @@ bool Lowering::try_lower_struct_var(ast::VarDeclStmt *vd,
     if (vd->init) {
         const ir::IrValueId v_src = lower_expr(vd->init.get());
         if (v_src != ir::IR_NO_VALUE) {
-            // Heredar is_host_ptr del source para los LOADs.  Si
-            // el src viene de read_borrow / ptr_of (unique), es
-            // host_ptr; si viene de un struct stack ALLOCA es VM.
-            const bool src_is_host = fn_->values[v_src].is_host_ptr();
-            // Copia qword-by-qword (size_bytes redondeado a 8).
-            const uint64_t qwords = (lay.size_bytes + 7) / 8;
-            for (uint64_t qi = 0; qi < qwords; ++qi) {
-                const uint64_t off = qi * 8;
-                const ir::IrValueId v_off = emit_const(
-                    ir::IrType::I64, static_cast<int64_t>(off), vd->loc.line);
-                // src + off
-                const ir::IrValueId v_src_at = fn_->new_value(ir::IrType::PTR);
-                fn_->values[v_src_at].set_host(src_is_host);
-                {
-                    ir::IrInstr ad{};
-                    ad.op = ir::IrOp::ADD;
-                    ad.type = ir::IrType::I64;
-                    ad.dst = v_src_at;
-                    ad.operands = {v_src, v_off};
-                    ad.source_line = vd->loc.line;
-                    emit(current_block_, std::move(ad));
-                }
-                // LOAD i64 from src+off
-                const ir::IrValueId v_word = fn_->new_value(ir::IrType::I64);
-                {
-                    ir::IrInstr ld{};
-                    ld.op = ir::IrOp::LOAD;
-                    ld.type = ir::IrType::I64;
-                    ld.dst = v_word;
-                    ld.operands = {v_src_at};
-                    ld.source_line = vd->loc.line;
-                    emit(current_block_, std::move(ld));
-                }
-                // dst slot + off.  Su naturaleza se HEREDA del slot: dar
-                // por hecho que es VM hacia que la copia escribiera con
-                // `mov` sobre una direccion host -> el struct se quedaba a
-                // ceros (y su copy-hook/dtor operaban sobre basura).
-                const ir::IrValueId v_dst_at = fn_->new_value(ir::IrType::PTR);
-                fn_->values[v_dst_at].memory = fn_->values[addr].memory;
-                {
-                    ir::IrInstr ad{};
-                    ad.op = ir::IrOp::ADD;
-                    ad.type = ir::IrType::I64;
-                    ad.dst = v_dst_at;
-                    ad.operands = {addr, v_off};
-                    ad.source_line = vd->loc.line;
-                    emit(current_block_, std::move(ad));
-                }
-                // STORE i64 [dst+off] = word
-                emit_store_typed(v_dst_at, v_word, ir::IrType::I64,
-                                 vd->loc.line);
-            }
+            // Origen y destino heredan cada uno su memoria (read_borrow /
+            // ptr_of dan host; el slot tambien lo es): dar por hecho que el
+            // destino es VM hacia que la copia escribiera con `mov` sobre una
+            // direccion host y el struct se quedaba a ceros.
+            emit_memberwise_copy(addr, v_src, lay.size_bytes, vd->loc.line);
         }
     }
     // Copy-hook: tras el memcpy, `b.__clone__()` aplica el efecto de copia
@@ -1105,23 +804,8 @@ bool Lowering::try_lower_struct_var(ast::VarDeclStmt *vd,
     // el struct ESCAPA (return/store -> escaping_locals_), se SUPRIME el
     // cleanup: move-on-return (el caller re-registra el dtor de su copia
     // -> un solo free).  Cero overhead para structs sin `~Struct()`.
+    register_struct_dtor_cleanup(vd->name, addr, lay, vd->loc.line);
     if (escaping_locals_.find(vd->name) == escaping_locals_.end()) {
-        bool has_dtor = false;
-        for (const auto &mi : lay.methods)
-            if (mi.is_destructor) {
-                has_dtor = true;
-                break;
-            }
-        if (has_dtor) {
-            CleanupAction act;
-            act.kind = CleanupAction::Kind::STRUCT_DTOR;
-            act.operands = {addr};
-            act.source_line = vd->loc.line;
-            act.refresh_name = vd->name;
-            // Naming de lower_struct_methods: <Struct>__ + __dtor.
-            act.func_name = destructor_symbol(sem_type.struct_name);
-            cleanup_stack_.push_back(std::move(act));
-        }
         // Ownership escape-sensitive: si el struct tiene campos closure
         // (lambda con captura) y su valor llega POR MOVE desde una call
         // (init = CallExpr) que retorna un struct con closure escapado, su
@@ -1238,80 +922,7 @@ bool Lowering::try_lower_array_var(ast::VarDeclStmt *vd, const Type &sem_type) {
         return true;
     }
 
-    // Array init C-style: `i32 arr[N] = {e0, e1, ...};`.
-    // Detectamos InitListExpr en el inicializador y emitimos:
-    //   ALLOCA del array (igual que sin init).
-    //   Por cada elemento: STORE val a (base + i * sizeof(T)).
-    //   bind nombre al PTR base.
-    // Solo positional (sin .field=); reportamos error si is_designated.
-    if (vd->init && vd->init->kind == ast::NodeKind::InitListExpr) {
-        auto *il = static_cast<ast::InitListExpr *>(vd->init.get());
-        if (il->is_designated) {
-            error_at(vd->loc,
-                     "lowering: init designado '.field=' no aplica a arrays");
-            return true;
-        }
-        const Type elem_t = sem_type.pointee ? *sem_type.pointee : Type{};
-        const uint32_t elem_sz = (uint32_t)primitive_size_bytes(elem_t.kind);
-        if (elem_sz == 0) {
-            error_at(vd->loc, "lowering: tipo del elemento sin sizeof");
-            return true;
-        }
-        const uint32_t arr_size = sem_type.array_size > 0
-                                      ? (uint32_t)sem_type.array_size
-                                      : (uint32_t)il->elements.size();
-        if (il->elements.size() > arr_size) {
-            error_at(vd->loc, "lowering: init list mas elementos que el array");
-            return true;
-        }
-        // ALLOCA arr_size * elem_sz bytes.
-        ir::IrValueId addr = fn_->new_value(ir::IrType::PTR);
-        ir::IrInstr al{};
-        al.op = ir::IrOp::ALLOCA;
-        al.type = ir::IrType::I8;
-        al.dst = addr;
-        al.imm = (uint64_t)arr_size * elem_sz;
-        al.source_line = vd->loc.line;
-        /* El buffer va a memoria HOST, igual que el de un array local SIN
-         * inicializador (ver la otra rama y su nota de 2026-07-15).  Este
-         * camino -- el de `T[N] a = {...}` -- se quedo sin marcar, asi que el
-         * array acababa en la pila de la VM mientras todo lo que lo consume
-         * (`a` decaido a `T*`, `&a[i]`, la funcion que lo recibe) emitia
-         * accesos de HOST.  Leer una direccion VM como si fuera host mata el
-         * proceso, y solo se notaba al RECORRERLO con indice variable: con
-         * indices constantes el optimizador resolvia los accesos antes. */
-        al.host_alloca = true;
-        fn_->values[addr].memory = ir::MemorySpace::HostByConstruction;
-        emit(current_block_, std::move(al));
-        // STORE de cada elemento.
-        const ir::IrType ir_elem = ir_type_from_primitive(elem_t.kind);
-        for (size_t i = 0; i < il->elements.size(); ++i) {
-            ir::IrValueId v_val = lower_expr(il->elements[i].get());
-            if (v_val == ir::IR_NO_VALUE) continue;
-            // Suprimir warning de narrowing si el elemento es literal
-            // (`{10, 20, ...}` con i64-defaulted literals encajando en
-            // el tipo de elemento).  Mismo razonamiento que en
-            // var-decl con init literal.
-            const bool elem_is_literal =
-                il->elements[i]->kind == ast::NodeKind::IntLitExpr ||
-                il->elements[i]->kind == ast::NodeKind::FloatLitExpr ||
-                il->elements[i]->kind == ast::NodeKind::BoolLitExpr ||
-                il->elements[i]->kind == ast::NodeKind::CharLitExpr ||
-                il->elements[i]->kind == ast::NodeKind::NullLitExpr;
-            v_val = cast_if_needed(v_val, fn_->values[v_val].type, ir_elem,
-                                   vd->loc.line,
-                                   /*is_explicit=*/elem_is_literal);
-            ir::IrValueId v_addr_i = addr;
-            if (i > 0) {
-                ir::IrValueId v_off = emit_const(
-                    ir::IrType::I64, (uint64_t)(i * elem_sz), vd->loc.line);
-                v_addr_i = emit_ptr_add(addr, v_off, vd->loc.line);
-            }
-            emit_store_typed(v_addr_i, v_val, ir_elem, vd->loc.line);
-        }
-        bind(vd->name, addr);
-        return true;
-    }
+    // (`T[N] a = {...}` no llega aqui: lo baja lower_var_decl antes.)
 
     // Array nativo T[N]: identico a struct desde la optica del lowering.
     // Reservamos N*sizeof(T) bytes en stack y guardamos la direccion base
@@ -1368,11 +979,15 @@ bool Lowering::try_lower_array_var(ast::VarDeclStmt *vd, const Type &sem_type) {
         // basura -> DIVERGENCIA interp/JIT (un `i32[N] a` leido sin escribir, o
         // `a[i]++` sobre un elemento no inicializado, daba garbage en JIT).
         // Ademas es seguridad: sin esto el array expone basura de la pila.
-        emit_zero_fill(addr, (uint64_t)bytes, vd->loc.line);
-        if (vd->init) {
-            error_at(vd->loc, "lowering: inicializador de array aun no "
-                              "soportado en esta ruta");
-        }
+        // Con inicializador (`T[N] b = a`, `= (T[N]){...}`, `= f()`), su
+        // valor es la DIRECCION de otro array: se copian sus bytes al buffer
+        // propio.  Atar el nombre a esa direccion haria de `b` un alias de `a`.
+        const ir::IrValueId v_src =
+            vd->init ? lower_expr(vd->init.get()) : ir::IR_NO_VALUE;
+        if (v_src != ir::IR_NO_VALUE)
+            emit_memberwise_copy(addr, v_src, (uint64_t)bytes, vd->loc.line);
+        else
+            emit_zero_fill(addr, (uint64_t)bytes, vd->loc.line);
     }
     return true;
 }

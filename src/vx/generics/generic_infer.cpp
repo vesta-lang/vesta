@@ -441,45 +441,6 @@ bool TypeChecker::deduce_call_type_args(
                         static_cast<uint16_t>(type_params.size()));
 }
 
-namespace {
-
-/**
- * @brief Si esta plantilla tiene TODAS las ranuras que la llamada nombra, y
- *        cada una una sola vez.
- *
- * Es la misma regla que @c overload::select aplica a las sobrecargas normales,
- * pero aqui no se puede delegar en ella: sus candidatas se comparan por TIPOS,
- * y los de una plantilla no existen hasta instanciarla.  Lo que si se puede
- * comparar antes de instanciar nada son los nombres, y eso es justo lo que
- * separa a dos plantillas que solo se distinguen por como llaman a sus
- * parametros.
- *
- * @param t     La plantilla.
- * @param names Con que nombre se escribio cada argumento; vacio donde fue
- *              posicional.
- */
-bool template_has_named_slots(const ast::FunctionDecl *t,
-                              const ParamNames &names) {
-    const size_t np = t->params.size();
-    // En pila: una firma de hasta ocho parametros no toca el monton.
-    util::SmallVector<uint8_t, 8> taken;
-    taken.resize(np, 0);
-    for (const auto &want : names) {
-        if (want.empty()) continue;
-        size_t at = np;
-        for (size_t j = 0; j < np; ++j)
-            if (t->params[j] && t->params[j]->name == want.str()) {
-                at = j;
-                break;
-            }
-        if (at == np || taken[at] != 0) return false;
-        taken[at] = 1;
-    }
-    return true;
-}
-
-} // namespace
-
 bool TypeChecker::pick_generic_fn_template(ast::CallExpr *e,
                                            const std::string &name,
                                            size_t &out) {
@@ -499,57 +460,26 @@ bool TypeChecker::pick_generic_fn_template(ast::CallExpr *e,
         return true;
     }
 
-    /* Varias homonimas: lo que las separa es la FORMA de sus parametros o como
-     * se llaman sus ranuras, y eso no se ve comparando tipos -- los suyos no
-     * existen hasta instanciarlas --.  Se ve intentando DEDUCIR cada una: solo
-     * liga sus variables la que de verdad encaja.
-     *
-     * Ni lista de las que encajan ni nada que reservar: un contador y el indice
-     * de la primera bastan para las tres respuestas posibles. */
-    size_t picked = 0;
-    unsigned fits = 0;       // cuantas empatan en lo mas especifico
-    uint32_t best = 0;       // cuanta forma pide la mejor hasta ahora
-    std::vector<Type> targs; // reusado entre candidatas
+    /* Varias homonimas: las elige el nucleo comun con los metodos genericos
+     * (ver generic_homonyms.cpp).  Aqui solo se dice de donde salen y, al
+     * final, por que no se pudo. */
+    util::SmallVector<GenericCandidate, 4> cands;
+    util::SmallVector<size_t, 4> decl_of; // candidata -> indice en mod_.decls
     for (const size_t idx : it->second) {
         if (idx >= mod_.decls.size() || !mod_.decls[idx]) continue;
         const auto *t =
             static_cast<const ast::FunctionDecl *>(mod_.decls[idx].get());
-        // La aridad las separa sin tocar un solo argumento.
-        if (t->params.size() != e->args.size()) continue;
-        /* Si la llamada NOMBRA alguna ranura, una candidata que no la tenga no
-         * es viable aunque sus tipos cuadraran: es la misma regla que ya separa
-         * dos sobrecargas normales, y es lo unico que distingue a dos
-         * plantillas iguales salvo por como llaman a sus parametros. */
-        if (!e->arg_names.empty() && !template_has_named_slots(t, e->arg_names))
-            continue;
-        if (!e->type_args.empty()) {
-            // Con los type-args escritos, lo que separa es cuantos pide.
-            if (t->type_params.size() != e->type_args.size()) continue;
-        } else if (!deduce_call_type_args(e, t, t->type_params, t->params,
-                                          targs)) {
-            continue;
-        }
-        /* Encaja.  Entre las que encajan gana la que mas forma pide: la que
-         * pide menos las habria cogido todas, asi que quedarse con ella
-         * volveria inutil a la especifica.  Ver generics::shape_specificity. */
-        uint32_t spec = 0;
-        for (const auto &p : t->params)
-            if (p && p->type)
-                spec +=
-                    generics::shape_specificity(p->type.get(), t->type_params);
-        if (fits == 0 || spec > best) {
-            best = spec;
-            picked = idx;
-            fits = 1;
-        } else if (spec == best) {
-            ++fits;
-        }
+        cands.push_back({t, &t->type_params, &t->params});
+        decl_of.push_back(idx);
     }
-
-    if (fits == 1) {
-        out = picked;
+    size_t picked = 0;
+    const GenericPick how =
+        pick_generic_candidate(e, cands.data(), cands.size(), picked);
+    if (how == GenericPick::Picked) {
+        out = decl_of[picked];
         return true;
     }
+    const unsigned fits = how == GenericPick::NoneFits ? 0u : 2u;
     /* Ninguna o varias: en los dos casos se DICE, porque elegir en silencio
      * entre dos plantillas es decidir por el programador y ademas por un
      * criterio que no esta escrito en ningun sitio -- el orden en que se

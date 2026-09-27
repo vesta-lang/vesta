@@ -29,13 +29,6 @@ namespace {
 /// suficiente para cualquier jerarquia real; corta ciclos patologicos.
 constexpr int kMaxDepth = 64;
 
-/// @return true si el struct @c lay declara un destructor `~Struct()`.
-bool struct_has_destructor(const StructLayout &lay) noexcept {
-    for (const auto &m : lay.methods)
-        if (m.is_destructor) return true;
-    return false;
-}
-
 bool is_c_representable_rec(const Type &t, const StructResolver &find_struct,
                             int depth);
 bool is_managed_rec(const Type &t, const StructResolver &find_struct,
@@ -193,6 +186,21 @@ bool is_c_representable(const Type &t, const StructResolver &find_struct) {
 
 bool is_managed(const Type &t, const StructResolver &find_struct) {
     return is_managed_rec(t, find_struct, 0);
+}
+
+const ClassMethodInfo *
+find_destructor(const std::vector<ClassMethodInfo> &methods) noexcept {
+    for (const auto &m : methods)
+        if (m.is_destructor) return &m;
+    return nullptr;
+}
+
+bool struct_has_destructor(const StructLayout &lay) noexcept {
+    return find_destructor(lay.methods) != nullptr;
+}
+
+bool struct_needs_cleanup(const StructLayout &lay) noexcept {
+    return lay.has_destructible_field || struct_has_destructor(lay);
 }
 
 } // namespace vx

@@ -784,11 +784,17 @@ void ordenar_alias_por_dependencia_(
     const size_t n = huecos.size();
     std::vector<std::vector<size_t>> deriva_de(n);
     std::vector<std::string> nombres;
+    std::vector<ast::TypeNode *> tipos_del_typedef;
     for (size_t k = 0; k < n; ++k) {
         const auto *al =
             static_cast<const ast::TypeAliasDecl *>(decls[huecos[k]].get());
         nombres.clear();
-        nombres_de_tipo_(al->aliased.get(), nombres);
+        // El tipo subyacente y, si es un tipo fuerte, sus conversiones:
+        // depende de todo lo que nombra.
+        tipos_del_typedef.clear();
+        ast::typedef_type_nodes(*al, tipos_del_typedef);
+        for (const ast::TypeNode *t : tipos_del_typedef)
+            nombres_de_tipo_(t, nombres);
         for (const auto &nm : nombres) {
             auto it = por_nombre.find(nm);
             if (it != por_nombre.end() && it->second != k)

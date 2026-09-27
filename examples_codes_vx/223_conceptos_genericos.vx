@@ -69,7 +69,27 @@ struct Acumulador {
 	U combinar<U: Numeric>(U x) => (U) this.base + x;
 }
 
+// ---- 1: Pod -- sus bytes SON su valor (sin destructor ni nada gestionado) --
+// `Copyable` deja pasar un struct con destructor o con un `string` dentro;
+// `Pod` no.  Es la misma regla que la huella `@pod` del tipo.
+struct Plano {
+	i64 x;
+	i32 y;
+}
+struct ConDtor {
+	i64 x;
+	~ConDtor() { }
+}
+struct ConCadena {
+	string s;
+}
+i64 bytes_de<T: Pod>() => type.size<T>();
+
 i32 main() {
+	if (bytes_de<Plano>() != 16) return 1;
+	if (!Pod<Plano>() || !Pod<i64>()) return 2;
+	if (Pod<ConDtor>() || Pod<ConCadena>() || Pod<string>()) return 3;
+
 	i64 mx = maximo<i64>(10, 30); // built-in Comparable      -> 30
 	i64 sm = sumar<i64>(3, 4);    // user MiNumero (where)     -> 7
 	i64 el = elegir<i64>(2, 9);   // Ordenable (composicion)   -> 9

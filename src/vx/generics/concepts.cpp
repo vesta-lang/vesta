@@ -27,6 +27,7 @@
 #include "vx/type_checker.h"
 
 #include "vx/generics/generic_clone.h"
+#include "vx/project/module_names.h" // el simbolo de un nombre cualificado
 
 #include "util/os/thread_slot.h" // el contador de recursion, sin `thread_local`
 
@@ -43,7 +44,7 @@ bool is_builtin_concept(const std::string &name) {
         "String",    "Comparable", "Ordered",    "Eq",           "Sized",
         "Copyable",  "Hashable",   "Stringable", "Default",      "Primitive",
         "Class",     "Struct",     "Callable",   "Destructible", "Iterable",
-        "Shareable", "Enum",       "ValuedEnum", "Scalar",
+        "Shareable", "Enum",       "ValuedEnum", "Scalar",     "Pod",
     };
     return set.count(name) > 0;
 }
@@ -95,6 +96,9 @@ static bool eval_builtin_concept(const TypeChecker &tc, const std::string &name,
         return is_prim || k == PrimitiveKind::STRING || k == PrimitiveKind::PTR;
     // Sized: tiene tamano conocido (> 0) -> todo tipo concreto salvo void.
     if (name == "Sized") return comptime_type_size(tc, t) > 0;
+    // Pod: sus bytes SON su valor -- sin destructor ni nada gestionado --.
+    // La misma regla que la huella `@pod` (TypeChecker::type_is_pod).
+    if (name == "Pod") return tc.type_is_pod(t);
     // Copyable: value-types copiables (primitivos, structs, punteros).
     if (name == "Copyable")
         return is_prim || comptime_is_struct(tc, t) || k == PrimitiveKind::PTR;
@@ -122,12 +126,53 @@ static bool eval_builtin_concept(const TypeChecker &tc, const std::string &name,
     return false;
 }
 
+/**
+ * @brief El concepto de usuario @p name, escrito tal cual o cualificado por
+ *        su espacio de nombres (`mat.Numerico`).
+ * @param tc   Comprobador.
+ * @param name Nombre como se escribio.
+ * @return Su declaracion, o nulo si no hay un concepto de usuario asi.
+ */
+static const ast::ConceptDecl *find_user_concept(const TypeChecker &tc,
+                                                 const std::string &name) {
+    auto it = tc.concepts().find(name);
+    const size_t dot = name.rfind('.');
+    if (it == tc.concepts().end() && dot != std::string::npos)
+        // El aplanado de espacios de nombres lo registro con su simbolo.
+        it = tc.concepts().find(module_member_symbol(name.substr(0, dot),
+                                                     name.substr(dot + 1)));
+    return it == tc.concepts().end() ? nullptr : it->second;
+}
+
+size_t concept_type_param_count(const TypeChecker &tc,
+                                const std::string &name) {
+    if (is_builtin_concept(name)) return 1;
+    const ast::ConceptDecl *cd = find_user_concept(tc, name);
+    return cd == nullptr ? 0 : cd->type_params.size();
+}
+
+/**
+ * @brief Resuelve un tipo escrito en la firma de un concepto, con sus
+ *        parametros sustituidos por el tipo comprobado y los argumentos.
+ * @param tc   Comprobador.
+ * @param node Tipo escrito en la firma.
+ * @param g    Sustitucion de los parametros del concepto.
+ * @return El tipo concreto.
+ */
+static Type resolve_concept_type(const TypeChecker &tc,
+                                 const ast::TypeNode *node,
+                                 const vxgen::GenSubst &g) {
+    const auto concrete = vxgen::clone_type_with_subst(node, g);
+    return tc.resolve_type_node(concrete.get());
+}
+
 // ------------------------------------------------------------------
 // Evaluacion unificada (built-in + usuario) con cota de recursion.
 // ------------------------------------------------------------------
 
 ConceptEval comptime_eval_concept(const TypeChecker &tc,
-                                  const std::string &name, const Type &t) {
+                                  const std::string &name, const Type &t,
+                                  const ConceptArgs &concept_args) {
     ConceptEval r;
 
     /* Cota dura contra conceptos ciclicos (A definido via B definido via A).
@@ -157,27 +202,20 @@ ConceptEval comptime_eval_concept(const TypeChecker &tc,
         return r;
     }
 
-    auto it = tc.concepts().find(name);
-    if (it == tc.concepts().end() && name.find('.') != std::string::npos) {
-        // NS.2: concepto cualificado por namespace (`mat.Numerico`).  El
-        // flatten lo registro como `mat__Numerico`; mapear `.`->`__` y
-        // reintentar.
-        std::string mangled;
-        for (char c : name)
-            mangled += (c == '.') ? std::string("__") : std::string(1, c);
-        it = tc.concepts().find(mangled);
-    }
-    if (it == tc.concepts().end()) {
+    const ast::ConceptDecl *cd = find_user_concept(tc, name);
+    if (cd == nullptr) {
         r.found = false; // ni built-in ni de usuario
         return r;
     }
     r.found = true;
-    const ast::ConceptDecl *cd = it->second;
 
-    // Sustituir el (primer) type-param del concepto por el tipo concreto.
+    // Sustituir los parametros del concepto: el primero es el tipo que se
+    // comprueba, los demas sus argumentos.
     std::vector<std::string> params = cd->type_params;
     std::vector<Type> args;
+    args.reserve(1 + concept_args.size());
     args.push_back(t);
+    args.insert(args.end(), concept_args.begin(), concept_args.end());
     vxgen::GenSubst g;
     g.params = &params;
     g.args = &args;
@@ -252,9 +290,12 @@ ConceptEval comptime_eval_concept(const TypeChecker &tc,
                     all = false;
                     break;
                 }
-                // Tipo de retorno (null en la firma = void).
+                // Tipo de retorno (null en la firma = void).  Con los
+                // parametros del concepto SUSTITUIDOS: sin eso `Optional<E>`
+                // resolvia `E` como un tipo desconocido -- void -- y ninguna
+                // firma casaba, sin que nadie lo dijera.
                 const Type want_ret =
-                    sm.return_type ? tc.resolve_type_node(sm.return_type.get())
+                    sm.return_type ? resolve_concept_type(tc, sm.return_type.get(), g)
                                    : Type{PrimitiveKind::VOID};
                 if (!(found->return_type == want_ret)) {
                     all = false;
@@ -264,7 +305,7 @@ ConceptEval comptime_eval_concept(const TypeChecker &tc,
                 bool params_ok = true;
                 for (size_t i = 0; i < sm.param_types.size(); ++i) {
                     const Type want_p =
-                        tc.resolve_type_node(sm.param_types[i].get());
+                        resolve_concept_type(tc, sm.param_types[i].get(), g);
                     if (!(found->param_types[i] == want_p)) {
                         params_ok = false;
                         break;
@@ -283,6 +324,34 @@ ConceptEval comptime_eval_concept(const TypeChecker &tc,
     return r;
 }
 
+void TypeChecker::check_impl_conformance(const PendingImplCheck &pc) {
+    const std::string &cname = pc.concept_name.str();
+    const SourceLoc &loc = pc.decl != nullptr ? pc.decl->loc : SourceLoc{};
+    if (concept_type_param_count(*this, cname) == 0) {
+        diags_.diag(loc, DiagLevel::ERR, "VX2140",
+                    {cname, pc.type_key.str()});
+        return;
+    }
+    Type t{pc.kind};
+    t.struct_name = pc.type_key.str();
+    const ConceptEval ev = comptime_eval_concept(*this, cname, t);
+    if (!ev.satisfied)
+        diags_.diag(loc, DiagLevel::ERR, "VX2139",
+                    {pc.type_key.str(), cname});
+}
+
+ConceptEval eval_concept_question(const TypeChecker &tc,
+                                  const std::string &name,
+                                  const ast::CallExpr &call) {
+    if (call.type_args.empty()) return ConceptEval{};
+    const Type checked = tc.resolve_type_node(call.type_args[0].get());
+    ConceptArgs args;
+    args.reserve(call.type_args.size() - 1);
+    for (size_t i = 1; i < call.type_args.size(); ++i)
+        args.push_back(tc.resolve_type_node(call.type_args[i].get()));
+    return comptime_eval_concept(tc, name, checked, args);
+}
+
 // ------------------------------------------------------------------
 // Verificacion de bounds al monomorphizar (TypeChecker method).
 // ------------------------------------------------------------------
@@ -296,15 +365,16 @@ ConceptEval comptime_eval_concept(const TypeChecker &tc,
  *
  * @param diags Sumidero de diagnosticos.
  * @param loc   Donde se escribio la llamada.
- * @param arg   El tipo que llego.
+ * @param arg   El tipo que llego, COMO SE ESCRIBE (`written_type_name`): la
+ *              etiqueta aplanada (`ns__Tipo`) no esta en el fichero de nadie.
  * @param cname El concepto que no cumple.
  * @param param La ranura de tipo que lo exige.
  */
 static void report_unsatisfied_bound(Diagnostics &diags, const SourceLoc &loc,
-                                     const Type &arg, const std::string &cname,
+                                     const std::string &arg,
+                                     const std::string &cname,
                                      const std::string &param) {
-    diags.diag(loc, DiagLevel::ERR, "VX2108",
-               {type_to_string(arg), cname, param});
+    diags.diag(loc, DiagLevel::ERR, "VX2108", {arg, cname, param});
 }
 
 void TypeChecker::note_instance_requirement(const Type &target,
@@ -369,8 +439,9 @@ bool TypeChecker::check_type_bounds(const std::vector<ast::TypeBound> &bounds,
                     comptime_eval_concept(*this, cname, args[idx]);
                 if (ev.found) {
                     if (!ev.satisfied) {
-                        report_unsatisfied_bound(diags_, loc, args[idx], cname,
-                                                 b.type_param);
+                        report_unsatisfied_bound(diags_, loc,
+                                                 written_type_name(args[idx]),
+                                                 cname, b.type_param);
                         all_ok = false;
                     }
                     continue; // contestado: no hace falta encolarlo
@@ -463,7 +534,8 @@ void TypeChecker::verify_pending_type_bounds() {
                 continue;
             }
             if (!ev.satisfied)
-                report_unsatisfied_bound(diags_, pc.loc, pc.arg,
+                report_unsatisfied_bound(diags_, pc.loc,
+                                         written_type_name(pc.arg),
                                          pc.concept_name, pc.type_param);
         }
     }

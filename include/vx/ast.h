@@ -1445,13 +1445,13 @@ struct InitListExpr : Expr {
     std::vector<std::unique_ptr<Expr>> elements;
     std::vector<std::string> field_names;
     bool is_designated = false;
-    /// Tipo destino anotado por el type checker desde el contexto.
-    /// Para `unique<Punto> p = {.x=10, .y=20}` el desugar marca aqui
-    /// "Punto" para que el lowering sepa que el init list construye
-    /// un struct Punto y emita los STOREs en posiciones correctas.
-    /// Vacio = init list contextual (el type checker resuelve por
-    /// uso en var-decl u otros sitios).
-    std::string target_type_name;
+    /// Lo que construye la lista, anotado por el comprobador desde donde va
+    /// (`p[i] = {...}`, `a = {1, 2}`, `return {...}`, un argumento, el
+    /// `Punto` de `unique<Punto> p = {...}`): un STRUCT con su nombre o un
+    /// ARRAY con su elemento y tamano.  @c VOID = sin anotar (la declaracion
+    /// la resuelve por su tipo).  Es el tipo ENTERO y no un nombre: una lista
+    /// de array necesita elemento y tamano.
+    Type target_type;
     InitListExpr() : Expr(NodeKind::InitListExpr) {}
 };
 
@@ -3295,6 +3295,23 @@ bool binop_from_token(TokenKind k, BinOp &out) noexcept;
  * el simple '=').  El AssignOp se escribe en @p out.
  */
 bool assignop_from_token(TokenKind k, AssignOp &out) noexcept;
+
+/**
+ * @brief TODOS los tipos que nombra un `typedef`: su tipo subyacente y, si es
+ *        un TIPO FUERTE (`typedef T nombre new`), los de sus conversiones
+ *        (`explicit`/`implicit` `from`/`to`).
+ *
+ * Un `typedef` es un ALIAS (otro nombre para el mismo tipo) o un TIPO FUERTE
+ * (un tipo nominalmente distinto con la misma representacion); solo el segundo
+ * declara conversiones.  Quien renombra o recorre los nombres de un typedef
+ * miraba solo el tipo subyacente, y con un namespace las conversiones de un
+ * tipo fuerte se quedaban con el nombre corto: `explicit from contador` no se
+ * resolvia.
+ *
+ * @param td  El typedef.
+ * @param out Donde anyadir cada tipo (no se vacia antes).
+ */
+void typedef_type_nodes(const TypeAliasDecl &td, std::vector<TypeNode *> &out);
 
 } // namespace vx::ast
 

@@ -33,6 +33,7 @@
 #include "loader/oop_types.h"
 #include "ir/ir_type_info.h" // vocabulario UNICO de anchura/clase de un IrType
 #include "ir/synthetic_symbols.h" // `__module_init`
+#include "vx/type_classify.h" // el destructor de un tipo, y si hay que limpiarlo
 #include <algorithm>
 #include <functional>
 #include <map>
@@ -358,14 +359,7 @@ void Lowering::lower_class_methods(ast::ClassDecl *cd, ir::IrModule &out) {
                         auto it_sl =
                             tc_.struct_layouts().find(f.type.struct_name);
                         if (it_sl == tc_.struct_layouts().end()) continue;
-                        bool sdestr = it_sl->second.has_destructible_field;
-                        if (!sdestr)
-                            for (const auto &im : it_sl->second.methods)
-                                if (im.is_destructor) {
-                                    sdestr = true;
-                                    break;
-                                }
-                        if (!sdestr) continue;
+                        if (!struct_needs_cleanup(it_sl->second)) continue;
                         const ir::IrValueId saddr =
                             emit_field_addr(fn_, current_block_, this_vid,
                                             f.offset, m->loc.line);
@@ -394,14 +388,12 @@ void Lowering::lower_class_methods(ast::ClassDecl *cd, ir::IrModule &out) {
                     /* El destino DEMOSTRADO del despacho del destructor, por
                      * el tipo declarado del campo. */
                     util::InternedName inner_dtor_proven;
-                    for (const auto &im : inner.methods) {
-                        if (im.is_destructor) {
-                            inner_dtor_idx = im.vtable_index;
-                            inner_dtor_name = method_symbol_of(im);
-                            inner_dtor_proven = proven_dispatch_callee(
-                                f.type.struct_name, im, false);
-                            break;
-                        }
+                    if (const ClassMethodInfo *im =
+                            find_destructor(inner.methods)) {
+                        inner_dtor_idx = im->vtable_index;
+                        inner_dtor_name = method_symbol_of(*im);
+                        inner_dtor_proven = proven_dispatch_callee(
+                            f.type.struct_name, *im, false);
                     }
                     if (inner_dtor_idx == UINT32_MAX) continue;
                     // El field tiene tipo ESTATICO conocido -> en native_poo,
@@ -498,12 +490,8 @@ void Lowering::lower_class_methods(ast::ClassDecl *cd, ir::IrModule &out) {
                 if (!lay.super_name.empty()) {
                     auto it_sup = tc_.class_layouts().find(lay.super_name);
                     if (it_sup != tc_.class_layouts().end()) {
-                        const ClassMethodInfo *sup_dtor = nullptr;
-                        for (const auto &sm : it_sup->second.methods)
-                            if (sm.is_destructor) {
-                                sup_dtor = &sm;
-                                break;
-                            }
+                        const ClassMethodInfo *sup_dtor =
+                            find_destructor(it_sup->second.methods);
                         /* Solo si el destructor de la base es OTRO: si la
                          * derivada no declaro el suyo, la ficha heredada ES la
                          * misma y llamarla seria repetirla. */

@@ -293,6 +293,9 @@ size_t Lowering::size_of_type(const Type &t) const {
     if (t.kind == PrimitiveKind::FUNCTION && t.fn_is_raw) return 8;
     // Un `Optional` mide segun lo que lleve dentro; lo sabe su disposicion.
     if (t.kind == PrimitiveKind::OPTIONAL) return optional_layout(t).bytes;
+    // Y un `Result`, segun lo que lleven sus dos lados (el 24 fijo de
+    // primitive_size_bytes no lo sabe; sret_info si mide asi).
+    if (t.kind == PrimitiveKind::RESULT) return tc_.result_layout(t).bytes;
     return primitive_size_bytes(t.kind);
 }
 
@@ -314,6 +317,32 @@ ir::IrValueId Lowering::cast_if_needed(ir::IrValueId v, ir::IrType from,
     loc.line = source_line;
     loc.column = 1;
     return cast_if_needed(v, from, to, loc, is_explicit);
+}
+
+bool Lowering::is_inline_aggregate(const Type &t) const {
+    switch (t.kind) {
+    case PrimitiveKind::STRUCT: return !type_is_overlay(t);
+    case PrimitiveKind::ARRAY: return t.pointee && t.array_size > 0;
+    case PrimitiveKind::FUNCTION: return !t.fn_is_raw;
+    // Un `Optional` / `Result` es un buffer {tag, valor...}: su valor SSA es
+    // su direccion, igual que un struct (ver sret_info).
+    case PrimitiveKind::OPTIONAL:
+    case PrimitiveKind::RESULT: return true;
+    default: return false;
+    }
+}
+
+ir::IrValueId Lowering::coerce_arg_to_param(ir::IrValueId v, const Type &param,
+                                            uint32_t line) {
+    if (v == ir::IR_NO_VALUE) return v;
+    const ir::IrType pt = ir_type_from_primitive(param.kind);
+    const ir::IrType at = fn_->values[v].type;
+    if (pt == at) return v;
+    if (ir::type_is_float(pt) && ir::type_is_float(at))
+        return cast_if_needed(v, at, pt, line);
+    if (ir::type_is_integer(pt) && ir::type_is_integer(at))
+        return cast_if_needed(v, at, pt, line, /*is_explicit=*/true);
+    return v;
 }
 
 ir::IrValueId Lowering::cast_if_needed(ir::IrValueId v, ir::IrType from,

@@ -599,7 +599,12 @@ void mangle_typealias_decl_(
         rename_map.emplace(td->name, newn);
         td->name = newn;
     }
-    rewrite_refs_in_type_(td->aliased.get(), rename_map);
+    // El tipo subyacente y, si es un tipo fuerte, sus conversiones:
+    // `explicit from contador` tambien nombra un tipo del namespace.
+    std::vector<ast::TypeNode *> tipos;
+    ast::typedef_type_nodes(*td, tipos);
+    for (ast::TypeNode *t : tipos)
+        rewrite_refs_in_type_(t, rename_map);
 }
 
 void mangle_global_var_decl_(

@@ -24,6 +24,7 @@
  */
 #include "vx/lowering.h"
 #include "ir/ir_type_info.h" // vocabulario UNICO de anchura/clase de un IrType
+#include "vx/type_classify.h" // si un struct necesita limpieza
 #include <algorithm>
 #include <functional>
 #include <map>
@@ -1000,13 +1001,14 @@ void Lowering::scan_address_taken_expr(ast::Expr *e, int &depth) {
             auto *cid = static_cast<ast::IdentExpr *>(c->callee.get());
             if (cid->name == "lend" || cid->name == "lend_mut") {
                 auto *aid = static_cast<ast::IdentExpr *>(c->args[0].get());
+                /* Tampoco un puntero crudo ni un array: su valor YA es la
+                 * direccion prestada (lo apuntado, el primer elemento).
+                 * Promocionarlos hacia prestar la RANURA del puntero, y
+                 * escribir por el prestamo pisaba el puntero en vez de lo
+                 * apuntado. */
                 const Type at = aid->result_type;
-                if (at.kind != PrimitiveKind::BORROW &&
-                    at.kind != PrimitiveKind::BORROW_MUT &&
-                    at.kind != PrimitiveKind::UNIQUE_PTR &&
-                    at.kind != PrimitiveKind::SHARED_PTR) {
+                if (!lend_value_is_address(at))
                     address_taken_locals_.insert(aid->name);
-                }
             }
         }
         /* Un argumento que va a un parametro de SALIDA tambien tiene su
@@ -1342,14 +1344,7 @@ void Lowering::scan_escaping_stmt(ast::Stmt *st, AliasGraph &alias) {
                 auto it = tc_.struct_layouts().find(st_t.struct_name);
                 if (it != tc_.struct_layouts().end()) {
                     const StructLayout &sl = it->second;
-                    bool managed = sl.has_destructible_field;
-                    if (!managed)
-                        for (const auto &mm : sl.methods)
-                            if (mm.is_destructor) {
-                                managed = true;
-                                break;
-                            }
-                    if (managed && !sl.has_copy_hook)
+                    if (struct_needs_cleanup(sl) && !sl.has_copy_hook)
                         escaping_locals_.insert(id_v->name);
                 }
             }

@@ -38,34 +38,40 @@
 namespace vx {
 using namespace vxgen;
 
-const ast::ClassMethodDecl *TypeChecker::find_generic_method_template(
-    const std::string &container, const std::string &method_name) const {
-    // Busqueda directa en mod_.decls del struct/clase `container` y, dentro,
-    // del metodo `method_name` con method_type_params no vacios.  Se llama
-    // solo en llamadas a metodo con type-args o no resueltas (no es hot
-    // path), asi que la busqueda lineal es aceptable.
-    for (const auto &d : mod_.decls) {
+const std::vector<std::unique_ptr<ast::ClassMethodDecl>> *
+TypeChecker::declared_methods_of(const std::string &container) {
+    // Indexar lo que se haya anyadido desde la ultima consulta.
+    for (; aggregate_decls_indexed_ < mod_.decls.size();
+         ++aggregate_decls_indexed_) {
+        const auto &d = mod_.decls[aggregate_decls_indexed_];
         if (!d) continue;
-        const std::vector<std::unique_ptr<ast::ClassMethodDecl>> *methods =
-            nullptr;
-        if (d->kind == ast::NodeKind::StructDecl) {
-            auto *sd = static_cast<const ast::StructDecl *>(d.get());
-            if (sd->name != container) continue;
-            methods = &sd->methods;
-        } else if (d->kind == ast::NodeKind::ClassDecl) {
-            auto *cd = static_cast<const ast::ClassDecl *>(d.get());
-            if (cd->name != container) continue;
-            methods = &cd->methods;
-        } else {
-            continue;
-        }
-        for (const auto &m : *methods) {
-            if (m && m->name == method_name && !m->method_type_params.empty())
-                return m.get();
-        }
-        // Contenedor encontrado pero sin ese metodo generico: no seguir.
-        return nullptr;
+        const std::string *name = nullptr;
+        if (d->kind == ast::NodeKind::StructDecl)
+            name = &static_cast<const ast::StructDecl *>(d.get())->name;
+        else if (d->kind == ast::NodeKind::ClassDecl)
+            name = &static_cast<const ast::ClassDecl *>(d.get())->name;
+        if (name)
+            aggregate_decl_of_.emplace(
+                util::InternedName::intern(*name),
+                static_cast<uint32_t>(aggregate_decls_indexed_));
     }
+    const auto it =
+        aggregate_decl_of_.find(util::InternedName::intern(container));
+    if (it == aggregate_decl_of_.end()) return nullptr;
+    const ast::Node *d = mod_.decls[it->second].get();
+    return d->kind == ast::NodeKind::StructDecl
+               ? &static_cast<const ast::StructDecl *>(d)->methods
+               : &static_cast<const ast::ClassDecl *>(d)->methods;
+}
+
+const ast::ClassMethodDecl *
+TypeChecker::find_generic_method_template(const std::string &container,
+                                          const std::string &method_name) {
+    const auto *methods = declared_methods_of(container);
+    if (methods == nullptr) return nullptr;
+    for (const auto &m : *methods)
+        if (m && m->name == method_name && !m->method_type_params.empty())
+            return m.get();
     return nullptr;
 }
 
@@ -82,7 +88,22 @@ std::string TypeChecker::monomorphize_method(const std::string &container,
         return std::string();
     }
 
-    const std::string mangled = tmpl->name + "_" + mangle_args(targs);
+    /* Con homonimas genericas en el tipo, el nombre lleva ademas lo que las
+     * separa, igual que una funcion libre: sin eso `f<T>(u64)` y
+     * `f<T>(u64, u64)` daban las dos `f_i64` y la segunda se tomaba por ya
+     * generada. */
+    std::string mangled = generic_instance_name(tmpl->name, targs);
+    {
+        size_t homonyms = 0;
+        if (const auto *methods = declared_methods_of(container))
+            for (const auto &m : *methods)
+                if (m && m->name == tmpl->name &&
+                    !m->method_type_params.empty())
+                    ++homonyms;
+        if (homonyms > 1)
+            mangled += "_" + homonym_discriminator(
+                                 tmpl->params, tmpl->method_type_params, targs);
+    }
     const std::string key = container + "#" + mangled;
     if (monomorphized_methods_.count(key)) return mangled; // ya generado
     monomorphized_methods_.insert(key);
@@ -185,9 +206,31 @@ TypeChecker::GenericMethodCall TypeChecker::try_monomorphize_method_call(
     const bool is_struct = (bt.kind == PrimitiveKind::STRUCT);
     const std::string &container = bt.struct_name;
 
-    const ast::ClassMethodDecl *tmpl =
-        find_generic_method_template(container, fa->field_name);
-    if (!tmpl) return GenericMethodCall::NotGeneric; // resolucion normal
+    /* CUAL de las homonimas: las genericas del tipo con ese nombre, elegidas
+     * por el MISMO nucleo que elige entre funciones libres homonimas.  Antes
+     * se cogia la primera, con su aridad y no con la que se pedia. */
+    const auto *methods = declared_methods_of(container);
+    if (methods == nullptr) return GenericMethodCall::NotGeneric;
+    util::SmallVector<GenericCandidate, 4> cands;
+    util::SmallVector<const ast::ClassMethodDecl *, 4> decl_of;
+    for (const auto &m : *methods)
+        if (m && m->name == fa->field_name && !m->method_type_params.empty()) {
+            cands.push_back({m.get(), &m->method_type_params, &m->params});
+            decl_of.push_back(m.get());
+        }
+    if (cands.size() == 0) return GenericMethodCall::NotGeneric;
+    size_t picked = 0;
+    if (cands.size() > 1) {
+        const GenericPick how =
+            pick_generic_candidate(e, cands.data(), cands.size(), picked);
+        if (how != GenericPick::Picked) {
+            diags_.diag(e->loc, DiagLevel::ERR,
+                        how == GenericPick::NoneFits ? "VX2090" : "VX2091",
+                        {fa->field_name});
+            return GenericMethodCall::Failed;
+        }
+    }
+    const ast::ClassMethodDecl *tmpl = decl_of[picked];
 
     /* Tenerlo no cierra la pregunta, igual que con uno corriente: si ademas
      * hay una libre que toma este receptor, hay dos candidatos y no se elige

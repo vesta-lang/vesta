@@ -36,6 +36,15 @@ inline constexpr const char kSymbolPathSeparator[] = "__";
 std::string namespace_symbol_path(const std::string &dotted);
 
 /**
+ * @brief El prefijo con que el aplanado renombra los miembros de un
+ *        namespace: `a.b` -> `a__b__`.  Es lo que la llamada uniforme prueba
+ *        delante de un nombre escrito tras el punto.
+ * @param dotted Ruta con puntos; vacia devuelve vacio (la raiz no renombra).
+ * @return El prefijo fisico, con el separador final.
+ */
+std::string namespace_symbol_prefix(const std::string &dotted);
+
+/**
  * @brief Une una ruta YA fisica (de namespace o de modulo) con un miembro.
  * @param path   Ruta fisica, sin separador final.
  * @param member Nombre del miembro tal como se escribio.

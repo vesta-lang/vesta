@@ -47,6 +47,14 @@ struct S {
 	static i64 s_fn(cfn(i64) -> i64 cb) => cb(21);
 }
 
+// 8. El indice de `[]`: tambien es un argumento.  `t[3]` no encontraba
+// `__index__(Metros)` mientras `t.__index__(3)` si.
+struct Tabla {
+	i64[4] d;
+	i64 __index__(Metros i) => this.d[(i64)i];
+	void __index_set__(Metros i, i64 v) { this.d[(i64)i] = v; }
+}
+
 i32 main() {
 	K k = new K(3, doblar); // constructor: 3 + 42 = 45
 	S s;
@@ -68,6 +76,10 @@ i32 main() {
 		S.s_fn(doblar) + lam(doblar) + v2; // 6 * 42 = 252
 
 	println("newtypes=${newtypes} funciones=${funciones} ctor=${k.v}");
+
+	Tabla t = {.d = {0, 0, 0, 0}};
+	t[3]    = 7;
+	if (t[3] != 7) return 1;
 
 	// 15 + 252 + 45 = 312
 	return (i32)(newtypes + funciones + k.v - 270); // 42

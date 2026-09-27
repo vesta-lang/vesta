@@ -276,6 +276,63 @@ bool closes_as_type_args(const std::vector<Piece> &pieces, size_t open,
 }
 
 /**
+ * @brief Salta lo que puede ir DETRAS del nombre de un tipo: sus argumentos
+ *        `<...>`, las estrellas (y el `const` de un puntero constante), `&`,
+ *        `?` y las dimensiones `[N]`.
+ *
+ * Lo usaban dos sitios con su propia lista, y la del cast no sabia de
+ * genericos ni del tamano de un array: `(Caja<i64>){` y `(i32[3]){` no se
+ * leian como literales compuestos y salian con un espacio que `(Punto){` no
+ * lleva.
+ *
+ * @param pieces La linea.
+ * @param t      Primer token tras el nombre del tipo.
+ * @param stars  Donde contar las estrellas saltadas.
+ * @return El primer token que ya no es del tipo.
+ */
+size_t skip_type_suffixes(const std::vector<Piece> &pieces, size_t t,
+                          size_t &stars) {
+    while (t < pieces.size()) {
+        const TokenKind tk = kind_of(pieces[t]);
+        if (tk == TokenKind::STAR) {
+            ++stars;
+            ++t;
+            continue;
+        }
+        if (tk == TokenKind::AMP || tk == TokenKind::QUESTION ||
+            /* `i32 *const q`: el `const` de un puntero constante va DETRAS de
+             * la estrella y sigue siendo tipo. */
+            is_modifier(tk)) {
+            ++t;
+            continue;
+        }
+        /* Una dimension `[N]` / `[]` como UNIDAD: el tamano (un literal o un
+         * nombre constante) solo es tipo DENTRO de los corchetes.  Fuera, un
+         * literal no lo es: aceptarlo leia `(j * 10)` como el cast `(j*)` y
+         * pegaba la estrella. */
+        if (tk == TokenKind::LBRACKET) {
+            size_t c = t + 1;
+            while (c < pieces.size() &&
+                   (kind_of(pieces[c]) == TokenKind::INT_LIT ||
+                    kind_of(pieces[c]) == TokenKind::IDENTIFIER))
+                ++c;
+            if (c >= pieces.size() || kind_of(pieces[c]) != TokenKind::RBRACKET)
+                break;
+            t = c + 1;
+            continue;
+        }
+        if (tk == TokenKind::LT) {
+            size_t close = 0;
+            if (!closes_as_type_args(pieces, t, close)) break;
+            t = close + 1;
+            continue;
+        }
+        break;
+    }
+    return t;
+}
+
+/**
  * @brief Indica si tras el `)` de un supuesto cast puede venir lo que
  * convierte.
  *
@@ -667,20 +724,7 @@ std::vector<Role> annotate_roles(const std::vector<Piece> &pieces) {
                     }
                     if (nombres > 1) t = pieces.size(); // no es un cast
                 } else {
-                    while (t < pieces.size()) {
-                        const TokenKind tk = kind_of(pieces[t]);
-                        if (tk == TokenKind::STAR) {
-                            ++estrellas;
-                            ++t;
-                            continue;
-                        }
-                        if (tk == TokenKind::LBRACKET ||
-                            tk == TokenKind::RBRACKET) {
-                            ++t;
-                            continue;
-                        }
-                        break;
-                    }
+                    t = skip_type_suffixes(pieces, t, estrellas);
                     /* Y el declarador ABSTRACTO de C: `(i64 (*)(i64))x`.
                      * Ahi el tipo va PARTIDO -- `i64` delante, `(*)(i64)`
                      * detras --, asi que ni contar estrellas ni buscar la
@@ -800,28 +844,9 @@ std::vector<Role> annotate_roles(const std::vector<Piece> &pieces) {
                         decl_name = j;
                 }
 
-                size_t t = j + 1;
                 // Saltar lo que decora un tipo: punteros, arrays, genericos.
-                while (t < pieces.size()) {
-                    const TokenKind tk = kind_of(pieces[t]);
-                    if (tk == TokenKind::STAR || tk == TokenKind::AMP ||
-                        tk == TokenKind::LBRACKET ||
-                        tk == TokenKind::RBRACKET ||
-                        tk == TokenKind::QUESTION || tk == TokenKind::INT_LIT ||
-                        /* `i32 *const q`: el `const` de un puntero constante
-                         * va DETRAS de la estrella y sigue siendo tipo. */
-                        is_modifier(tk)) {
-                        ++t;
-                        continue;
-                    }
-                    if (tk == TokenKind::LT) {
-                        size_t close = 0;
-                        if (!closes_as_type_args(pieces, t, close)) break;
-                        t = close + 1;
-                        continue;
-                    }
-                    break;
-                }
+                size_t decl_stars = 0;
+                size_t t = skip_type_suffixes(pieces, j + 1, decl_stars);
                 // Tras el tipo tiene que venir un nombre, y tras el nombre algo
                 // que solo aparece en una declaracion.
                 /* El nombre puede ser una palabra clave SENSIBLE AL CONTEXTO.
@@ -1073,8 +1098,10 @@ std::vector<Role> annotate_roles(const std::vector<Piece> &pieces) {
             /* Pegado DELANTE, que es lo que dice la regla.  Y si lo que sigue
              * abre un grupo, pegado por los dos lados: detras de un `(` no va
              * espacio de todas formas, y con `TightLeft` se colaba uno dentro
-             * -- `(i32)( largo + 1)` --. */
-            roles[i] = (k == TokenKind::LPAREN || k == TokenKind::LBRACKET)
+             * -- `(i32)( largo + 1)` --.  La llave de un literal compuesto
+             * (`(i32[3]){1, 2}`) abre un grupo igual. */
+            roles[i] = (k == TokenKind::LPAREN || k == TokenKind::LBRACKET ||
+                        k == TokenKind::LBRACE)
                            ? Role::TightBoth
                            : Role::TightLeft;
         }

@@ -365,8 +365,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         (is_builtin_concept(name) ||
          tc_.concepts().find(name) != tc_.concepts().end())) {
         const uint32_t src_line = e->loc.line;
-        const Type t1 = tc_.resolve_type_node(e->type_args[0].get());
-        const ConceptEval ce = comptime_eval_concept(tc_, name, t1);
+        const ConceptEval ce = eval_concept_question(tc_, name, *e);
         out_value =
             emit_const(ir::IrType::BOOL,
                        (ce.found && ce.satisfied) ? 1ULL : 0ULL, src_line);

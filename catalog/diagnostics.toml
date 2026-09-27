@@ -278,6 +278,10 @@ es = "en la funcion '{0}' (la linea es la de su propio modulo, que puede no ser 
 en = "lowering: unresolved name '{0}'"
 es = "bajado: nombre no resuelto '{0}'"
 
+[VX3008]
+en = "an initializer list only builds a struct, and here it goes to something that is not one: write the value itself, or give the list its type with a cast to the struct"
+es = "una lista de inicializacion solo construye un struct, y aqui va a algo que no lo es: escribe el valor tal cual, o dale su tipo a la lista con un cast al struct"
+
 # --- modulos / namespaces (VX4xxx) ---
 
 [VX4001]
@@ -2892,9 +2896,64 @@ es = "termina el ambito del prestamo antes de mover al dueno, o usa 'shared<T>' 
 en = "the borrow cannot outlive what it came from: the local '{0}' that '{1}' points to lives only for this function, and {2} exposes the borrow outside the scope where that local exists"
 es = "el prestamo no puede sobrevivir a su origen: el local '{0}' al que apunta '{1}' vive solo durante esta funcion, y {2} lo expone fuera del ambito donde ese local existe"
 
+# Lo mismo para un prestamo SIN NOMBRE (`return lend_mut(p)`).  {0} el lugar
+# prestado, {1} como escapa.
+[VX2144]
+en = "the borrow cannot outlive what it came from: '{0}' belongs to a local that lives only for this function, and {1} exposes a borrow of it outside the scope where that local exists"
+es = "el prestamo no puede sobrevivir a su origen: '{0}' es de un local que vive solo durante esta funcion, y {1} expone un prestamo suyo fuera del ambito donde ese local existe"
+
 [VX2038]
 en = "change the type to `unique<T>` or `shared<T>` to transfer or clone the ownership instead of borrowing, or return the value with read_borrow(b) instead of the borrow"
 es = "cambia el tipo a `unique<T>` o `shared<T>` para transferir o clonar la posesion en lugar de prestar, o devuelve el valor con read_borrow(b) en lugar del prestamo"
+
+# Las operaciones de prestamo mal escritas.  {0} la operacion (`lend`,
+# `read_borrow`...), {1} cuantos argumentos toma, {2} cuantos se pasaron.
+[VX2145]
+en = "'{0}' takes {1} argument(s), and {2} were passed"
+es = "'{0}' recibe {1} argumento(s), y se pasaron {2}"
+
+# {0} `lend` o `lend_mut`.
+[VX2146]
+en = "'{0}' lends a variable, named by itself, and this argument is an expression: nothing owns what it computes, so there is no owner to hold the borrow to its rules"
+es = "'{0}' presta una variable, nombrada por si misma, y este argumento es una expresion: lo que calcula no es de nadie, asi que no hay dueno al que atar el prestamo y sus reglas"
+
+# {0} `lend` o `lend_mut`, {1} la variable, {2} su tipo.
+[VX2147]
+en = "'{0}' cannot lend '{1}': it is a plain local, which lives in the machine's stack, and a borrow is a host address that can reach any function.  Declare it `unique<{2}> {1} = unique_box(...)`"
+es = "'{0}' no puede prestar '{1}': es un local corriente, que vive en la pila de la maquina, y un prestamo es una direccion del anfitrion que puede llegar a cualquier funcion.  Declaralo `unique<{2}> {1} = unique_box(...)`"
+
+# {0} el prestamo compartido del que se quiso sacar uno exclusivo.
+[VX2148]
+en = "'lend_mut' cannot take an exclusive borrow from a shared one: '{0}' is a `borrow<T>`, and exclusivity is not raised after the fact"
+es = "'lend_mut' no puede sacar un prestamo exclusivo de uno compartido: '{0}' es un `borrow<T>`, y la exclusividad no se sube a posteriori"
+
+# {0} el tipo que se paso a `read_borrow`.
+[VX2149]
+en = "'read_borrow' reads through a `borrow<T>` or a `borrow_mut<T>`, and its argument is '{0}'"
+es = "'read_borrow' lee a traves de un `borrow<T>` o un `borrow_mut<T>`, y su argumento es '{0}'"
+
+# {0} el tipo que se paso a `write_borrow`.
+[VX2150]
+en = "'write_borrow' writes through a `borrow_mut<T>`, and its first argument is '{0}'"
+es = "'write_borrow' escribe a traves de un `borrow_mut<T>`, y su primer argumento es '{0}'"
+
+# {0} el tipo del valor, {1} el tipo prestado.
+[VX2151]
+en = "'write_borrow' writes a '{0}' into a borrow of '{1}'"
+es = "'write_borrow' escribe un '{0}' en un prestamo de '{1}'"
+
+# Indexar un prestamo de UN elemento.  {0} el tipo del prestamo, {1} el tipo
+# prestado.  No es una limitacion: `borrow<T>` es un elemento, y un indice
+# fuera de el es memoria que el prestamo no cubre -- que el comprobador no vea
+# la region no la hace suya.
+[VX2152]
+en = "'{0}' borrows a single '{1}', so it has nothing to index: an index would reach memory the borrow does not cover.  To index, lend the whole array -- `lend(arr)` gives `borrow<{1}[N]>`"
+es = "'{0}' presta un solo '{1}', asi que no hay nada que indexar: un indice llegaria a memoria que el prestamo no cubre.  Para indexar, presta el array entero -- `lend(arr)` da `borrow<{1}[N]>`"
+
+# Escribir a traves de un prestamo compartido.  {0} el tipo del prestamo.
+[VX2153]
+en = "'{0}' is a shared borrow: it only reads, and this writes through it.  Take it with `lend_mut` to write"
+es = "'{0}' es un prestamo compartido: solo lee, y esto escribe a traves de el.  Tomalo con `lend_mut` para escribir"
 
 # Las dos clases de prestamo, y las dos formas de usar al dueno.  Van sueltas
 # porque entran DENTRO de las frases de arriba.
@@ -4062,6 +4121,49 @@ es = "el tipo '{0}' no satisface el concepto '{1}' exigido por el parametro '{2}
 ["VX2109"]
 en = "unknown concept '{0}' in the bound of '{1}'"
 es = "concepto desconocido '{0}' en el bound de '{1}'"
+
+# Un concepto usado con otro numero de argumentos de tipo de los que declara.
+# El primero es siempre el tipo que se comprueba; los demas, sus argumentos.
+# {0} el concepto, {1} cuantos declara, {2} cuantos llegaron.
+["VX2137"]
+en = "the concept '{0}' takes {1} type argument(s) -- the checked type first, then its arguments -- but got {2}"
+es = "el concepto '{0}' toma {1} argumento(s) de tipo -- primero el tipo comprobado, luego sus argumentos -- y recibio {2}"
+
+# `impl C for X` promete que X cumple C.  Se comprueba despues de juntar todos
+# los metodos del tipo -- pueden venir de varios `impl`/`extension` --.
+# {0} el tipo, {1} el concepto.
+["VX2139"]
+en = "'{0}' declares 'impl {1}' but does not satisfy the concept '{1}'"
+es = "'{0}' declara 'impl {1}' pero no cumple el concepto '{1}'"
+
+# `impl C for X` con un concepto que no existe.  {0} el concepto, {1} el tipo.
+["VX2140"]
+en = "unknown concept '{0}' in 'impl {0} for {1}'"
+es = "concepto desconocido '{0}' en 'impl {0} for {1}'"
+
+# Preguntar por un concepto (`C<T>()`) no lleva argumentos de ejecucion: la
+# respuesta se sabe al compilar.  {0} el concepto.
+["VX2138"]
+en = "asking the concept '{0}' takes no runtime arguments: only its type arguments, as in '{0}<T>()'"
+es = "preguntar por el concepto '{0}' no lleva argumentos de ejecucion: solo los de tipo, como en '{0}<T>()'"
+
+# Una lista de inicializacion que va a un ARRAY es posicional: sus huecos no
+# tienen nombre.  {0} el tipo del array, {1} el nombre escrito.
+["VX2141"]
+en = "an initializer list for the array '{0}' is positional: '.{1} =' names a struct field, and an array has none"
+es = "una lista de inicializacion para el array '{0}' es posicional: '.{1} =' nombra un campo de struct, y un array no tiene"
+
+# Mas elementos en la lista que huecos en el array.  {0} el tipo del array,
+# {1} cuantos elementos trae la lista, {2} cuantos caben.
+["VX2142"]
+en = "the initializer list has {1} element(s) and the array '{0}' holds {2}"
+es = "la lista de inicializacion tiene {1} elemento(s) y el array '{0}' tiene {2}"
+
+# Un elemento de la lista no cabe en el elemento del array.  {0} su posicion
+# (desde 1), {1} su tipo, {2} el tipo del elemento del array.
+["VX2143"]
+en = "element {0} of the initializer list is '{1}', which does not fit in an array element of type '{2}'"
+es = "el elemento {0} de la lista de inicializacion es '{1}', que no cabe en un elemento del array de tipo '{2}'"
 
 # La nota que acompana a un error dentro del cuerpo de una INSTANCIA.  Sin
 # ella el error senyala la linea de la PLANTILLA -- codigo que quien llamo no

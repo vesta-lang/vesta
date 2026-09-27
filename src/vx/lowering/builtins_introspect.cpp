@@ -826,7 +826,7 @@ std::string Lowering::site_ns_prefix() const {
      * entrada es unico --, asi que la resta daba vacio justo en la funcion
      * donde se escriben casi todas las llamadas, y lo alcanzable salia como
      * cero sin que nada lo dijera. */
-    return tc_.ns_prefix_of(fn_->name);
+    return tc_.ns_prefix_of(fn_->name).str();
 }
 
 bool Lowering::try_lower_field_access_by_name(ast::CallExpr *e, Builtin b,

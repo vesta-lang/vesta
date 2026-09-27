@@ -63,6 +63,22 @@ std::string mangle_type(const Type &t);
 /// @brief Mangling de una lista de type-args (`i64_i32`), separados por '_'.
 std::string mangle_args(const std::vector<Type> &args);
 
+/**
+ * @brief El nombre de una INSTANCIA de plantilla: `Box` y `<i64>` ->
+ *        `Box_i64`.
+ *
+ * Es el de todas -- structs, clases, enums, funciones y metodos genericos --,
+ * y estaba escrito a mano en cada una.  Un nombre de plantilla importada con
+ * namespace llega cualificado (`lib.Box`); el punto no vale en una etiqueta
+ * del IR ni del enlazador, asi que sale como `_`.
+ *
+ * @param tmpl Nombre de la plantilla.
+ * @param args Sus argumentos de tipo.
+ * @return El nombre de la instancia.
+ */
+std::string generic_instance_name(const std::string &tmpl,
+                                  const std::vector<Type> &args);
+
 /// @brief Reconstruye un @c TypeNode AST a partir de un @c Type resuelto.
 ///
 /// Preserva pointee/element y tamano de punteros y arrays (un type-arg

@@ -529,29 +529,36 @@ void Lowering::propagate_is_gc_object_through_phis(ir::IrFunction &fn) {
 // Statements.
 // ---------------------------------------------------------------------
 
+namespace {
+
+/**
+ * @brief Un trozo de una region de bytes: cuanto mide y con que tipo se lee o
+ *        se escribe.
+ */
+struct ByteChunk {
+    ir::IrType type;  ///< I64, I32, I16 o I8
+    uint64_t bytes;   ///< 8, 4, 2 o 1
+};
+
+/**
+ * @brief El trozo mas ancho que cabe en @p rest bytes.  Recorrer una region
+ *        con el garantiza no escribir ni leer fuera de ella.
+ * @param rest Bytes que quedan (> 0).
+ * @return El trozo.
+ */
+ByteChunk widest_chunk(uint64_t rest) {
+    if (rest >= 8) return {ir::IrType::I64, 8};
+    if (rest >= 4) return {ir::IrType::I32, 4};
+    if (rest >= 2) return {ir::IrType::I16, 2};
+    return {ir::IrType::I8, 1};
+}
+
+} // namespace
+
 void Lowering::emit_zero_fill(ir::IrValueId addr, uint64_t size_bytes,
                               uint32_t line) {
-    // Emite STORE 0 en trozos decrecientes (8/4/2/1) sin desbordar el rango.
-    auto store_zero = [&](ir::IrType ty, uint64_t o) {
-        ir::IrValueId v_addr = addr;
-        if (o > 0) {
-            ir::IrValueId v_off = emit_const(ir::IrType::I64, o, line);
-            v_addr = fn_->new_value(ir::IrType::PTR);
-            // Heredar la naturaleza host/VM de la base (AOT native_poo aloca el
-            // struct en la pila NATIVA -> el STORE debe ir a host, no a
-            // vm_mem).
-            fn_->values[v_addr].memory = fn_->values[addr].memory;
-            ir::IrInstr ad{};
-            ad.op = ir::IrOp::ADD;
-            ad.type = ir::IrType::I64;
-            ad.dst = v_addr;
-            ad.operands = {addr, v_off};
-            ad.source_line = line;
-            emit(current_block_, std::move(ad));
-        }
-        ir::IrValueId v_zero = emit_const(ty, 0, line);
-        emit_store_typed(v_addr, v_zero, ty, line);
-    };
+    // STORE 0 en trozos decrecientes (8/4/2/1) sin desbordar el rango; cada
+    // direccion hereda la naturaleza host/VM de la base (emit_ptr_add).
     /* A partir de cierto tamano se EMITE EL HECHO (`memset`) en vez de
      * desplegarlo.  Desplegar destruye la semantica "esta region se pone a
      * cero" y ningun nivel inferior puede reconstruirla: medido, `i32[8192]
@@ -579,22 +586,11 @@ void Lowering::emit_zero_fill(ir::IrValueId addr, uint64_t size_bytes,
         return;
     }
 
-    uint64_t off = 0;
-    while (size_bytes - off >= 8) {
-        store_zero(ir::IrType::I64, off);
-        off += 8;
-    }
-    if (size_bytes - off >= 4) {
-        store_zero(ir::IrType::I32, off);
-        off += 4;
-    }
-    if (size_bytes - off >= 2) {
-        store_zero(ir::IrType::I16, off);
-        off += 2;
-    }
-    if (size_bytes - off >= 1) {
-        store_zero(ir::IrType::I8, off);
-        off += 1;
+    for (uint64_t off = 0; off < size_bytes;) {
+        const ByteChunk c = widest_chunk(size_bytes - off);
+        emit_store_typed(emit_ptr_add(addr, off, line), emit_const(c.type, 0, line),
+                         c.type, line);
+        off += c.bytes;
     }
 }
 
@@ -1027,6 +1023,8 @@ ir::IrValueId Lowering::lower_expr(ast::Expr *e) {
         return lower_match_expr(static_cast<ast::MatchExpr *>(e));
     case ast::NodeKind::CastExpr:
         return lower_cast_expr(static_cast<ast::CastExpr *>(e));
+    case ast::NodeKind::InitListExpr:
+        return lower_init_list_value(static_cast<ast::InitListExpr *>(e));
     default:
         unsupported(e->loc, "expresion no soportada por el lowering actual");
         return ir::IR_NO_VALUE;
@@ -1637,36 +1635,16 @@ void Lowering::emit_free_unique_field(ir::IrValueId this_vid,
 void Lowering::emit_memberwise_copy(ir::IrValueId dst_addr,
                                     ir::IrValueId src_addr, uint64_t size_bytes,
                                     uint32_t line) {
-    const bool dst_host = fn_->values[dst_addr].is_host_ptr();
-    const bool src_host = fn_->values[src_addr].is_host_ptr();
-    const uint64_t qwords = (size_bytes + 7) / 8;
-    for (uint64_t qi = 0; qi < qwords; ++qi) {
-        const ir::IrValueId v_off =
-            emit_const(ir::IrType::I64, static_cast<int64_t>(qi * 8), line);
-        const ir::IrValueId s_at = fn_->new_value(ir::IrType::PTR);
-        fn_->values[s_at].set_host(src_host);
-        {
-            ir::IrInstr ad{};
-            ad.op = ir::IrOp::ADD;
-            ad.type = ir::IrType::I64;
-            ad.dst = s_at;
-            ad.operands = {src_addr, v_off};
-            ad.source_line = line;
-            emit(current_block_, std::move(ad));
-        }
-        const ir::IrValueId w = emit_load_typed(s_at, ir::IrType::I64, line);
-        const ir::IrValueId d_at = fn_->new_value(ir::IrType::PTR);
-        fn_->values[d_at].set_host(dst_host);
-        {
-            ir::IrInstr ad{};
-            ad.op = ir::IrOp::ADD;
-            ad.type = ir::IrType::I64;
-            ad.dst = d_at;
-            ad.operands = {dst_addr, v_off};
-            ad.source_line = line;
-            emit(current_block_, std::move(ad));
-        }
-        emit_store_typed(d_at, w, ir::IrType::I64, line);
+    /* Trozos EXACTOS, nunca redondeados a palabra: copiar un struct de 12
+     * bytes como dos palabras escribia 16 y pisaba los 4 primeros bytes de lo
+     * que hubiera detras -- el elemento siguiente de un array, el campo
+     * vecino --.  Cada direccion hereda la memoria (host/VM) de su base. */
+    for (uint64_t off = 0; off < size_bytes;) {
+        const ByteChunk c = widest_chunk(size_bytes - off);
+        const ir::IrValueId w =
+            emit_load_typed(emit_ptr_add(src_addr, off, line), c.type, line);
+        emit_store_typed(emit_ptr_add(dst_addr, off, line), w, c.type, line);
+        off += c.bytes;
     }
 }
 

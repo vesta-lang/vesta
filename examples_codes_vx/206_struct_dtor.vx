@@ -46,7 +46,32 @@ i64 usar(i64 v) {
 	return *r.p;
 }
 
+// Una guarda: su destructor suma uno al contador que vigila.  Su metodo y su
+// destructor llaman por el PUNTO a una libre de este namespace (antes, dentro
+// de un metodo, la llamada uniforme no veia las libres del namespace).
+struct Cuenta {
+	i64 n;
+}
+void sumar(inout Cuenta c, i64 k) { c.n = c.n + k; }
+struct Guarda {
+	Cuenta* c;
+	void tocar() { (*this.c).sumar(10); }
+	~Guarda() { (*this.c).sumar(1); }
+}
+
+// Inicializada con una LISTA, la guarda tambien ejecuta su destructor: antes
+// la declaracion con lista construia por otro camino y se lo saltaba, callada.
+i64 vigilar() {
+	Cuenta c = {.n = 0};
+	{
+		Guarda g = {.c = &c};
+		g.tocar();
+	}
+	return c.n; // 10 del metodo + 1 del destructor
+}
+
 i32 main() {
+	if (vigilar() != 11) return 1;
 	i64 s = usar(20) + usar(20); // 40; cada `usar` libera su recurso -> freed=2
 	return (i32)(s + freed);     // 40 + 2 = 42
 }

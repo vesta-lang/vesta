@@ -96,6 +96,8 @@ add_library(vx_lib STATIC
     parser/statement_entry.cpp
     parser/var_declarators.cpp
     parser/for_stmt.cpp
+    # Mirar hacia delante si empieza un tipo y donde acaba.
+    parser/type_lookahead.cpp
     # Que declara el modulo, indexado UNA vez.  Buscar una declaracion por
     # nombre estaba escrito a mano, con un recorrido del modulo entero, en 33
     # sitios del frontend; varios corren por cada identificador del programa.
@@ -279,8 +281,16 @@ add_library(vx_lib STATIC
     # argumentos.  Solo se puede decidir sabiendo que nombres son tipos, asi
     # que no lo hace el parser.
     generics/generic_head.cpp
+    # Plantillas genericas homonimas: cual encaja y como se nombra su instancia.
+    generics/generic_homonyms.cpp
     # Fase 0 interop C / ownership: clasificador is_c_representable / is_managed.
     type_classify.cpp
+    # Que struct construye una lista `{...}` asignada o devuelta.
+    checker/init_list_target.cpp
+    # Comprobar un valor sabiendo a que destino va (Some/Ok/listas).
+    checker/value_for_target.cpp
+    # Si un tipo es POD (concepto `Pod` y huella `@pod`).
+    checker/type_pod.cpp
     # Fase 4 interop C: generador de header C publico (vx --emit-header).
     c_header_gen.cpp
     lombok.cpp
@@ -415,6 +425,12 @@ add_library(vx_lib STATIC
     # declaro, se copia al pasarlo, muere sin que nadie lo recoja --, asi que
     # su bajada es otra aunque tambien tenga campos y metodos.
     lowering/structs.cpp
+    # Una lista `{...}` como valor: el struct nuevo que construye.
+    lowering/init_list_value.cpp
+    # Escribir un campo de bits (leer la palabra, cambiar sus bits, guardar).
+    lowering/bit_field_store.cpp
+    # El destructor de un struct local, a la salida de su ambito.
+    lowering/struct_cleanup.cpp
     # De los tipos de Vesta a los del IR, y las conversiones entre ellos: el
     # lenguaje tiene mas tipos de los que el IR distingue, y convertir mal no
     # da un error sino un numero distinto.

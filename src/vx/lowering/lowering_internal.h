@@ -248,6 +248,32 @@ inline uint64_t float_bits_from_double(double d, bool is_f32) {
     return bits;
 }
 
+/**
+ * @brief El VALOR de un dueno de este tipo es ya la direccion que se presta?
+ *
+ * Lo preguntan dos: el pre-pase que decide que locales viven en una ranura y
+ * la bajada de `lend`.  Si respondieran distinto, uno dejaria el local en un
+ * registro y el otro pediria su ranura, o se prestaria la ranura del puntero en
+ * vez de lo apuntado -- que es como un `write_borrow` acababa pisando el
+ * puntero y dejando intacto lo que se queria escribir.
+ *
+ *   - un prestamo, `unique<T>` o `shared<T>`: llevan dentro la direccion;
+ *   - un puntero crudo: presta LO APUNTADO, que es su valor;
+ *   - un array: presta el array entero, que empieza en su valor.
+ *
+ * El resto (una clase, un local corriente) se presta por su ranura.
+ *
+ * @param t El tipo del dueno.
+ * @return @c true si no hace falta ranura para prestarlo.
+ */
+inline bool lend_value_is_address(const Type &t) {
+    return t.kind == PrimitiveKind::BORROW ||
+           t.kind == PrimitiveKind::BORROW_MUT ||
+           t.kind == PrimitiveKind::UNIQUE_PTR ||
+           t.kind == PrimitiveKind::SHARED_PTR ||
+           t.kind == PrimitiveKind::PTR || t.kind == PrimitiveKind::ARRAY;
+}
+
 } // namespace vx
 
 #endif // VESTA_VX_LOWERING_INTERNAL_H

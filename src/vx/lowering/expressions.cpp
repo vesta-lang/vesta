@@ -57,36 +57,17 @@ ir::IrValueId Lowering::lower_cast_expr(ast::CastExpr *e) {
         marcar(e->operand.get());
     }
 
-    // Compound literal `(Struct){...}`: construir un struct anonimo inline.
-    // Aloca + zero-fill + defaults + init-list, y devuelve su direccion (un
-    // valor struct como cualquier otro).  Funciona en interp/JIT/AOT.
+    // Compound literal `(Struct){...}` / `(T[N]){...}`: construir el agregado
+    // inline y devolver su direccion (un valor como cualquier otro).  El
+    // comprobador ya le anoto a la lista lo que construye.
     if (e->target_type && e->operand->kind == ast::NodeKind::InitListExpr) {
-        Type tt = tc_.resolve_type_node(e->target_type.get());
-        if (tt.kind == PrimitiveKind::STRUCT) {
-            auto it = tc_.struct_layouts().find(tt.struct_name);
-            if (it != tc_.struct_layouts().end()) {
-                const StructLayout &lay = it->second;
-                ir::IrValueId addr = fn_->new_value(ir::IrType::PTR);
-                ir::IrInstr al{};
-                al.op = ir::IrOp::ALLOCA;
-                al.type = ir::IrType::I8;
-                al.dst = addr;
-                al.imm = (uint64_t)lay.size_bytes;
-                al.source_line = e->loc.line;
-                // El buffer de un compound literal `(T){...}` es un agregado
-                // como cualquier otro -> host en los tres modos (ver
-                // lower_var_decl), no solo en AOT.
-                al.host_alloca = true;
-                emit(current_block_, std::move(al));
-                fn_->values[addr].memory = ir::MemorySpace::HostByConstruction;
-                emit_zero_fill(addr, (uint64_t)lay.size_bytes, e->loc.line);
-                emit_struct_init_fields(
-                    addr, lay,
-                    static_cast<ast::InitListExpr *>(e->operand.get()),
-                    e->loc.line);
-                return addr;
-            }
-        }
+        auto *il = static_cast<ast::InitListExpr *>(e->operand.get());
+        // El cast ESCRIBE el tipo: si la lista llego sin anotar (los valores
+        // de un `enum X : Rgb` no pasan todos por el comprobador), se toma
+        // de ahi.
+        if (il->target_type.kind == PrimitiveKind::VOID)
+            il->target_type = tc_.resolve_type_node(e->target_type.get());
+        return lower_init_list_value(il);
     }
 
     // Function pointer: `(u64) foo` / `(fn(...)->R) foo` donde foo es una

@@ -25,6 +25,7 @@
 #include "vx/comptime/comptime_vm.h" // la maquina de compilacion, para saber si HAY
 #include "vx/diag/diag_catalog.h" // el texto sale del catalogo, nunca a mano
 #include "ir/ir_type_info.h" // vocabulario UNICO de anchura/clase de un IrType
+#include "vx/type_classify.h" // si un struct tiene destructor
 #include <algorithm>
 #include <functional>
 #include <map>
@@ -751,25 +752,11 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
             // callee debe recibir una COPIA.  Copiamos + `copia.__clone__()` y
             // pasamos la copia; el `~dtor` de la copia se emite tras el CALL.
             // Un valor fresco (CallExpr) o un struct sin copy-hook no se clona
-            // (move / alias actual). Coercionar la PRECISION float del arg al
-            // tipo del parametro (p.ej. un literal f64 3.0 pasado a un param
-            // f32).  Sin esto se pasan los bits f64 tal cual y el callee los
-            // relee como f32 -> basura (fmul.f32 de dos params daba 0).  Solo
-            // float<->float; los enteros/punteros/structs los coacciona el type
-            // checker o los paths de arriba.  cast_if_needed es no-op si ya
-            // coinciden.
-            if (v_arg != ir::IR_NO_VALUE && callee_sig &&
-                i < callee_sig->param_types.size()) {
-                const ir::IrType pt =
-                    ir_type_from_primitive(callee_sig->param_types[i].kind);
-                const ir::IrType at = fn_->values[v_arg].type;
-                const bool pt_f =
-                    (pt == ir::IrType::F32 || pt == ir::IrType::F64);
-                const bool at_f =
-                    (at == ir::IrType::F32 || at == ir::IrType::F64);
-                if (pt != at && pt_f && at_f)
-                    v_arg = cast_if_needed(v_arg, at, pt, e->loc.line);
-            }
+            // (move / alias actual).  El argumento, del tipo del parametro (ver
+            // coerce_arg_to_param).
+            if (callee_sig && i < callee_sig->param_types.size())
+                v_arg = coerce_arg_to_param(
+                    v_arg, callee_sig->param_types[i], e->loc.line);
             bool cloned_struct = false;
             if (v_arg != ir::IR_NO_VALUE && ae &&
                 ae->kind == ast::NodeKind::IdentExpr && callee_sig &&
@@ -784,13 +771,8 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
                     arg_ids.push_back(copy);
                     cloned_struct = true;
                     // ~dtor de la copia tras el CALL solo si el tipo lo define.
-                    bool has_dtor = false;
-                    for (const auto &mm : it_sl->second.methods)
-                        if (mm.is_destructor) {
-                            has_dtor = true;
-                            break;
-                        }
-                    if (has_dtor) struct_clone_to_dtor.emplace_back(copy, sn);
+                    if (struct_has_destructor(it_sl->second))
+                        struct_clone_to_dtor.emplace_back(copy, sn);
                 }
             }
             if (!cloned_struct) arg_ids.push_back(v_arg);
@@ -2347,23 +2329,9 @@ bool Lowering::try_lower_namespaced_call(ast::CallExpr *e, ir::IrValueId &out) {
         }
         if (!promote) {
             ir::IrValueId v = lower_expr(a.get());
-            // Coercionar el arg a la PRECISION del parametro cuando hay
-            // mismatch float (p.ej. un literal f64 3.0 pasado a un
-            // param f32).  Sin esto se pasan los bits f64 tal cual y el
-            // callee los relee como f32 -> basura (fmul.f32 daba 0).
-            // Solo float<->float: los enteros/punteros ya los coacciona
-            // el type checker.  cast_if_needed es no-op si coinciden.
-            if (v != ir::IR_NO_VALUE && ai < ns_param_types.size()) {
-                const ir::IrType pt =
-                    ir_type_from_primitive(ns_param_types[ai].kind);
-                const ir::IrType at = fn_->values[v].type;
-                const bool pt_f =
-                    (pt == ir::IrType::F32 || pt == ir::IrType::F64);
-                const bool at_f =
-                    (at == ir::IrType::F32 || at == ir::IrType::F64);
-                if (pt != at && pt_f && at_f)
-                    v = cast_if_needed(v, at, pt, e->loc.line);
-            }
+            // El argumento, del tipo del parametro (ver coerce_arg_to_param).
+            if (ai < ns_param_types.size())
+                v = coerce_arg_to_param(v, ns_param_types[ai], e->loc.line);
             arg_vals.push_back(v);
         }
     }

@@ -40,9 +40,9 @@ struct Rgb {
 	u8 b;
 }
 enum Color : Rgb {
-	RED   = (Rgb){ 255, 0, 0},
-	GREEN = (Rgb){ 0, 255, 0},
-	BLUE  = (Rgb){ 0, 0, 255}
+	RED   = (Rgb){255, 0, 0},
+	GREEN = (Rgb){0, 255, 0},
+	BLUE  = (Rgb){0, 0, 255}
 }
 
 // Clase: cada variante es una instancia.  Un Anchor ES un Point.

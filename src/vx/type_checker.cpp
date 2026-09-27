@@ -33,6 +33,8 @@
 #include "util/alloc/small_vector.h" // las candidatas de una sobrecarga, sin heap
 #include "ir/synthetic_symbols.h" // el nombre de los cuerpos de macro
 #include "util/env_flags.h"
+#include "util/scoped_assign.h" // el namespace de un cuerpo, restaurado al salir
+#include "vx/module/namespace_names.h" // el prefijo aplanado de un namespace
 #include "util/os/thread_slot.h" // buffer por hilo sin pasar por la TLS emulada
 #include "vx/type_checker.h"
 
@@ -40,6 +42,7 @@
 #include "vx/diag/diag_catalog.h"
 #include "vx/ansi_names.h"      // los nombres de color que el lenguaje conoce
 #include "vx/builtin_params.h"  // como se llaman las ranuras de cada builtin
+#include "vx/builtin_names.h"   // que builtin es un nombre, sin comparar a mano
 #include "vx/asm/asm_effects.h" // asm_canonical_reg ( AS inc.4)
 #include "vx/type_classify.h"   // is_c_representable / is_managed (Fase 1)
 #include "vx/collection_intrinsics.h"        // tabla de tipos coleccion
@@ -390,18 +393,6 @@ TypeChecker::~TypeChecker() {
 // del namespace).  Se traen al scope de `vx` con un using para no
 // requalificar las decenas de usos existentes.
 using namespace vxgen;
-
-// #cross-module-generics: un template importado con namespace se inyecta con
-// nombre cualificado `lib.Box` (con punto).  El punto es invalido en las
-// etiquetas del IR/linker, asi que el nombre MANGLED de la instancia debe ser
-// dot-free.  Reemplaza '.' por '_' (idempotente para nombres sin punto).
-static std::string mangle_sanitize(const std::string &s) {
-    if (s.find('.') == std::string::npos) return s;
-    std::string out = s;
-    for (char &c : out)
-        if (c == '.') c = '_';
-    return out;
-}
 
 // True si @p k es un tipo entero (con o sin signo).  Usado para validar el
 // tipo base de un enum con valor y para el lowering de valued-enums.
@@ -804,7 +795,7 @@ std::string TypeChecker::monomorphize_class(const std::string &template_name,
         referenced_names_.insert(
             template_name.substr(0, template_name.find('.')));
     const std::string mangled =
-        mangle_sanitize(template_name) + "_" + mangle_args(args);
+        generic_instance_name(template_name, args);
     if (monomorphized_.count(mangled)) return mangled;
 
     const std::string gkey =
@@ -981,7 +972,7 @@ std::string TypeChecker::monomorphize_enum(const std::string &template_name,
                                            const std::vector<Type> &args,
                                            const SourceLoc &loc) {
     const std::string mangled =
-        mangle_sanitize(template_name) + "_" + mangle_args(args);
+        generic_instance_name(template_name, args);
     if (monomorphized_.count(mangled)) return mangled;
 
     const std::string gkey =
@@ -1068,7 +1059,7 @@ std::string TypeChecker::monomorphize_struct(const std::string &template_name,
         referenced_names_.insert(
             template_name.substr(0, template_name.find('.')));
     const std::string mangled =
-        mangle_sanitize(template_name) + "_" + mangle_args(args);
+        generic_instance_name(template_name, args);
     if (monomorphized_.count(mangled)) return mangled;
 
     const std::string gkey =
@@ -1683,22 +1674,13 @@ std::string TypeChecker::monomorphize_function(const std::string &template_name,
      * sustituidos, y con los nombres de sus ranuras, que es lo unico que
      * distingue a dos de la misma firma. */
     std::string mangled =
-        mangle_sanitize(template_name) + "_" + mangle_args(args);
+        generic_instance_name(template_name, args);
     {
         auto it_all = generic_fn_templates_.find(template_name);
         if (it_all != generic_fn_templates_.end() &&
-            it_all->second.size() > 1) {
-            GenSubst g{&tmpl->type_params, &args};
-            std::vector<Type> ps;
-            ParamNames pn;
-            ps.reserve(tmpl->params.size());
-            for (const auto &p : tmpl->params) {
-                auto ct = clone_type_with_subst(p->type.get(), g);
-                ps.push_back(type_from_node(ct.get()));
-                pn.push_back(p->name);
-            }
-            mangled += "_" + overload::discriminator(ps, &pn);
-        }
+            it_all->second.size() > 1)
+            mangled += "_" + homonym_discriminator(tmpl->params,
+                                                   tmpl->type_params, args);
     }
     if (monomorphized_.count(mangled)) return mangled;
 
@@ -1721,6 +1703,8 @@ std::string TypeChecker::monomorphize_function(const std::string &template_name,
     auto cloned = std::make_unique<ast::FunctionDecl>();
     cloned->loc = src->loc;
     cloned->name = mangled;
+    instance_template_of_[util::InternedName::intern(mangled)] =
+        util::InternedName::intern(tmpl->name);
     /* Y DE DONDE SALIO, para que un error en su cuerpo pueda decirlo.
      *
      * Se compone como se ESCRIBE -- `apply<string, cfn(i64) -> void>` --, no
@@ -3718,7 +3702,8 @@ static void borrowed_place(const ast::Expr *a, const BorrowChecker &bc,
     if (a == nullptr) return;
     switch (a->kind) {
     case ast::NodeKind::IdentExpr:
-        out.root = static_cast<const ast::IdentExpr *>(a)->name;
+        out.root = util::InternedName::intern(
+            static_cast<const ast::IdentExpr *>(a)->name);
         return;
     case ast::NodeKind::UnaryExpr: {
         const auto *u = static_cast<const ast::UnaryExpr *>(a);
@@ -3740,6 +3725,14 @@ static void borrowed_place(const ast::Expr *a, const BorrowChecker &bc,
                     out = std::move(owner);
                     return;
                 }
+                /* Y si es un puntero CRUDO del que se sabe a donde senala
+                 * (`p = &arena[0]`), lo apuntado es ese lugar: dos punteros a
+                 * la misma region dejan de ser dos cosas. */
+                borrow::Place target = bc.pointer_target_of(id->name);
+                if (target.valid()) {
+                    out = std::move(target);
+                    return;
+                }
             }
             borrowed_place(u->operand.get(), bc, out);
             if (!out.valid()) return;
@@ -3752,7 +3745,8 @@ static void borrowed_place(const ast::Expr *a, const BorrowChecker &bc,
         const auto *f = static_cast<const ast::FieldAccessExpr *>(a);
         borrowed_place(f->base.get(), bc, out);
         if (!out.valid()) return;
-        out.path.push_back(borrow::PlaceStep::of_field(f->field_name));
+        out.path.push_back(borrow::PlaceStep::of_field(
+            util::InternedName::intern(f->field_name)));
         return;
     }
     case ast::NodeKind::IndexExpr: {
@@ -3777,23 +3771,142 @@ static void borrowed_place(const ast::Expr *a, const BorrowChecker &bc,
     }
 }
 
-static std::string borrowed_root_name(const ast::Expr *a) {
-    if (a == nullptr) return std::string();
-    if (a->kind == ast::NodeKind::IdentExpr)
-        return static_cast<const ast::IdentExpr *>(a)->name;
-    if (a->kind == ast::NodeKind::UnaryExpr) {
-        const auto *u = static_cast<const ast::UnaryExpr *>(a);
-        if (u->op == ast::UnOp::AddrOf)
-            return borrowed_root_name(u->operand.get());
-        return std::string();
+/**
+ * @brief El LUGAR que presta un `lend(x)` / `lend_mut(x)`, segun que sea `x`.
+ *
+ * Un solo dueno para la pregunta, porque la hacen dos: quien registra el
+ * prestamo y quien comprueba que no escape por un `return`.  Si cada uno lo
+ * resolviera a su manera, el `return` juzgaria otro lugar que el registrado.
+ *
+ *   - de un prestamo (represtamo): el lugar del que salio aquel;
+ *   - de un puntero crudo cuya procedencia se conoce (`p = &arena[0]`): lo
+ *     apuntado, que es la memoria de verdad -- prestar `p` no es prestar la
+ *     ranura del puntero --;
+ *   - de cualquier otro: la variable misma.
+ *
+ * @param owner La variable prestada.
+ * @param vt    Su tipo.
+ * @param bc    El comprobador, que sabe de quien es cada prestamo y a donde
+ *              senala cada puntero.
+ * @return El lugar prestado.
+ */
+static borrow::Place lent_place(const ast::IdentExpr *owner, const Type &vt,
+                                const BorrowChecker &bc) {
+    if (vt.kind == PrimitiveKind::BORROW ||
+        vt.kind == PrimitiveKind::BORROW_MUT) {
+        borrow::Place src = bc.owner_place_of(owner->name);
+        if (src.valid()) return src;
+    } else if (vt.kind == PrimitiveKind::PTR) {
+        borrow::Place target = bc.pointer_target_of(owner->name);
+        if (target.valid()) return target;
     }
-    if (a->kind == ast::NodeKind::FieldAccessExpr)
-        return borrowed_root_name(
-            static_cast<const ast::FieldAccessExpr *>(a)->base.get());
-    if (a->kind == ast::NodeKind::IndexExpr)
-        return borrowed_root_name(
-            static_cast<const ast::IndexExpr *>(a)->base.get());
-    return std::string();
+    return borrow::Place::of_root(owner->name);
+}
+
+/**
+ * @brief Si @p e es un `lend(x)` / `lend_mut(x)`, el lugar que presta.
+ * @param e  La expresion.
+ * @param bc El comprobador.
+ * @return El lugar, o uno sin raiz si @p e no es un prestamo de una variable.
+ */
+static borrow::Place lend_call_place(const ast::Expr *e,
+                                     const BorrowChecker &bc) {
+    if (e == nullptr || e->kind != ast::NodeKind::CallExpr) return {};
+    const auto *ce = static_cast<const ast::CallExpr *>(e);
+    if (ce->callee == nullptr || ce->callee->kind != ast::NodeKind::IdentExpr ||
+        ce->args.size() != 1 ||
+        ce->args[0]->kind != ast::NodeKind::IdentExpr)
+        return {};
+    const Builtin b = builtin_from_name(
+        static_cast<const ast::IdentExpr *>(ce->callee.get())->name);
+    if (b != Builtin::Lend && b != Builtin::LendMut) return {};
+    return lent_place(static_cast<const ast::IdentExpr *>(ce->args[0].get()),
+                      ce->args[0]->result_type, bc);
+}
+
+/**
+ * @brief A donde senala un puntero que se inicializa o asigna con @p value.
+ *
+ * Solo lo que se SABE: `&lugar` es ese lugar, y otro puntero de procedencia
+ * conocida transmite la suya.  Cualquier otra cosa -- aritmetica, una llamada,
+ * un `malloc` -- deja el puntero sin procedencia, y entonces lo apuntado sigue
+ * siendo un paso sin resolver, que no separa nada.
+ *
+ * @param value La expresion asignada.
+ * @param bc    El comprobador.
+ * @return El lugar apuntado, o uno sin raiz si no se sabe.
+ */
+/**
+ * @brief Toca @p target A TRAVES de un prestamo con nombre?
+ *
+ * `*b = v`, `b[i]` o `(*b).f` con `b` un prestamo: la escritura o la lectura
+ * la hace el prestatario, que es para lo que tiene el prestamo.  Contarla como
+ * uso del dueno haria chocar al prestamo consigo mismo.
+ *
+ * @param target El lugar escrito o leido.
+ * @param bc     El comprobador, que sabe quien es prestatario.
+ * @return @c true si la raiz del lugar es un prestamo registrado.
+ */
+static bool accesses_through_borrow(const ast::Expr *target,
+                                    const BorrowChecker &bc) {
+    const ast::Expr *cur = target;
+    while (cur != nullptr) {
+        switch (cur->kind) {
+        case ast::NodeKind::IdentExpr:
+            return bc.owner_place_of(
+                         static_cast<const ast::IdentExpr *>(cur)->name)
+                .valid();
+        case ast::NodeKind::UnaryExpr:
+            cur = static_cast<const ast::UnaryExpr *>(cur)->operand.get();
+            break;
+        case ast::NodeKind::FieldAccessExpr:
+            cur = static_cast<const ast::FieldAccessExpr *>(cur)->base.get();
+            break;
+        case ast::NodeKind::IndexExpr:
+            cur = static_cast<const ast::IndexExpr *>(cur)->base.get();
+            break;
+        default: return false;
+        }
+    }
+    return false;
+}
+
+static borrow::Place pointer_origin(const ast::Expr *value,
+                                    const BorrowChecker &bc) {
+    if (value == nullptr) return {};
+    if (value->kind == ast::NodeKind::UnaryExpr &&
+        static_cast<const ast::UnaryExpr *>(value)->op == ast::UnOp::AddrOf) {
+        borrow::Place out;
+        borrowed_place(value, bc, out);
+        return out;
+    }
+    if (value->kind == ast::NodeKind::IdentExpr)
+        return bc.pointer_target_of(
+            static_cast<const ast::IdentExpr *>(value)->name);
+    return {};
+}
+
+void TypeChecker::check_place_read_(const ast::Expr *e) {
+    // Sin prestamos no hay nada que una lectura pueda pisar.
+    if (e == nullptr || !borrow_checker_.has_borrows()) return;
+    switch (e->kind) {
+    case ast::NodeKind::IdentExpr:
+    case ast::NodeKind::FieldAccessExpr:
+    case ast::NodeKind::IndexExpr: break;
+    case ast::NodeKind::UnaryExpr:
+        // `*p` lee lo apuntado; `&x` y el resto no leen el lugar (el `&` lo
+        // juzga quien use la direccion).
+        if (static_cast<const ast::UnaryExpr *>(e)->op != ast::UnOp::Deref)
+            return;
+        break;
+    default: return;
+    }
+    if (accesses_through_borrow(e, borrow_checker_)) return;
+    borrow::Place place;
+    borrowed_place(e, borrow_checker_, place);
+    if (place.valid())
+        (void)borrow_checker_.on_owner_use(place, e->loc,
+                                           /*is_mutation=*/false);
 }
 
 void TypeChecker::check_call_arg_borrows_(const ast::CallExpr *e,
@@ -4120,7 +4233,7 @@ Type TypeChecker::type_from_node_impl(const ast::TypeNode *tn) const {
             // registra con nombre cualificado `lib.Box` (con punto), pero su
             // instancia se mangla dot-free (`lib_Box_i64`) para etiquetas
             // validas.  Sanitizar aqui para que el lookup del layout coincida.
-            lookup = mangle_sanitize(nt->name) + "_" + mangle_args(args);
+            lookup = generic_instance_name(nt->name, args);
         }
         // 1) Alias resolution.
         auto it_a = type_aliases_.find(lookup);
@@ -5287,6 +5400,10 @@ void TypeChecker::collect_globals() {
                  * asi que no puede saberlo; hay que preguntarlo. */
                 if (ft.kind == PrimitiveKind::OPTIONAL)
                     fsize = optional_layout(ft).bytes;
+                // Y un `Result` tampoco: el 24 fijo no cabia un valor de mas
+                // de una palabra y el campo pisaba al siguiente.
+                if (ft.kind == PrimitiveKind::RESULT)
+                    fsize = result_layout(ft).bytes;
                 /* La alineacion NO es el tamano.  Un `Result` mide veinticuatro
                  * -- tres palabras -- y se alinea a ocho; tomarla igual al
                  * tamano daba veinticuatro, que ni siquiera es potencia de dos,
@@ -6508,12 +6625,7 @@ void TypeChecker::collect_globals() {
             // metodos.  Importante: heredamos del super, asi que si la
             // clase no declara su propio dtor pero el super si lo tiene,
             // se considera destructible (el dtor del super correra).
-            for (const auto &mi : layout.methods) {
-                if (mi.is_destructor) {
-                    layout.has_destructor = true;
-                    break;
-                }
-            }
+            layout.has_destructor = find_destructor(layout.methods) != nullptr;
 
             // Sobrescribir entrada vacia pre-registrada con el layout
             // ya completo.
@@ -6530,6 +6642,7 @@ void TypeChecker::collect_globals() {
     // layout via .vxi, y el metodo se emite como funcion libre en ESTE modulo.
     // Coherencia (Vesta): permisivo; error duro solo en la colision real (mismo
     // nombre+aridad ya presente).
+    std::vector<PendingImplCheck> pending_impl_checks;
     for (const auto &decl : mod_.decls) {
         if (!decl) continue;
         const bool is_ext = decl->kind == ast::NodeKind::ExtensionDecl;
@@ -6617,25 +6730,28 @@ void TypeChecker::collect_globals() {
             dst->push_back(std::move(mi));
             close_method(*dst, slot, key, /*ctor_arity=*/!is_class_target);
         }
-        if (is_impl && !concept_name.empty())
+        if (is_impl && !concept_name.empty()) {
             impl_conformances_[key].insert(concept_name);
+            pending_impl_checks.push_back(PendingImplCheck{
+                decl.get(), util::InternedName::intern(key),
+                util::InternedName::intern(concept_name),
+                is_class_target ? PrimitiveKind::CLASS
+                                : PrimitiveKind::STRUCT});
+        }
     }
+    /* `impl C for X` PROMETE que X cumple C.  Se comprueba ahora, con todos
+     * los metodos del tipo ya juntos: antes se apuntaba y nadie lo miraba, asi
+     * que un `impl` de un concepto inexistente o incumplido pasaba callado. */
+    for (const PendingImplCheck &pc : pending_impl_checks)
+        check_impl_conformance(pc);
 
     // Fase 2b ownership: destructibilidad de STRUCTS (value-types).  Se computa
     // ANTES que la de clases para que una clase con un campo struct
     // destructible lo vea (incluido el dtor SINTETIZADO de un struct con
     // composicion).  Un struct es destructible si tiene `~Struct()` propio O un
-    // campo struct destructible.  @c struct_destructible se reusa abajo en el
-    // fixpoint de clase.  Tras esto se sintetiza el dtor implicito de los
-    // structs.
-    auto struct_destructible = [&](const std::string &n) -> bool {
-        auto it = struct_layouts_.find(n);
-        if (it == struct_layouts_.end()) return false;
-        if (it->second.has_destructible_field) return true;
-        for (const auto &m : it->second.methods)
-            if (m.is_destructor) return true;
-        return false;
-    };
+    // campo struct destructible (@c struct_needs_cleanup, que se reusa abajo
+    // en el fixpoint de clase).  Tras esto se sintetiza el dtor implicito de
+    // los structs.
     for (bool changed = true; changed;) {
         changed = false;
         for (auto &kv : struct_layouts_) {
@@ -6656,7 +6772,9 @@ void TypeChecker::collect_globals() {
                     break;
                 }
                 if (f.type.kind != PrimitiveKind::STRUCT) continue;
-                if (struct_destructible(f.type.struct_name)) {
+                const auto it_f = struct_layouts_.find(f.type.struct_name);
+                if (it_f != struct_layouts_.end() &&
+                    struct_needs_cleanup(it_f->second)) {
                     sl.has_destructible_field = true;
                     changed = true;
                     break;
@@ -6675,13 +6793,7 @@ void TypeChecker::collect_globals() {
         if (it_lay == struct_layouts_.end()) continue;
         StructLayout &lay = it_lay->second;
         if (!lay.has_destructible_field) continue;
-        bool has_dtor = false;
-        for (const auto &m : lay.methods)
-            if (m.is_destructor) {
-                has_dtor = true;
-                break;
-            }
-        if (has_dtor) continue; // el user ya declaro uno
+        if (struct_has_destructor(lay)) continue; // el user ya declaro uno
         auto dtor = std::make_unique<ast::ClassMethodDecl>();
         dtor->loc = sd->loc;
         dtor->name = kDestructorMethod;
@@ -6737,7 +6849,9 @@ void TypeChecker::collect_globals() {
                 // Fase 2b: un campo STRUCT destructible (con dtor propio o
                 // sintetizado) -> la clase lo libera en su dtor augmentado.
                 if (f.type.kind == PrimitiveKind::STRUCT) {
-                    if (struct_destructible(f.type.struct_name)) {
+                    const auto it_f = struct_layouts_.find(f.type.struct_name);
+                    if (it_f != struct_layouts_.end() &&
+                        struct_needs_cleanup(it_f->second)) {
                         cl.has_destructible_field = true;
                         changed = true;
                         break;
@@ -8095,8 +8209,8 @@ void TypeChecker::check_free_function_bodies() {
         /* En que namespace esta este cuerpo: es lo que la llamada uniforme
          * necesita para probar `<ns>__f` y NO los de los demas namespaces del
          * fichero, que desde aqui no estan en ambito. */
-        const std::string saved_ns_prefix = current_ns_prefix_;
-        current_ns_prefix_ = ns_prefix_of(fn->name);
+        const util::ScopedAssign<util::InternedName> ns_scope(
+            current_ns_prefix_, ns_prefix_of(fn->name));
         // Tambien empujamos un scope comptime nuevo para los locals del
         // macro body (para que find_comptime_local_mut los encuentre).
         if (fn->is_macro) push_comptime_scope();
@@ -8156,7 +8270,6 @@ void TypeChecker::check_free_function_bodies() {
         current_fn_is_macro_ = saved_is_macro;
         current_fn_is_vm_comptime_fn_ = saved_is_vm_ct;
         current_fn_is_noexcept_ = saved_noexcept;
-        current_ns_prefix_ = saved_ns_prefix;
         current_fn_return_type_ = saved_ret;
         pop_scope();
     }
@@ -8636,6 +8749,10 @@ void TypeChecker::check_class_method(const ClassLayout &cls,
         diags_.error(m->loc, "el constructor de '" + cls.name +
                                  "' no puede ser 'static'");
     }
+    /* El cuerpo esta en el namespace de su CLASE: sin esto la llamada
+     * uniforme no probaba `<ns>__f` y no veia las libres del namespace. */
+    const util::ScopedAssign<util::InternedName> ns_scope(
+        current_ns_prefix_, ns_prefix_of(cls.name));
 
     const bool saved_static = current_method_is_static_;
     current_method_is_static_ = m->is_static;
@@ -8714,6 +8831,9 @@ void TypeChecker::check_struct_method(const StructLayout &lay,
     // Vale igual para metodos normales, factorias `static` y constructores
     // (`u128(args)`): un constructor es un metodo void cuyo `this` es el buffer
     // a inicializar; no requiere trato especial en el chequeo del cuerpo.
+    /* El cuerpo esta en el namespace de su STRUCT (ver check_class_method). */
+    const util::ScopedAssign<util::InternedName> ns_scope(
+        current_ns_prefix_, ns_prefix_of(lay.name));
     const bool saved_static = current_method_is_static_;
     current_method_is_static_ = false;
 
@@ -9904,7 +10024,7 @@ void TypeChecker::check_var_decl(ast::VarDeclStmt *vd) {
         // Opcion B: auto-envolver init list anonimo en unique_box/shared_box.
         //   unique<Punto> p = {.x=10, .y=20};  ===>
         //   unique<Punto> p = unique_box({.x=10, .y=20});
-        // Anotamos target_type_name del init list para que el check
+        // Anotamos target_type del init list para que el check
         // del init list valide campos contra el struct destino y
         // devuelva un Type STRUCT (en vez de COUNT).
         if ((s.type.kind == PrimitiveKind::UNIQUE_PTR ||
@@ -9912,7 +10032,7 @@ void TypeChecker::check_var_decl(ast::VarDeclStmt *vd) {
             s.type.pointee && vd->init->kind == ast::NodeKind::InitListExpr &&
             s.type.pointee->kind == PrimitiveKind::STRUCT) {
             auto *il = static_cast<ast::InitListExpr *>(vd->init.get());
-            il->target_type_name = s.type.pointee->struct_name;
+            type_init_list_from_target(il, *s.type.pointee);
             // Sintetizar CallExpr(unique_box/shared_box, [init_list]).
             auto wrap = std::make_unique<ast::CallExpr>();
             wrap->loc = vd->init->loc;
@@ -9946,16 +10066,11 @@ void TypeChecker::check_var_decl(ast::VarDeclStmt *vd) {
         // Optional<Optional<i32>> o = Some(Some(42)) NO infiere el
         // inner Some como Optional<i32> (queda como Optional<i64> por
         // el literal 42).  Mismo patron que check_return ya hacia.
-        const Type saved_outer_opt = expected_optional_type_;
-        const Type saved_outer_result = expected_result_type_;
-        if (s.type.kind == PrimitiveKind::OPTIONAL) {
-            expected_optional_type_ = s.type;
-        } else if (s.type.kind == PrimitiveKind::RESULT) {
-            expected_result_type_ = s.type;
-        }
-        Type t = check_expr(vd->init.get());
-        expected_optional_type_ = saved_outer_opt;
-        expected_result_type_ = saved_outer_result;
+        Type t = check_value_for(vd->init.get(), s.type);
+        // Una lista ya se comprobo contra el tipo declarado: es de ese tipo.
+        if (vd->init->kind == ast::NodeKind::InitListExpr &&
+            t.kind != PrimitiveKind::COUNT)
+            t = s.type;
         if (pushed_expected_enum) pop_expected_enum();
         // Funciones de primera clase: `fn(...)->R f = nombre_funcion;`.  Si el
         // tipo declarado es FUNCTION y el init es un IdentExpr que resuelve a
@@ -10253,6 +10368,15 @@ void TypeChecker::check_var_decl(ast::VarDeclStmt *vd) {
         }
     }
 
+    /* A donde senala un puntero, si se sabe: `T* p = &arena[0]`.  Con eso
+     * `lend(p)` presta `arena[0]` y no la ranura de `p`, y `*p = v` escribe en
+     * un lugar que el comprobador reconoce.  Sin inicializador, o con uno que
+     * no se sabe, se BORRA lo que hubiera: un `p` de un ambito anterior con el
+     * mismo nombre no presta su procedencia al nuevo. */
+    if (s.type.kind == PrimitiveKind::PTR)
+        borrow_checker_.note_pointer_target(
+            vd->name, pointer_origin(vd->init.get(), borrow_checker_));
+
     // Ruta B (H2 move-only): `S b = a` donde `a` es un local y `S` es un
     // struct GESTIONADO (con `~Struct()` o un campo destructible) SIN
     // copy-hook `__clone__` es un MOVE: la fuente `a` queda invalidada (su
@@ -10263,15 +10387,7 @@ void TypeChecker::check_var_decl(ast::VarDeclStmt *vd) {
         auto it_sl = struct_layouts_.find(s.type.struct_name);
         if (it_sl != struct_layouts_.end()) {
             const StructLayout &sl = it_sl->second;
-            bool managed = sl.has_destructible_field;
-            if (!managed) {
-                for (const auto &mm : sl.methods)
-                    if (mm.is_destructor) {
-                        managed = true;
-                        break;
-                    }
-            }
-            if (managed && !sl.has_copy_hook) {
+            if (struct_needs_cleanup(sl) && !sl.has_copy_hook) {
                 auto *src = static_cast<ast::IdentExpr *>(vd->init.get());
                 // Solo locales (no campos/params globales): el move solo
                 // aplica a un binding que poseemos en este scope.
@@ -10550,16 +10666,7 @@ void TypeChecker::check_return(ast::ReturnStmt *s, const Type &fn_return_type) {
         // Sin esto, `return Err("lit")` infiere E como i64 (ptr del literal)
         // y rechaza con "Result<i32, i64> incompatible con Result<i32,
         // string>".
-        const Type saved_expected_result = expected_result_type_;
-        const Type saved_expected_optional = expected_optional_type_;
-        if (fn_return_type.kind == PrimitiveKind::RESULT) {
-            expected_result_type_ = fn_return_type;
-        } else if (fn_return_type.kind == PrimitiveKind::OPTIONAL) {
-            expected_optional_type_ = fn_return_type;
-        }
-        Type t = check_expr(s->value.get());
-        expected_result_type_ = saved_expected_result;
-        expected_optional_type_ = saved_expected_optional;
+        Type t = check_value_for(s->value.get(), fn_return_type);
         // Ownership escape-sensitive: retornar por valor un struct con un
         // closure capturador en un campo esta SOPORTADO (move-on-return).  El
         // lowering aloca el env en HEAP para ese struct escapante (en vez de
@@ -10579,6 +10686,15 @@ void TypeChecker::check_return(ast::ReturnStmt *s, const Type &fn_return_type) {
             s->value->kind == ast::NodeKind::IdentExpr) {
             auto *id = static_cast<ast::IdentExpr *>(s->value.get());
             (void)borrow_checker_.on_borrow_escape(id->name, s->loc, "return");
+        } else if (t.kind == PrimitiveKind::BORROW ||
+                   t.kind == PrimitiveKind::BORROW_MUT) {
+            /* Y el prestamo SIN NOMBRE, `return lend_mut(p)`: es la misma
+             * salida, y sin esto un prestamo de un local salia de la funcion
+             * sin que nadie lo mirara solo por no haberle puesto nombre. */
+            const borrow::Place lent =
+                lend_call_place(s->value.get(), borrow_checker_);
+            if (lent.valid())
+                (void)borrow_checker_.on_place_escape(lent, s->loc, "return");
         }
         if (fn_return_type.kind == PrimitiveKind::VOID) {
             // Inferencia del retorno de un lambda block-body sin tipo
@@ -10667,6 +10783,12 @@ void TypeChecker::check_return(ast::ReturnStmt *s, const Type &fn_return_type) {
 
 Type TypeChecker::check_expr(ast::Expr *e) {
     if (!e) return Type{};
+    /* Si quien contiene esta expresion ya juzga su uso (base de un campo o un
+     * indice, argumento de `lend`/`move`, destino de una asignacion), aqui no
+     * es una lectura.  Se consume ANTES de bajar, para que no la herede nadie
+     * de dentro. */
+    const bool use_judged = (e == use_judged_by_parent_);
+    if (use_judged) use_judged_by_parent_ = nullptr;
     Type t;
     switch (e->kind) {
     case ast::NodeKind::IntLitExpr: {
@@ -10743,28 +10865,9 @@ Type TypeChecker::check_expr(ast::Expr *e) {
         t = Type{PrimitiveKind::PTR};
         break;
     }
-    case ast::NodeKind::InitListExpr: {
-        auto *il = static_cast<ast::InitListExpr *>(e);
-        for (auto &el : il->elements) {
-            Type tx = check_expr(el.get());
-            el->result_type = tx;
-        }
-        // Si el desugar (Opcion B) anoto target_type_name desde el
-        // contexto (`unique<Punto> p = {.x=10, .y=20}`), devolvemos
-        // el Type STRUCT correspondiente para que unique_box/
-        // shared_box vea un tipo concreto en lugar de COUNT.
-        if (!il->target_type_name.empty() &&
-            struct_layouts_.find(il->target_type_name) !=
-                struct_layouts_.end()) {
-            t = Type{PrimitiveKind::STRUCT};
-            t.struct_name = il->target_type_name;
-            break;
-        }
-        // Sin anotacion: tipo dependiente del contexto.  El caller
-        // (check_var_decl, lower_var_decl para arrays, etc.) refina.
-        t = Type{PrimitiveKind::COUNT};
+    case ast::NodeKind::InitListExpr:
+        t = check_init_list(static_cast<ast::InitListExpr *>(e));
         break;
-    }
     case ast::NodeKind::NullLitExpr:
         // 'null' se modela como void*; el chequeo de asignacion
         // permite asignar void* a cualquier T* sin error.  Se
@@ -10775,6 +10878,9 @@ Type TypeChecker::check_expr(ast::Expr *e) {
         t = check_ident(static_cast<ast::IdentExpr *>(e));
         break;
     case ast::NodeKind::FieldAccessExpr:
+        // `s.f` lee `s.f`, no `s` entero: la base no es una lectura propia.
+        use_judged_by_parent_ =
+            static_cast<ast::FieldAccessExpr *>(e)->base.get();
         t = check_field_access(static_cast<ast::FieldAccessExpr *>(e));
         break;
     case ast::NodeKind::BinaryExpr:
@@ -10862,6 +10968,8 @@ Type TypeChecker::check_expr(ast::Expr *e) {
         t = check_call(static_cast<ast::CallExpr *>(e));
         break;
     case ast::NodeKind::IndexExpr:
+        // `a[1]` lee `a[1]`, no `a` entero.
+        use_judged_by_parent_ = static_cast<ast::IndexExpr *>(e)->base.get();
         t = check_index(static_cast<ast::IndexExpr *>(e));
         break;
     case ast::NodeKind::ThisExpr:
@@ -11054,17 +11162,17 @@ Type TypeChecker::check_expr(ast::Expr *e) {
         } else {
             t = Type{};
         }
-        // Compound literal `(Struct){...}`: el operando es un InitListExpr y el
-        // target un struct.  No es una conversion sino la CONSTRUCCION inline
-        // de un struct; anotamos el nombre del struct en el init-list y
-        // devolvemos el tipo struct.  Funciona con templates (t ya esta
-        // monomorphizado).
-        if (t.kind == PrimitiveKind::STRUCT && ce->operand &&
+        // Compound literal `(Struct){...}` / `(T[N]){...}`: el operando es un
+        // InitListExpr.  No es una conversion sino la CONSTRUCCION inline;
+        // la lista toma su tipo del cast como de cualquier otro destino.
+        // Funciona con templates (t ya esta monomorphizado).
+        if ((t.kind == PrimitiveKind::STRUCT ||
+             t.kind == PrimitiveKind::ARRAY) &&
+            ce->operand &&
             ce->operand->kind == ast::NodeKind::InitListExpr) {
             auto *il = static_cast<ast::InitListExpr *>(ce->operand.get());
-            il->target_type_name = t.struct_name;
-            for (auto &el : il->elements)
-                (void)check_expr(el.get());
+            type_init_list_from_target(il, t);
+            t = check_init_list(il);
             il->result_type = t;
             e->result_type = t;
             return t;
@@ -11198,6 +11306,7 @@ Type TypeChecker::check_expr(ast::Expr *e) {
     default: t = Type{}; break;
     }
     e->result_type = t;
+    if (!use_judged) check_place_read_(e);
     return t;
 }
 
@@ -11370,8 +11479,7 @@ Type TypeChecker::check_new(ast::NewExpr *e) {
         // #cross-module-generics: sanitizar el punto del nombre cualificado
         // (`lib.Box`) para que el mangled (`lib_Box_i64`) coincida con el
         // layout y sea una etiqueta valida.
-        e->class_name =
-            mangle_sanitize(e->class_name) + "_" + mangle_args(targs);
+        e->class_name = generic_instance_name(e->class_name, targs);
         e->is_mangled = true;
     }
 
@@ -11599,7 +11707,7 @@ Type TypeChecker::check_index(ast::IndexExpr *e) {
     // puntero/array).  Nota: solo LECTURA en C-2; @c base[i] = v
     // (index-set) no esta cubierto aqui.
     {
-        const Type it = e->index ? e->index->result_type : Type{};
+        Type it = e->index ? e->index->result_type : Type{};
         const std::vector<ClassMethodInfo> *methods = nullptr;
         if (bt.kind == PrimitiveKind::CLASS && !bt.struct_name.empty()) {
             auto it_cls = class_layouts_.find(bt.struct_name);
@@ -11613,10 +11721,16 @@ Type TypeChecker::check_index(ast::IndexExpr *e) {
         if (methods) {
             for (const auto &m : *methods) {
                 if (m.is_constructor || m.is_static) continue;
-                if (m.name != "__index__") continue;
+                if (m.name != kIndexGetMethod) continue;
                 if (m.param_types.size() != 1) continue;
-                if (!types_assignable(m.param_types[0], it)) continue;
-                e->overload_method = "__index__";
+                /* El indice es un ARGUMENTO: cabe donde cabria en una llamada
+                 * escrita -- un literal en un `usize`, una subclase donde se
+                 * pide la base --.  Con la regla a mano, `s[0]` no encontraba
+                 * `__index__(usize)` y `s.__index__(0)` si. */
+                if (!e->index || !arg_fits_param(e->index.get(),
+                                                 m.param_types[0], it))
+                    continue;
+                e->overload_method = kIndexGetMethod;
                 return m.return_type;
             }
         }
@@ -11675,6 +11789,17 @@ Type TypeChecker::check_index(ast::IndexExpr *e) {
         diags_.error(e->loc, "'[]' no puede indexar void*");
         return Type{};
     }
+    /* Un prestamo cubre EXACTAMENTE lo prestado: `borrow<T[N]>` se indexa
+     * hasta N, y `borrow<T>` es un elemento, sin nada que indexar -- un indice
+     * sobre el llegaria a memoria que el prestamo no cubre, y el comprobador
+     * la creeria libre. */
+    const bool is_borrow =
+        bt.kind == PrimitiveKind::BORROW || bt.kind == PrimitiveKind::BORROW_MUT;
+    if (is_borrow && bt.pointee->kind != PrimitiveKind::ARRAY) {
+        diags_.diag(e->loc, DiagLevel::ERR, "VX2152",
+                    {written_type_name(bt), written_type_name(*bt.pointee)});
+        return Type{};
+    }
     if (e->index) {
         const Type it = e->index->result_type;
         if (!is_integral(it.kind)) {
@@ -11684,6 +11809,8 @@ Type TypeChecker::check_index(ast::IndexExpr *e) {
                     written_type_name(it));
         }
     }
+    // Del prestamo de un array sale su ELEMENTO, no el array.
+    if (is_borrow && bt.pointee->pointee) return *bt.pointee->pointee;
     return *bt.pointee;
 }
 
@@ -12996,7 +13123,8 @@ bool TypeChecker::arg_fits_param(ast::Expr *arg, const Type &tp, Type &ta) {
            struct_ptr_upcast_ok(tp, ta);
 }
 
-std::string TypeChecker::ns_prefix_of(const std::string &mangled) const {
+util::InternedName
+TypeChecker::ns_prefix_of(const std::string &mangled) const {
     /* El prefijo sale del NAMESPACE al que el aplanado dijo que pertenece, no
      * de restarle al nombre su parte publica.
      *
@@ -13005,19 +13133,18 @@ std::string TypeChecker::ns_prefix_of(const std::string &mangled) const {
      * justo en la funcion donde se escriben casi todas las llamadas.  El
      * namespace, en cambio, lo lleva igual. */
     const auto it = declared_ns_symbols_.find(mangled);
-    if (it == declared_ns_symbols_.end()) return std::string();
-    const std::string &dotted = it->second.first;
-    if (dotted.empty()) return std::string();
-    std::string out;
-    out.reserve(dotted.size() + 4);
-    for (const char c : dotted) {
-        if (c == '.')
-            out += "__";
-        else
-            out.push_back(c);
+    if (it == declared_ns_symbols_.end()) {
+        /* Una INSTANCIA de generica no se declaro: nace al usarla.  Esta en
+         * el namespace de su plantilla. */
+        const auto inst =
+            instance_template_of_.find(util::InternedName::intern(mangled));
+        return inst != instance_template_of_.end()
+                   ? ns_prefix_of(inst->second.str())
+                   : util::InternedName();
     }
-    out += "__";
-    return out;
+    // El prefijo lo arma quien arma los nombres aplanados, no una copia aqui.
+    return util::InternedName::intern(
+        namespace_symbol_prefix(it->second.first));
 }
 
 void TypeChecker::report_redefinition(const std::string &mangled,
@@ -13517,6 +13644,7 @@ void TypeChecker::check_call_arg(ast::Expr *arg, const Type &tp, size_t idx,
                                  const std::string &what, ParamDir dir,
                                  bool by_ref, const Type *known) {
     if (!arg) return;
+    type_init_list_from_target(arg, tp);
     Type ta = known ? *known : check_expr(arg);
     /* Un parametro de SALIDA por referencia: el parametro es `T*` -- lo
      * convirtio la firma -- pero quien llama escribe el HUECO, no su direccion.
@@ -14160,7 +14288,7 @@ bool TypeChecker::rewrite_type_qualified_func_ref(
      * de lo que la introspeccion ya enumera junto a los metodos --. */
     const std::string *chosen = nullptr;
     const ufcs::Candidates *free_fns = ufcs_.find(
-        ufcs_key_type(recv), fa->field_name, current_ns_prefix_, &chosen);
+        ufcs_key_type(recv), fa->field_name, current_ns_prefix_.str(), &chosen);
     const bool has_free = free_fns != nullptr && !free_fns->empty() &&
                           chosen != nullptr && !chosen->empty();
 
@@ -15523,6 +15651,22 @@ Type TypeChecker::check_assign_impl(ast::AssignExpr *e) {
         auto *tid = static_cast<ast::IdentExpr *>(e->target.get());
         (void)borrow_checker_.on_owner_use(tid->name, e->loc,
                                            /*is_mutation=*/true);
+        // Reapuntar un puntero cambia su procedencia (o la borra).
+        const Symbol *ps = lookup(tid->name);
+        if (ps != nullptr && ps->type.kind == PrimitiveKind::PTR)
+            borrow_checker_.note_pointer_target(
+                tid->name, pointer_origin(e->value.get(), borrow_checker_));
+    } else if (!accesses_through_borrow(e->target.get(), borrow_checker_)) {
+        /* Y escribir en un LUGAR -- `arena[0] = v`, `s.f = v`, `*p = v` -- es
+         * la misma violacion si ese lugar esta prestado: el prestamo se ata a
+         * la memoria, no al nombre por el que se escribio.  Por eso `*p` con
+         * `p = &arena[0]` choca con un `lend_mut(arena)`.  Se exceptua escribir
+         * A TRAVES del propio prestamo, que es justo para lo que existe. */
+        borrow::Place place;
+        borrowed_place(e->target.get(), borrow_checker_, place);
+        if (place.valid())
+            (void)borrow_checker_.on_owner_use(place, e->loc,
+                                               /*is_mutation=*/true);
     }
 
     // validacion de escape ilegal para clases con destructor.
@@ -15581,6 +15725,7 @@ Type TypeChecker::check_assign_impl(ast::AssignExpr *e) {
                         auto *fa = static_cast<ast::FieldAccessExpr *>(
                             e->target.get());
                         if (fa && fa->base) {
+                            use_judged_by_parent_ = fa->base.get(); // destino
                             Type tb = check_expr(fa->base.get());
                             if (tb.kind == PrimitiveKind::CLASS) {
                                 auto it_outer =
@@ -15624,13 +15769,7 @@ Type TypeChecker::check_assign_impl(ast::AssignExpr *e) {
             if (tv_peek.kind == PrimitiveKind::STRUCT) {
                 auto it_s = struct_layouts_.find(tv_peek.struct_name);
                 if (it_s != struct_layouts_.end()) {
-                    bool s_has_dtor = false;
-                    for (const auto &m : it_s->second.methods)
-                        if (m.is_destructor) {
-                            s_has_dtor = true;
-                            break;
-                        }
-                    if (s_has_dtor) {
+                    if (struct_has_destructor(it_s->second)) {
                         // relajacion Fase 2b/3 (move-on-store): si el target es
                         // un FieldAccess y el CONTENEDOR (clase o struct) es
                         // destructible, copiar un struct-con-dtor entero a su
@@ -15645,6 +15784,7 @@ Type TypeChecker::check_assign_impl(ast::AssignExpr *e) {
                             auto *fa = static_cast<ast::FieldAccessExpr *>(
                                 e->target.get());
                             if (fa && fa->base) {
+                                use_judged_by_parent_ = fa->base.get();
                                 Type tb = check_expr(fa->base.get());
                                 if (tb.kind == PrimitiveKind::CLASS) {
                                     auto it_outer =
@@ -15707,7 +15847,7 @@ Type TypeChecker::check_assign_impl(ast::AssignExpr *e) {
             if (it_cls != class_layouts_.end()) {
                 Type ft_static = check_field_access(fa);
                 fa->result_type = ft_static;
-                const Type tv = check_expr(e->value.get());
+                const Type tv = check_value_for(e->value.get(), ft_static);
                 if (ft_static.kind != PrimitiveKind::COUNT &&
                     tv.kind != PrimitiveKind::COUNT &&
                     !types_assignable(ft_static, tv)) {
@@ -15736,7 +15876,8 @@ Type TypeChecker::check_assign_impl(ast::AssignExpr *e) {
                 if (is_sf) {
                     Type ft_static = check_field_access(fa);
                     fa->result_type = ft_static;
-                    const Type tv = check_expr(e->value.get());
+                    const Type tv =
+                        check_value_for(e->value.get(), ft_static);
                     if (ft_static.kind != PrimitiveKind::COUNT &&
                         tv.kind != PrimitiveKind::COUNT &&
                         !types_assignable(ft_static, tv)) {
@@ -15757,6 +15898,9 @@ Type TypeChecker::check_assign_impl(ast::AssignExpr *e) {
         // `set_<field_name>` (con parametro tipado).  En ese caso
         // marcamos @c property_kind=2 y devolvemos el tipo del
         // parametro como tipo del lvalue.
+        // La base del destino no se lee: se escribe su campo, y eso lo juzga
+        // la comprobacion de escritura de mas arriba.
+        use_judged_by_parent_ = fa->base.get();
         const Type bt_pre = check_expr(fa->base.get());
         fa->base->result_type = bt_pre;
         if (bt_pre.kind == PrimitiveKind::CLASS) {
@@ -15792,7 +15936,7 @@ Type TypeChecker::check_assign_impl(ast::AssignExpr *e) {
                                             ? Type{}
                                             : setter->param_types.front();
                         fa->result_type = pt;
-                        const Type tv = check_expr(e->value.get());
+                        const Type tv = check_value_for(e->value.get(), pt);
                         // Una subclase cabe en el parametro de un `set`,
                         // igual que en cualquier otro parametro.
                         if (tv.kind != PrimitiveKind::COUNT &&
@@ -15828,6 +15972,7 @@ Type TypeChecker::check_assign_impl(ast::AssignExpr *e) {
         }
         // Camino normal: campo de struct/clase.  El check_field_access
         // re-evalua base() pero el lookup esta cacheado en su layout.
+        use_judged_by_parent_ = fa->base.get();
         Type ft = check_field_access(fa);
         fa->result_type = ft;
         // Lambda-literal a un campo fn: propagar la firma esperada al lambda
@@ -15837,7 +15982,7 @@ Type TypeChecker::check_assign_impl(ast::AssignExpr *e) {
             propagate_fn_type_to_lambda(
                 static_cast<ast::LambdaExpr *>(e->value.get()), ft);
         }
-        Type tv = check_expr(e->value.get());
+        Type tv = check_value_for(e->value.get(), ft);
         // Promocion de nombre desnudo de funcion: `o.f = doblar` cuando el
         // campo es cfn/fn -> tratar el nombre como &doblar.
         tv = maybe_promote_func_ref(e->value.get(), ft, tv);
@@ -15933,6 +16078,7 @@ Type TypeChecker::check_assign_impl(ast::AssignExpr *e) {
         // del value.  Si NO existe el dunder y @c base es CLASS/STRUCT
         // (no array/ptr/string nativo), emitimos un error claro.
         if (ix->base && !ix->is_range) {
+            use_judged_by_parent_ = ix->base.get(); // destino, no lectura
             const Type bt = check_expr(ix->base.get());
             ix->base->result_type = bt;
             const std::vector<ClassMethodInfo> *methods = nullptr;
@@ -15953,27 +16099,29 @@ Type TypeChecker::check_assign_impl(ast::AssignExpr *e) {
             }
             if (base_is_class_or_struct) {
                 // Tipo del indice y del value para validar la firma.
-                const Type it =
-                    ix->index ? check_expr(ix->index.get()) : Type{};
+                Type it = ix->index ? check_expr(ix->index.get()) : Type{};
                 if (ix->index) ix->index->result_type = it;
-                const Type vt = check_expr(e->value.get());
+                Type vt = check_expr(e->value.get());
                 e->value->result_type = vt;
                 const ClassMethodInfo *setter = nullptr;
                 if (methods) {
                     for (const auto &m : *methods) {
                         if (m.is_constructor || m.is_static) continue;
-                        if (m.name != "__index_set__") continue;
+                        if (m.name != kIndexSetMethod) continue;
                         if (m.param_types.size() != 2) continue;
-                        if (!types_assignable(m.param_types[0], it)) continue;
-                        if (!types_assignable(m.param_types[1], vt) &&
-                            !class_is_assignable(m.param_types[1], vt))
+                        // Indice y valor son ARGUMENTOS (ver `__index__`).
+                        if (!ix->index || !arg_fits_param(ix->index.get(),
+                                                          m.param_types[0], it))
+                            continue;
+                        if (!arg_fits_param(e->value.get(), m.param_types[1],
+                                            vt))
                             continue;
                         setter = &m;
                         break;
                     }
                 }
                 if (setter) {
-                    ix->index_set_method = "__index_set__";
+                    ix->index_set_method = kIndexSetMethod;
                     ix->result_type = setter->param_types[1];
                     return setter->param_types[1];
                 }
@@ -15988,9 +16136,14 @@ Type TypeChecker::check_assign_impl(ast::AssignExpr *e) {
                 return Type{PrimitiveKind::VOID};
             }
         }
+        use_judged_by_parent_ = ix->base.get(); // destino, no lectura
         const Type tt = check_index(ix);
         ix->result_type = tt;
-        const Type tv = check_expr(e->value.get());
+        // Un `borrow<T[N]>` compartido se lee por indice, no se escribe.
+        if (ix->base && ix->base->result_type.kind == PrimitiveKind::BORROW)
+            diags_.diag(e->loc, DiagLevel::ERR, "VX2153",
+                        {written_type_name(ix->base->result_type)});
+        const Type tv = check_value_for(e->value.get(), tt);
         // BugFix P1-B1: ademas de types_assignable (igualdad estricta o
         // coercion numerica), aceptar subtipado CLASS<->Interface via
         // class_is_assignable.  Tambien aceptar null literal asignable
@@ -16020,7 +16173,11 @@ Type TypeChecker::check_assign_impl(ast::AssignExpr *e) {
             const Type tt =
                 check_unary(un); // valida el deref y devuelve pointee
             un->result_type = tt;
-            const Type tv = check_expr(e->value.get());
+            if (un->operand &&
+                un->operand->result_type.kind == PrimitiveKind::BORROW)
+                diags_.diag(e->loc, DiagLevel::ERR, "VX2153",
+                            {written_type_name(un->operand->result_type)});
+            const Type tv = check_value_for(e->value.get(), tt);
             if (tt.kind != PrimitiveKind::COUNT &&
                 tv.kind != PrimitiveKind::COUNT && !types_assignable(tt, tv)) {
                 diags_.error(e->loc, std::string("tipo del valor (") +
@@ -16128,7 +16285,7 @@ Type TypeChecker::check_assign_impl(ast::AssignExpr *e) {
             static_cast<ast::LambdaExpr *>(e->value.get()), s->type);
     }
 
-    Type tv = check_expr(e->value.get());
+    Type tv = check_value_for(e->value.get(), s->type);
     // Funciones de primera clase: `g_fp = nombre_funcion;` (asignacion a una
     // variable de tipo FUNCTION).  Promociona el nombre desnudo a cfn o lambda
     // segun el destino (fn_is_raw del target); el lowering emite LABEL_ADDR
@@ -17910,19 +18067,17 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
     if (!e->type_args.empty() &&
         (is_builtin_concept(id->name) ||
          concepts().find(id->name) != concepts().end())) {
-        if (e->type_args.size() != 1) {
-            diags_.error(e->loc,
-                         "concepto '" + id->name +
-                             "' como predicado: se esperaba 1 type arg, "
-                             "recibidos " +
-                             std::to_string(e->type_args.size()));
-        }
-        if (!e->args.empty()) {
-            diags_.error(e->loc, "concepto '" + id->name +
-                                     "' como predicado no toma argumentos "
-                                     "runtime (solo el type-arg <T>)");
-        }
-        (void)type_from_node(e->type_args[0].get());
+        /* El tipo comprobado y, detras, los argumentos del concepto: tantos
+         * como parametros declara. */
+        const size_t want = concept_type_param_count(*this, id->name);
+        if (e->type_args.size() != want)
+            diags_.diag(e->loc, DiagLevel::ERR, "VX2137",
+                        {id->name, std::to_string(want),
+                         std::to_string(e->type_args.size())});
+        if (!e->args.empty())
+            diags_.diag(e->loc, DiagLevel::ERR, "VX2138", {id->name});
+        for (const auto &ta : e->type_args)
+            (void)type_from_node(ta.get());
         const Type rt{PrimitiveKind::BOOL};
         e->result_type = rt;
         return rt;
@@ -19211,25 +19366,21 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
         }
         // M7 / Opcion B: si el arg es un InitListExpr anonimo y el
         // contexto (return type de la funcion actual) es unique<T>/
-        // shared<T> con T struct, anotar target_type_name antes del
-        // check_expr para que el init list se resuelva contra T.
-        // Cubre `return unique_box({.x=10, .y=20})` y similares fuera
-        // de var-decl (donde check_var_decl ya anota).
+        // shared<T> con T struct, anotar el destino antes del check_expr
+        // para que el init list se resuelva contra T.  Cubre
+        // `return unique_box({.x=10, .y=20})` y similares fuera de var-decl
+        // (donde check_var_decl ya anota).
         if (e->args[0]->kind == ast::NodeKind::InitListExpr) {
             auto *il = static_cast<ast::InitListExpr *>(e->args[0].get());
-            if (il->target_type_name.empty() &&
+            if (il->target_type.kind == PrimitiveKind::VOID &&
                 current_fn_return_type_.kind ==
                     (id->name == "unique_box" ? PrimitiveKind::UNIQUE_PTR
                                               : PrimitiveKind::SHARED_PTR) &&
                 current_fn_return_type_.pointee &&
                 current_fn_return_type_.pointee->kind ==
-                    PrimitiveKind::STRUCT &&
-                struct_layouts_.find(
-                    current_fn_return_type_.pointee->struct_name) !=
-                    struct_layouts_.end()) {
-                il->target_type_name =
-                    current_fn_return_type_.pointee->struct_name;
-            }
+                    PrimitiveKind::STRUCT)
+                type_init_list_from_target(il,
+                                           *current_fn_return_type_.pointee);
         }
         Type vt = check_expr(e->args[0].get());
         if (vt.kind == PrimitiveKind::VOID || vt.kind == PrimitiveKind::COUNT) {
@@ -19583,6 +19734,8 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
             e->result_type = Type{};
             return Type{};
         }
+        // El uso del argumento lo juzga R3 (`on_owner_move`), abajo.
+        use_judged_by_parent_ = e->args[0].get();
         Type at = check_expr(e->args[0].get());
         if (at.kind != PrimitiveKind::UNIQUE_PTR &&
             at.kind != PrimitiveKind::SHARED_PTR &&
@@ -19661,20 +19814,19 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
     if (id->name == "lend" || id->name == "lend_mut") {
         const bool is_mut = (id->name == "lend_mut");
         if (e->args.size() != 1) {
-            diags_.error(e->loc,
-                         id->name +
-                             ": se esperaba 1 argumento (el owner a prestar)");
+            diags_.diag(e->loc, DiagLevel::ERR, "VX2145",
+                        {id->name, "1", std::to_string(e->args.size())});
             e->result_type = Type{};
             return Type{};
         }
         if (e->args[0]->kind != ast::NodeKind::IdentExpr) {
-            diags_.error(e->args[0]->loc,
-                         id->name + ": el argumento debe ser un identificador "
-                                    "de variable (no una expresion)");
+            diags_.diag(e->args[0]->loc, DiagLevel::ERR, "VX2146", {id->name});
             e->result_type = Type{};
             return Type{};
         }
         auto *owner_id = static_cast<ast::IdentExpr *>(e->args[0].get());
+        // El uso del dueno lo juzgan R1/R2 al tomar el prestamo, abajo.
+        use_judged_by_parent_ = e->args[0].get();
         Type vt = check_expr(e->args[0].get());
         // bug3: rechazar lend(local_plain) en compile-time.
         // El modelo zero-cost del borrow checker requiere que el slot
@@ -19707,14 +19859,8 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
                                     !vt.is_virtual);
         if (!owner_is_host && vt.kind != PrimitiveKind::COUNT &&
             vt.kind != PrimitiveKind::VOID) {
-            diags_.error(
-                e->loc,
-                id->name + ": el owner '" + owner_id->name +
-                    "' es un local plain.  El borrow checker zero-cost" +
-                    " requiere que el owner viva en host heap: declara" + " '" +
-                    owner_id->name + "' como `unique<" + written_type_name(vt) +
-                    "> " + owner_id->name + " = unique_box(...)`" +
-                    " en lugar de un local primitivo.");
+            diags_.diag(e->loc, DiagLevel::ERR, "VX2147",
+                        {id->name, owner_id->name, written_type_name(vt)});
             e->result_type = Type{};
             return Type{};
         }
@@ -19732,51 +19878,34 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
             // lend_mut(borrow_mut_var) -> mut reborrow.  Validamos
             // que el reborrow_mut solo se aplique a borrow_mut, no
             // a borrow (upgrade shared->mut prohibido).
-            if (is_mut && vt.kind == PrimitiveKind::BORROW) {
-                diags_.error(
-                    e->loc,
-                    "lend_mut: no se puede crear borrow_mut a partir de borrow "
-                    "shared (no se puede 'subir' la mutabilidad)");
-            }
+            if (is_mut && vt.kind == PrimitiveKind::BORROW)
+                diags_.diag(e->loc, DiagLevel::ERR, "VX2148", {owner_id->name});
             inner = *vt.pointee;
-        } else if ((vt.kind == PrimitiveKind::PTR ||
-                    vt.kind == PrimitiveKind::ARRAY) &&
-                   !vt.is_virtual && vt.pointee) {
-            // Raw host pointer (T* o T[N] host): el inner es el pointee
-            // (T), no el ptr mismo.  Semantica: lend(host_ptr_T) crea
-            // borrow<T> que apunta al objeto pointed-to.
+        } else if (vt.kind == PrimitiveKind::ARRAY && !vt.is_virtual &&
+                   vt.pointee) {
+            /* Un array se presta ENTERO: `borrow<T[N]>`.  Prestar solo su
+             * primer elemento dejaba un `borrow<T>` que se podia indexar a
+             * memoria que el prestamo no cubria, y el comprobador creia
+             * prestado un elemento cuando se estaba usando el array. */
+            inner = vt;
+        } else if (vt.kind == PrimitiveKind::PTR && !vt.is_virtual &&
+                   vt.pointee) {
+            // Un puntero crudo presta LO APUNTADO (T), no la ranura del
+            // puntero: `lend(p)` da `borrow<T>`.
             inner = *vt.pointee;
         } else {
             inner = vt;
         }
         Type rt = Type::make_borrow(inner, is_mut);
-        // F4 - propagar borrow_owner_source para lifetime tracking.
-        // Si lend de un IdentExpr que es borrow: heredamos el source
-        // (transitivo via reborrow).  Sino: el id es el owner directo.
-        // IMPORTANTE: usamos @c borrow_owner_source de la expresion
-        // (campo dedicado para tracking), NO @c Type::struct_name
-        // que es parte de la identidad del tipo y romperia equality.
-        if (vt.kind == PrimitiveKind::BORROW ||
-            vt.kind == PrimitiveKind::BORROW_MUT) {
-            e->borrow_owner_source =
-                borrow_checker_.root_owner_of(owner_id->name);
-            if (e->borrow_owner_source.empty()) {
-                e->borrow_owner_source = owner_id->name;
-            }
-        } else {
-            e->borrow_owner_source = owner_id->name;
-        }
-        // Registrar borrow en el borrow checker.  Para reborrow
-        // (lend de un borrow_var), trazamos al owner root.
-        std::string root_owner = owner_id->name;
-        if (vt.kind == PrimitiveKind::BORROW ||
-            vt.kind == PrimitiveKind::BORROW_MUT) {
-            // root_owner = lookup_root_owner(owner_id->name)
-            // El borrow checker mantiene borrows_ con owner real.
-            // Necesitamos exponer ese lookup.
-            root_owner = borrow_checker_.root_owner_of(owner_id->name);
-            if (root_owner.empty()) root_owner = owner_id->name;
-        }
+        /* El lugar prestado: el de un represtamo es el de su origen, el de un
+         * puntero de procedencia conocida es lo apuntado.  Lo resuelve
+         * @ref lent_place, el mismo que usa el `return` para juzgar si escapa.
+         *
+         * @c borrow_owner_source lleva la RAIZ para el seguimiento de vida entre
+         * llamadas (F4); va en su campo y no en @c Type::struct_name, que es
+         * parte de la identidad del tipo y romperia la igualdad. */
+        const borrow::Place lent = lent_place(owner_id, vt, borrow_checker_);
+        e->borrow_owner_source = lent.root.str();
         // F3 ext - suspend semantics: si la fuente es un borrow_mut
         // activo, suspendemos su estado antes de @c on_lend para que
         // R1 (exclusividad mutable) no falle.  El estado se restaura
@@ -19811,8 +19940,8 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
          *
          * Y sin texto con que citarlo: no lo tiene, y el catalogo ya sabe
          * decirlo por su sitio (VX2029). */
-        (void)borrow_checker_.on_lend_anon(root_owner, anon_borrow_key(e),
-                                           e->loc, is_mut, current_stmt_idx_);
+        (void)borrow_checker_.on_lend_anon(lent, anon_borrow_key(e), e->loc,
+                                           is_mut, current_stmt_idx_);
         // F3 ext - marcar el binding pendiente como reborrow.  El
         // nombre real del reborrower se establece en check_var_decl;
         // alli leemos @c borrow_owner_source y comparamos con la
@@ -19831,17 +19960,16 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
     // borrow sea mut.
     if (id->name == "read_borrow") {
         if (e->args.size() != 1) {
-            diags_.error(e->loc,
-                         "read_borrow: se esperaba 1 argumento (un borrow)");
+            diags_.diag(e->loc, DiagLevel::ERR, "VX2145",
+                        {id->name, "1", std::to_string(e->args.size())});
             e->result_type = Type{};
             return Type{};
         }
         Type bt = check_expr(e->args[0].get());
         if (bt.kind != PrimitiveKind::BORROW &&
             bt.kind != PrimitiveKind::BORROW_MUT) {
-            diags_.error(e->args[0]->loc, "read_borrow: el argumento debe ser "
-                                          "borrow<T> o borrow_mut<T>, no '" +
-                                              written_type_name(bt) + "'");
+            diags_.diag(e->args[0]->loc, DiagLevel::ERR, "VX2149",
+                        {written_type_name(bt)});
             e->result_type = Type{};
             return Type{};
         }
@@ -19854,26 +19982,24 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
     // Solo admite borrow_mut<T>.
     if (id->name == "write_borrow") {
         if (e->args.size() != 2) {
-            diags_.error(
-                e->loc,
-                "write_borrow: se esperaba 2 argumentos (borrow_mut, value)");
+            diags_.diag(e->loc, DiagLevel::ERR, "VX2145",
+                        {id->name, "2", std::to_string(e->args.size())});
             e->result_type = Type{PrimitiveKind::VOID};
             return Type{PrimitiveKind::VOID};
         }
         Type bt = check_expr(e->args[0].get());
         Type vt = check_expr(e->args[1].get());
-        if (bt.kind != PrimitiveKind::BORROW_MUT) {
-            diags_.error(e->args[0]->loc, "write_borrow: el primer argumento "
-                                          "debe ser borrow_mut<T>, no '" +
-                                              written_type_name(bt) + "'");
-        }
-        if (bt.pointee && !types_assignable(*bt.pointee, vt)) {
-            diags_.error(
-                e->args[1]->loc,
-                "write_borrow: tipo del valor (" + written_type_name(vt) +
-                    ") incompatible con el tipo del borrow (" +
-                    written_type_name(bt.pointee ? *bt.pointee : Type{}) + ")");
-        }
+        // Un prestamo compartido se dice por lo que es: su error no es el
+        // tipo, es que solo lee.
+        if (bt.kind == PrimitiveKind::BORROW)
+            diags_.diag(e->args[0]->loc, DiagLevel::ERR, "VX2153",
+                        {written_type_name(bt)});
+        else if (bt.kind != PrimitiveKind::BORROW_MUT)
+            diags_.diag(e->args[0]->loc, DiagLevel::ERR, "VX2150",
+                        {written_type_name(bt)});
+        if (bt.pointee && !types_assignable(*bt.pointee, vt))
+            diags_.diag(e->args[1]->loc, DiagLevel::ERR, "VX2151",
+                        {written_type_name(vt), written_type_name(*bt.pointee)});
         const Type rt{PrimitiveKind::VOID};
         e->result_type = rt;
         return rt;
@@ -19884,7 +20010,8 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
     // operacion lee directamente el campo refcount del control block.
     if (id->name == "use_count") {
         if (e->args.size() != 1) {
-            diags_.error(e->loc, "use_count: se esperaba 1 argumento");
+            diags_.diag(e->loc, DiagLevel::ERR, "VX2145",
+                        {id->name, "1", std::to_string(e->args.size())});
             e->result_type = Type{};
             return Type{};
         }

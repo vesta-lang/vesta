@@ -28,6 +28,8 @@
 #include "ir/synthetic_symbols.h" // el nombre de los cuerpos de macro
 #include "vx/comptime/comptime_introspect.h"
 #include "util/os/thread_slot.h" // el estado por hilo NO va en thread_local
+#include "util/scoped_assign.h" // el modo macro, restaurado al salir
+#include "vx/type_classify.h" // si un struct tiene destructor
 #include "ir/ir_type_info.h" // vocabulario UNICO de anchura/clase de un IrType
 #include "vx/diag/diag_catalog.h" // lo que lee una persona sale del catalogo
 #include <algorithm>
@@ -101,120 +103,6 @@ void Lowering::emit_struct_field_defaults(ir::IrValueId base_addr,
         if (fi.bit_width > 0) {
             // Bit field con default: por ahora se ignora (raro); el zero-fill
             // deja el campo a 0.  Un default de bit field requeriria RMW.
-            continue;
-        }
-        emit_store_typed(v_addr, v_val, ir_ft, line);
-    }
-}
-
-void Lowering::emit_struct_init_fields(ir::IrValueId base_addr,
-                                       const StructLayout &lay,
-                                       ast::InitListExpr *il, uint32_t line) {
-    // Aplicar primero los valores por defecto de los campos; el init-list
-    // explicito de abajo sobrescribe los campos que liste (DSE limpia lo
-    // muerto).
-    emit_struct_field_defaults(base_addr, lay, line);
-    for (size_t i = 0; i < il->elements.size(); ++i) {
-        const StructFieldInfo *fi = nullptr;
-        if (il->is_designated) {
-            const std::string &fname = il->field_names[i];
-            fi = find_field(lay, fname);
-            if (!fi) {
-                error_at(il->loc, "lowering: campo '" + fname +
-                                      "' no existe en struct '" + lay.name +
-                                      "'");
-                continue;
-            }
-        } else {
-            if (i >= lay.fields.size()) {
-                error_at(il->loc,
-                         "lowering: init list excede campos del struct");
-                break;
-            }
-            fi = &lay.fields[i];
-        }
-        // Direccion del campo destino (base + offset).
-        ir::IrValueId v_addr = base_addr;
-        if (fi->offset > 0) {
-            ir::IrValueId v_off =
-                emit_const(ir::IrType::I64, (uint64_t)fi->offset, line);
-            v_addr = fn_->new_value(ir::IrType::PTR);
-            // `base + off` sigue apuntando a la MISMA memoria que `base`: la
-            // naturaleza (host / VM) se hereda.  Sin esto, un struct en host
-            // inicializado con una init-list anidada escribia sus campos con
-            // `mov` (VM) sobre una direccion host -> basura.
-            fn_->values[v_addr].memory = fn_->values[base_addr].memory;
-            ir::IrInstr ad{};
-            ad.op = ir::IrOp::ADD;
-            ad.type = ir::IrType::I64;
-            ad.dst = v_addr;
-            ad.operands = {base_addr, v_off};
-            ad.source_line = line;
-            emit(current_block_, std::move(ad));
-        }
-        ast::Expr *elem = il->elements[i].get();
-        // Campo de tipo STRUCT inicializado con un init-list ANIDADO
-        // (`{.min = {.x=.., .y=..}}` o `{.min = Punto{...}}`): se rellena
-        // RECURSIVAMENTE in-place en la direccion del campo.  lower_expr no
-        // baja un InitListExpr como valor, por eso hay que tratarlo aqui.
-        if (fi->type.kind == PrimitiveKind::STRUCT &&
-            elem->kind == ast::NodeKind::InitListExpr) {
-            auto it_sl = tc_.struct_layouts().find(fi->type.struct_name);
-            if (it_sl == tc_.struct_layouts().end()) {
-                error_at(il->loc, "lowering: struct '" + fi->type.struct_name +
-                                      "' sin layout (init anidado)");
-                continue;
-            }
-            emit_struct_init_fields(v_addr, it_sl->second,
-                                    static_cast<ast::InitListExpr *>(elem),
-                                    line);
-            continue;
-        }
-        ir::IrValueId v_val = lower_expr(elem);
-        if (v_val == ir::IR_NO_VALUE) continue;
-        // Campo AGREGADO inline (struct/array) desde una EXPRESION (otra
-        // variable, llamada, ...): copia memberwise desde la direccion origen
-        // (no un STORE escalar, que guardaria la direccion como puntero).
-        // Un campo de tipo `@overlay struct` NO es un agregado inline: guarda
-        // el HANDLE de la vista (8 bytes) -> STORE escalar del puntero (abajo).
-        /* Una lambda (`fn(...) -> R`) es otro agregado inline: 16 bytes en el
-         * campo, el par {fn_addr, env}, y su valor es la DIRECCION del par.
-         * Un `cfn(...)` no, que son 8 bytes crudos y se guardan tal cual. */
-        if ((fi->type.kind == PrimitiveKind::STRUCT &&
-             !type_is_overlay(fi->type)) ||
-            fi->type.kind == PrimitiveKind::ARRAY ||
-            (fi->type.kind == PrimitiveKind::FUNCTION && !fi->type.fn_is_raw)) {
-            uint64_t sz = size_of_type(fi->type);
-            if (fi->type.kind == PrimitiveKind::FUNCTION) sz = 16;
-            if (sz == 0 && fi->type.kind == PrimitiveKind::STRUCT) {
-                auto it_sl = tc_.struct_layouts().find(fi->type.struct_name);
-                if (it_sl != tc_.struct_layouts().end())
-                    sz = (uint64_t)it_sl->second.size_bytes;
-            }
-            if (sz == 0) sz = 8;
-            emit_memberwise_copy(v_addr, v_val, sz, line);
-            if (fi->type.kind == PrimitiveKind::STRUCT) {
-                auto it_sl = tc_.struct_layouts().find(fi->type.struct_name);
-                if (it_sl != tc_.struct_layouts().end() &&
-                    it_sl->second.has_copy_hook) {
-                    emit_struct_method_on_host_field(
-                        v_addr, fi->type.struct_name,
-                        fi->type.struct_name + "____clone__", line);
-                }
-            }
-            continue;
-        }
-        const ir::IrType ir_ft = ir_type_from_primitive(fi->type.kind);
-        const bool elem_is_literal =
-            elem->kind == ast::NodeKind::IntLitExpr ||
-            elem->kind == ast::NodeKind::FloatLitExpr ||
-            elem->kind == ast::NodeKind::BoolLitExpr ||
-            elem->kind == ast::NodeKind::CharLitExpr ||
-            elem->kind == ast::NodeKind::NullLitExpr;
-        v_val = cast_if_needed(v_val, fn_->values[v_val].type, ir_ft, line,
-                               /*is_explicit=*/elem_is_literal);
-        if (fi->bit_width > 0) {
-            error_at(il->loc, "lowering: init list no soporta bit fields aun");
             continue;
         }
         emit_store_typed(v_addr, v_val, ir_ft, line);
@@ -733,14 +621,8 @@ void Lowering::lower_struct_methods(ast::StructDecl *sd, ir::IrModule &out) {
             const_cast<TypeChecker &>(tc_).comptime_runtime().register_macro(
                 fn.name, ComptimeRuntime::kPcUnresolved);
         }
-        const bool prev_fn_is_macro = current_fn_is_macro_;
-        current_fn_is_macro_ = is_comptime_ctor;
-        struct MacroGuard {
-            bool *flag;
-            bool saved;
-
-            ~MacroGuard() { *flag = saved; }
-        } macro_guard{&current_fn_is_macro_, prev_fn_is_macro};
+        const util::ScopedAssign<bool> macro_guard(current_fn_is_macro_,
+                                                   is_comptime_ctor);
 
         // B.3 contract: si el struct es una instanciacion generica
         // (`atomic_i64` viene de `struct atomic<T>`), marcar la IrFunction con
@@ -979,13 +861,7 @@ void Lowering::lower_struct_methods(ast::StructDecl *sd, ir::IrModule &out) {
                     auto it_inner =
                         tc_.struct_layouts().find(f.type.struct_name);
                     if (it_inner == tc_.struct_layouts().end()) continue;
-                    bool inner_has_dtor = false;
-                    for (const auto &im : it_inner->second.methods)
-                        if (im.is_destructor) {
-                            inner_has_dtor = true;
-                            break;
-                        }
-                    if (!inner_has_dtor) continue;
+                    if (!struct_has_destructor(it_inner->second)) continue;
                     const ir::IrValueId faddr = emit_field_addr(
                         &fn, current_block_, this_dtor, f.offset, m->loc.line);
                     ir::IrInstr cd{};

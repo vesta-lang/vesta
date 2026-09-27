@@ -323,39 +323,10 @@ void Lowering::lower_static_local(ast::VarDeclStmt *vd, const Type &sem_type) {
                                         ? ir::IR_NO_VALUE
                                         : lower_expr(vd->init.get());
         if (v_src != ir::IR_NO_VALUE) {
-            const bool src_is_host = fn_->values[v_src].is_host_ptr();
-            const uint64_t qwords =
-                (static_cast<uint64_t>(agg_lay->size_bytes) + 7) / 8;
-            for (uint64_t qi = 0; qi < qwords; ++qi) {
-                const ir::IrValueId v_off = emit_const(
-                    ir::IrType::I64, static_cast<int64_t>(qi * 8), ln);
-                const ir::IrValueId v_s = fn_->new_value(ir::IrType::PTR);
-                fn_->values[v_s].set_host(src_is_host);
-                {
-                    ir::IrInstr ad{};
-                    ad.op = ir::IrOp::ADD;
-                    ad.type = ir::IrType::I64;
-                    ad.dst = v_s;
-                    ad.operands = {v_src, v_off};
-                    ad.source_line = ln;
-                    emit(current_block_, std::move(ad));
-                }
-                const ir::IrValueId v_w =
-                    emit_load_typed(v_s, ir::IrType::I64, ln);
-                const ir::IrValueId v_d = fn_->new_value(ir::IrType::PTR);
-                fn_->values[v_d].memory =
-                    ir::MemorySpace::HostByConstruction; // gdata = memoria host
-                {
-                    ir::IrInstr ad{};
-                    ad.op = ir::IrOp::ADD;
-                    ad.type = ir::IrType::I64;
-                    ad.dst = v_d;
-                    ad.operands = {var_addr, v_off};
-                    ad.source_line = ln;
-                    emit(current_block_, std::move(ad));
-                }
-                emit_store_typed(v_d, v_w, ir::IrType::I64, ln);
-            }
+            // `var_addr` es gdata (memoria host, ver emit_addr): la copia
+            // hereda esa marca en cada trozo.
+            emit_memberwise_copy(var_addr, v_src,
+                                 static_cast<uint64_t>(agg_lay->size_bytes), ln);
             emit_struct_field_defaults(var_addr, *agg_lay, ln,
                                        /*only_non_comptime=*/true);
         } else {

@@ -1,0 +1,11 @@
+namespace ejemplos.borrow_err_index_single;
+
+// `borrow<T>` es UN elemento: un indice sobre el alcanzaria memoria que el
+// prestamo no cubre (VX2152).  Para indexar se presta el array entero:
+// `lend_mut(arena)` da `borrow_mut<i64[4]>` (ver 124).
+i32 main() {
+	i64[4]          arena = {1, 2, 3, 4};
+	i64*            p     = &arena[0];
+	borrow_mut<i64> b     = lend_mut(p);
+	return (i32)b[1];
+}

@@ -34,14 +34,12 @@ static int g_checks = 0, g_fail = 0;
 
 /// @brief `raiz` a secas.
 static Place P(const char *root) {
-    Place p;
-    p.root = root;
-    return p;
+    return Place::of_root(root);
 }
 /// @brief `raiz.campo`.
 static Place F(const char *root, const char *field) {
     Place p = P(root);
-    p.path.push_back(PlaceStep::of_field(field));
+    p.path.push_back(PlaceStep::of_field(util::InternedName::intern(field)));
     return p;
 }
 

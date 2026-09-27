@@ -1,0 +1,13 @@
+namespace ejemplos.borrow_err_read_while_mut;
+
+// Mientras vive un prestamo EXCLUSIVO, lo prestado solo se toca a traves de el:
+// tambien leerlo por su nombre es un error (VX2032).  Leer otro sitio del mismo
+// array si vale (ver 124), y leer despues del ultimo uso del prestamo tambien.
+i32 main() {
+	i64[4]          arena = {1, 2, 3, 4};
+	i64*            p     = &arena[0];
+	borrow_mut<i64> b     = lend_mut(p);
+	i64             v     = arena[0];
+	write_borrow(b, v + 40);
+	return 0;
+}

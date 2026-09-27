@@ -25,7 +25,49 @@ i32 minimum3(borrow<i32> a, borrow<i32> b, borrow<i32> c) {
 	return m;
 }
 
+// Un array se presta ENTERO: `lend(arr)` da `borrow<i64[4]>`, que se indexa
+// hasta 4.  Un `borrow<i64>` es un solo elemento y no se indexa: lo que un
+// indice alcanzara fuera de el seria memoria que el prestamo no cubre.
+i64 total(borrow<i64[4]> v) {
+	i64 t = 0_i64;
+	for (i32 i = 0_i32; i < 4; i++) t += v[i];
+	return t;
+}
+
+// Escribir por indice pide el prestamo exclusivo.
+void duplicar(borrow_mut<i64[4]> v) {
+	for (i32 i = 0_i32; i < 4; i++) v[i] = v[i] * 2;
+}
+
+// Los prestamos de arrays, completos: leer, escribir por indice, y copiar el
+// array entero a traves del prestamo con read_borrow / write_borrow.
+i32 prestamos_de_arrays() {
+	i64[4] datos = {1, 2, 3, 4};
+	if (total(lend(datos)) != 10) return 1;
+	duplicar(lend_mut(datos)); // {2, 4, 6, 8}
+	if (datos[3] != 8) return 2;
+
+	i64[4]             otro = {10, 20, 30, 40};
+	borrow_mut<i64[4]> m    = lend_mut(datos);
+	write_borrow(m, otro); // copia los cuatro, no la direccion
+	i64[4] copia = read_borrow(m);
+	copia[0]     = 0; // la copia es suya: no toca `datos`
+	if (datos[0] != 10 || copia[1] != 20) return 3;
+
+	// Con UN elemento prestado en exclusiva, los demas se siguen leyendo y
+	// escribiendo: el prestamo cubre `datos[0]`, no el array.
+	i64*            p   = &datos[0];
+	borrow_mut<i64> uno = lend_mut(p);
+	datos[1]            = datos[2] + 1; // 31
+	write_borrow(uno, datos[1] + 11);
+	if (datos[0] != 42) return 4;
+	return 0;
+}
+
 i32 main() {
+	i32 arr = prestamos_de_arrays();
+	if (arr != 0) return 90 + arr;
+
 	unique<i32> x = unique_box(3);
 	unique<i32> y = unique_box(4);
 	unique<i32> z = unique_box(7);

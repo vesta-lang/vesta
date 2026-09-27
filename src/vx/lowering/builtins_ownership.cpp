@@ -131,29 +131,9 @@ bool Lowering::try_lower_ownership_builtins(ast::CallExpr *e, Builtin b,
         fn_->values[v_box].memory = ir::MemorySpace::HostByConstruction;
         if (payload_is_struct_value || payload_is_smart_wrapper) {
             // El payload es un PTR a un buffer (slot del wrapper / struct
-            // value): copiar qword-a-qword al box.  Mismo mecanismo que
+            // value): copiar sus bytes al box.  Mismo mecanismo que
             // unique_box con struct/smart-wrapper.
-            const uint64_t qwords = (box_size + 7) / 8;
-            for (uint64_t i = 0; i < qwords; ++i) {
-                const ir::IrValueId v_off = emit_const(
-                    ir::IrType::I64, static_cast<int64_t>(i * 8), e->loc.line);
-                const ir::IrValueId v_src_p = fn_->new_value(ir::IrType::PTR);
-                fn_->values[v_src_p].memory = fn_->values[v_payload].memory;
-                {
-                    ir::IrInstr ad{};
-                    ad.op = ir::IrOp::ADD;
-                    ad.type = ir::IrType::I64;
-                    ad.dst = v_src_p;
-                    ad.operands = {v_payload, v_off};
-                    ad.source_line = e->loc.line;
-                    emit(current_block_, std::move(ad));
-                }
-                const ir::IrValueId v_word =
-                    emit_load_typed(v_src_p, ir::IrType::I64, e->loc.line);
-                const ir::IrValueId v_dst_p =
-                    emit_ptr_add(v_box, v_off, e->loc.line);
-                emit_store_typed(v_dst_p, v_word, ir::IrType::I64, e->loc.line);
-            }
+            emit_memberwise_copy(v_box, v_payload, box_size, e->loc.line);
             // Refcount inc-on-copy: si el payload es un shared<T> que viene de
             // COPIAR otra variable shared (IdentExpr, no shared_box/move), el
             // box es un DUEnO adicional del control block -> incrementar el
@@ -408,18 +388,21 @@ bool Lowering::try_lower_ownership_builtins(ast::CallExpr *e, Builtin b,
          * Lo que toca es COPIAR los bytes.  El tamano sale del layout del
          * struct; si no se conoce, no se inventa: se avisa y no se emite una
          * escritura que corromperia el valor. */
-        if (inner.kind == PrimitiveKind::STRUCT) {
-            auto it_l = tc_.struct_layouts().find(inner.struct_name);
-            if (it_l == tc_.struct_layouts().end()) {
+        /* Y lo mismo cualquier otro agregado cuyo valor es la direccion de su
+         * buffer: un `borrow_mut<T[N]>` escribia la direccion del array fuente
+         * sobre el primer elemento del destino. */
+        if (is_inline_aggregate(inner)) {
+            const size_t bytes = size_of_type(inner);
+            if (bytes == 0) {
                 return builtin_error(
                     e->loc,
                     "write_borrow: no se conoce la disposicion de '" +
-                        inner.struct_name + "'; no se puede copiar el valor",
+                        tc_.written_type_name(inner) +
+                        "'; no se puede copiar el valor",
                     out_value);
             }
             const ir::IrValueId v_n = emit_const(
-                ir::IrType::I64, static_cast<uint64_t>(it_l->second.size_bytes),
-                e->loc.line);
+                ir::IrType::I64, static_cast<uint64_t>(bytes), e->loc.line);
             fn_->values[v_v].memory = ir::MemorySpace::HostByConstruction;
             ir::IrInstr mc{};
             mc.op = ir::IrOp::MEMCPY;
@@ -466,7 +449,7 @@ bool Lowering::lower_owner_box(ast::CallExpr *e, Builtin b,
             out_value);
     }
     // Construccion IN-PLACE para `unique<Punto> p = {.x=10, .y=20}`:
-    // si el arg es un InitListExpr con target_type_name anotado
+    // si el arg es un InitListExpr con su struct destino anotado
     // (desugar de Opcion B en check_var_decl), alocamos host heap
     // PRIMERO y escribimos los campos DIRECTO sobre el host_ptr.
     // Cero memcpy stack -> heap.  Coste = solo los STOREs del init
@@ -477,9 +460,9 @@ bool Lowering::lower_owner_box(ast::CallExpr *e, Builtin b,
     // casos donde el arg ya es un PTR a struct construido.
     if (is_unique_box && e->args[0]->kind == ast::NodeKind::InitListExpr) {
         auto *il = static_cast<ast::InitListExpr *>(e->args[0].get());
-        if (!il->target_type_name.empty()) {
+        if (il->target_type.kind == PrimitiveKind::STRUCT) {
             const auto &layouts = tc_.struct_layouts();
-            auto it_lay = layouts.find(il->target_type_name);
+            auto it_lay = layouts.find(il->target_type.struct_name);
             if (it_lay != layouts.end()) {
                 const StructLayout &lay = it_lay->second;
                 // 1. Slot del unique<T> Tier 1 (16 bytes).  M7:
@@ -506,66 +489,10 @@ bool Lowering::lower_owner_box(ast::CallExpr *e, Builtin b,
                     ins.source_line = e->loc.line;
                     emit(current_block_, std::move(ins));
                 }
-                // 3. STOREs por campo directo al host_ptr.  Soporta
-                //    designated (.x=10) y posicional ({10, 20}).
-                for (size_t i = 0; i < il->elements.size(); ++i) {
-                    // Encontrar el StructFieldInfo correspondiente.
-                    const StructFieldInfo *fld = nullptr;
-                    if (il->is_designated && i < il->field_names.size()) {
-                        const std::string &fname = il->field_names[i];
-                        fld = find_field(lay, fname);
-                        if (!fld) {
-                            error_at(il->elements[i]->loc,
-                                     "init list: campo '" + fname +
-                                         "' no existe en struct '" +
-                                         il->target_type_name + "'");
-                            continue;
-                        }
-                    } else {
-                        if (i >= lay.fields.size()) {
-                            error_at(il->elements[i]->loc,
-                                     "init list: demasiados elementos para "
-                                     "struct '" +
-                                         il->target_type_name + "'");
-                            continue;
-                        }
-                        fld = &lay.fields[i];
-                    }
-                    // Lower el valor.
-                    const ir::IrValueId v_val =
-                        lower_expr(il->elements[i].get());
-                    if (v_val == ir::IR_NO_VALUE) continue;
-                    const ir::IrType ft =
-                        ir_type_from_primitive(fld->type.kind);
-                    // Cast si hace falta (literal int -> i32 del field,
-                    // etc.).
-                    const ir::IrType vt_from = fn_->values[v_val].type;
-                    const ir::IrValueId v_casted = cast_if_needed(
-                        v_val, vt_from, ft, il->elements[i]->loc.line,
-                        /*is_explicit=*/true);
-                    // Calcular addr destino = v_host + fld->offset.
-                    ir::IrValueId v_dst = v_host;
-                    if (fld->offset > 0) {
-                        const ir::IrValueId v_off = emit_const(
-                            ir::IrType::I64, static_cast<int64_t>(fld->offset),
-                            e->loc.line);
-                        const ir::IrValueId v_addr =
-                            fn_->new_value(ir::IrType::PTR);
-                        fn_->values[v_addr].memory =
-                            ir::MemorySpace::HostByConstruction;
-                        ir::IrInstr ad{};
-                        ad.op = ir::IrOp::ADD;
-                        ad.type = ir::IrType::I64;
-                        ad.dst = v_addr;
-                        ad.operands = {v_host, v_off};
-                        ad.source_line = e->loc.line;
-                        emit(current_block_, std::move(ad));
-                        v_dst = v_addr;
-                    }
-                    // STORE val at [v_dst].
-                    emit_store_typed(v_dst, v_casted, ft,
-                                     il->elements[i]->loc.line);
-                }
+                // 3. Los campos, directo sobre el host_ptr: el mismo relleno
+                //    que cualquier otra lista (ceros, vptr, defaults, listas
+                //    anidadas, campos de bits).
+                emit_struct_fill_from_init_list(v_host, lay, il, e->loc.line);
                 // 4. STORE host_ptr al slot+0 del unique<T>.
                 emit_store_typed(v_slot, v_host, ir::IrType::I64, e->loc.line);
                 // 5. Y nada mas: la ranura es UNA palabra.  Aqui se escribia
@@ -683,49 +610,10 @@ bool Lowering::lower_owner_box(ast::CallExpr *e, Builtin b,
                 ins.source_line = e->loc.line;
                 emit(current_block_, std::move(ins));
             }
-            // Copy qword-by-qword (size redondeado hacia arriba a
-            // multiplos de 8 bytes; el ultimo qword puede tener
-            // padding pero no afecta correctness porque escribimos
-            // sobre RAW_ALLOC zero-init y leemos desde el slot
-            // ALLOCA que tiene tamano >= size_bytes).
-            const uint64_t qwords = (payload_size + 7) / 8;
-            for (uint64_t i = 0; i < qwords; ++i) {
-                const ir::IrValueId v_off = emit_const(
-                    ir::IrType::I64, static_cast<int64_t>(i * 8), e->loc.line);
-                const ir::IrValueId v_src_p = fn_->new_value(ir::IrType::PTR);
-                {
-                    ir::IrInstr ad{};
-                    ad.op = ir::IrOp::ADD;
-                    ad.type = ir::IrType::I64;
-                    ad.dst = v_src_p;
-                    ad.operands = {v_payload, v_off};
-                    ad.source_line = e->loc.line;
-                    emit(current_block_, std::move(ad));
-                }
-                const ir::IrValueId v_word = fn_->new_value(ir::IrType::I64);
-                {
-                    ir::IrInstr ld{};
-                    ld.op = ir::IrOp::LOAD;
-                    ld.type = ir::IrType::I64;
-                    ld.dst = v_word;
-                    ld.operands = {v_src_p};
-                    ld.source_line = e->loc.line;
-                    emit(current_block_, std::move(ld));
-                }
-                const ir::IrValueId v_dst_p = fn_->new_value(ir::IrType::PTR);
-                fn_->values[v_dst_p].memory =
-                    ir::MemorySpace::HostByConstruction;
-                {
-                    ir::IrInstr ad{};
-                    ad.op = ir::IrOp::ADD;
-                    ad.type = ir::IrType::I64;
-                    ad.dst = v_dst_p;
-                    ad.operands = {v_payload_ptr, v_off};
-                    ad.source_line = e->loc.line;
-                    emit(current_block_, std::move(ad));
-                }
-                emit_store_typed(v_dst_p, v_word, ir::IrType::I64, e->loc.line);
-            }
+            // Copiar los bytes EXACTOS: redondear a palabra escribia hasta 7
+            // bytes detras de la reserva de `payload_size`.
+            emit_memberwise_copy(v_payload_ptr, v_payload, payload_size,
+                                 e->loc.line);
             v_to_store = v_payload_ptr;
         } else if (payload_t != ir::IrType::PTR || payload_is_cfn ||
                    payload_is_raw_ptr) {
@@ -1135,7 +1023,8 @@ bool Lowering::lower_borrow_of(ast::CallExpr *e, Builtin b,
     // Bypass: lookup directo cuando el arg es IdentExpr y la var
     // esta address-taken (lo cual el scan_address_taken garantiza
     // que sea verdad para `lend(local)` en owner plain).
-    if (e->args[0]->kind == ast::NodeKind::IdentExpr) {
+    if (e->args[0]->kind == ast::NodeKind::IdentExpr &&
+        !lend_value_is_address(owner_t)) {
         auto *id = static_cast<ast::IdentExpr *>(e->args[0].get());
         if (address_taken_locals_.count(id->name)) {
             const ir::IrValueId v = lookup(id->name);

@@ -3517,42 +3517,6 @@ bool Parser::looks_like_cast() const noexcept {
     }
 }
 
-bool Parser::looks_like_compound_literal() const noexcept {
-    // Precondicion: current_ es '('.  Patron inequivoco: `( IDENT [<...>] ) {`.
-    Lexer &mut_lex = const_cast<Lexer &>(lex_);
-    size_t off = 0;
-    const Token &name_tok = mut_lex.peek_at(off);
-    if (name_tok.kind != TokenKind::IDENTIFIER) return false;
-    // Solo un NOMBRE DE STRUCT declarado dispara el compound literal; asi
-    // `match (val) {` / `(x) {` con `x`/`val` no-struct NO se confunden.
-    if (declared_structs_.count(name_tok.lexeme) == 0) return false;
-    ++off;
-    // Argumentos genericos opcionales `<...>` balanceados (>> = dos >).
-    if (mut_lex.peek_at(off).kind == TokenKind::LT) {
-        int depth = 1;
-        ++off;
-        const size_t MAXL = 64;
-        while (depth > 0 && off < MAXL) {
-            TokenKind k = mut_lex.peek_at(off).kind;
-            if (k == TokenKind::END_OF_FILE) return false;
-            if (k == TokenKind::LT)
-                ++depth;
-            else if (k == TokenKind::GT)
-                --depth;
-            else if (k == TokenKind::SHR) {
-                depth -= 2;
-                if (depth < 0) return false;
-            }
-            ++off;
-        }
-        if (depth != 0) return false;
-    }
-    // Debe seguir ')' y despues '{'.
-    if (mut_lex.peek_at(off).kind != TokenKind::RPAREN) return false;
-    ++off;
-    return mut_lex.peek_at(off).kind == TokenKind::LBRACE;
-}
-
 // ---------------------------------------------------------------------------
 // Direccion de un parametro: `in` / `out` / `inout` delante del tipo.
 //
@@ -5028,11 +4992,13 @@ std::unique_ptr<ast::TypeAliasDecl> Parser::parse_typedef_decl() {
                 }
                 const bool is_from = (current_.lexeme == "from");
                 (void)consume(); // 'from'|'to'
-                if (!starts_type()) {
-                    error_here("se esperaba un tipo tras 'from'/'to'");
-                    break;
-                }
+                /* Aqui SOLO puede ir un tipo, asi que decide el parser de
+                 * tipos (que ya dice "se esperaba un tipo").  `starts_type`
+                 * pregunta otra cosa -- si empieza una DECLARACION, y pide un
+                 * nombre detras del tipo --, y con `usize;` decia que no: solo
+                 * pasaban los primitivos. */
                 auto tn = parse_type_node();
+                if (!tn) break;
                 (void)expect(
                     TokenKind::SEMICOLON,
                     "se esperaba ';' al final de 'explicit from/to T'");
@@ -5883,6 +5849,7 @@ std::unique_ptr<ast::EnumDecl> Parser::parse_enum_decl() {
         return nullptr;
     }
     e->name = consume().lexeme;
+    declared_nominal_types_.insert(util::InternedName::intern(e->name));
 
     // L2.3: generics opcionales `<T>`, `<K, V>` tras el nombre del enum.
     // Mismo patron que parse_class_decl: cada parametro es un identificador
@@ -6683,6 +6650,10 @@ void Parser::parse_struct_body_(ast::StructDecl &sd, bool is_overlay) {
             gvar->loc = f.loc;
             gvar->name = s->name + "__" + f.name;
             gvar->type = vxgen::clone_type_with_subst(f.type.get());
+            // Y su valor inicial: sin el, `static i32 nivel = 3;` valia 0 y
+            // nadie lo decia.
+            if (f.default_init)
+                gvar->init = vxgen::clone_expr(f.default_init.get());
             gvar->is_public = s->is_public;
             pending_before_decls_.push_back(std::move(gvar));
         }
@@ -7008,6 +6979,7 @@ std::unique_ptr<ast::ClassDecl> Parser::parse_class_decl() {
         return nullptr;
     }
     c->name = consume().lexeme;
+    declared_nominal_types_.insert(util::InternedName::intern(c->name));
 
     // Generics: parametros de tipo opcionales `<T>`, `<K, V>`.
     // Cada parametro es un identificador simple; la clase se trata
@@ -7727,17 +7699,15 @@ std::unique_ptr<ast::ConceptDecl> Parser::parse_concept_decl() {
     }
 
     // Disambiguar BLOQUE (stmts comptime) vs ESTRUCTURAL (firmas de metodo).
-    // Estructural: el primer miembro es `<tipo> <ident> ( ... ) ;`.
+    // Estructural: el primer miembro es `<tipo> <ident> ( ... )`, con el TIPO
+    // saltado entero -- mirando un solo token, `Optional<E> next();` se tomaba
+    // por un bloque --.
     Lexer &ml = const_cast<Lexer &>(lex_);
-    const Token &a0 = ml.peek_at(0); // primer token del cuerpo
-    const Token &a1 = ml.peek_at(1);
-    const Token &a2 = ml.peek_at(2);
-    const bool a0_type_start =
-        (primitive_kind_from_token(a0.kind) != PrimitiveKind::COUNT) ||
-        a0.kind == TokenKind::KW_VOID || a0.kind == TokenKind::IDENTIFIER;
-    const bool is_structural = a0_type_start &&
-                               a1.kind == TokenKind::IDENTIFIER &&
-                               a2.kind == TokenKind::LPAREN;
+    const size_t after_type = peek_skip_type(0);
+    const bool is_structural =
+        after_type != 0 &&
+        ml.peek_at(after_type).kind == TokenKind::IDENTIFIER &&
+        ml.peek_at(after_type + 1).kind == TokenKind::LPAREN;
     (void)consume(); // '{'
 
     if (is_structural) {

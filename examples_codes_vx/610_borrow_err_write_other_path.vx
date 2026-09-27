@@ -1,0 +1,14 @@
+namespace ejemplos.borrow_err_write_other_path;
+
+// El prestamo se ata a la MEMORIA, no al nombre.  `b` presta `arena[0]` a
+// traves de `p`; escribir ese mismo sitio por `q`, otro puntero con la misma
+// procedencia, mientras `b` vive es la violacion de siempre (VX2031).
+i32 main() {
+	i64[4]          arena = {1, 2, 3, 4};
+	i64*            p     = &arena[0];
+	i64*            q     = p;
+	borrow_mut<i64> b     = lend_mut(p);
+	*q                    = 7;
+	write_borrow(b, 40);
+	return 0;
+}

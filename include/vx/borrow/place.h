@@ -67,6 +67,8 @@
 #include <string>
 #include <vector>
 
+#include "util/name_pool.h" // raices y campos, internados
+
 namespace vx {
 namespace borrow {
 
@@ -103,15 +105,15 @@ struct PlaceStep {
     };
 
     Kind kind = Kind::Field;
-    /// Nombre del campo.  Solo con @c Kind::Field.
-    std::string field;
+    /// Nombre del campo, internado.  Solo con @c Kind::Field.
+    util::InternedName field;
     /// El indice.  Solo con @c Kind::ConstIndex.
     int64_t index = 0;
 
-    static PlaceStep of_field(std::string name) {
+    static PlaceStep of_field(util::InternedName name) {
         PlaceStep s;
         s.kind = Kind::Field;
-        s.field = std::move(name);
+        s.field = name;
         return s;
     }
     static PlaceStep of_const_index(int64_t n) {
@@ -146,10 +148,22 @@ struct PlaceStep {
  * llamada, un temporal --, y entonces no hay lugar que registrar.
  */
 struct Place {
-    std::string root;
+    /// La variable raiz, internada: dos lugares se comparan por identidad y
+    /// copiar uno cuesta un puntero, no una cadena.
+    util::InternedName root;
     std::vector<PlaceStep> path;
 
     bool valid() const noexcept { return !root.empty(); }
+
+    /// @brief El lugar que es la raiz entera, sin camino.
+    /// @param name Nombre de la variable tal como llega del arbol; se interna
+    ///             aqui, una vez, y no en cada sitio que construye un lugar.
+    /// @return El lugar `name`.
+    static Place of_root(const std::string &name) {
+        Place p;
+        p.root = util::InternedName::intern(name);
+        return p;
+    }
 
     /// @brief Como se escribe para el usuario: `p.a[2]`.
     ///

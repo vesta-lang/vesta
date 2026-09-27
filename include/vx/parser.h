@@ -833,12 +833,41 @@ class Parser {
     [[nodiscard]] bool looks_like_cast() const noexcept;
 
     /**
-     * @brief Detecta un compound literal C99: `(Tipo){...}` o
-     *        `(Tipo<args>){...}`.  Precondicion: @c current_ es '('.  Es
-     *        inequivoco (un `(expr){` no tiene otro significado), asi que
-     *        acepta un nombre de tipo aunque @c looks_like_cast lo rechace.
+     * @brief Si en la posicion @p at de lo que viene empieza un TIPO, donde
+     *        acaba; sin consumir nada.
+     *
+     * Salta el nombre (cualificado o no), sus argumentos de tipo anidados
+     * (`<...>`, cerrando tambien con `>>`) y los sufijos `*`, `[...]`, `?`.
+     *
+     * @param at Posicion del primer token (0 = el siguiente).
+     * @return La posicion del primer token tras el tipo, o 0 si ahi no
+     *         empieza un tipo.
      */
-    [[nodiscard]] bool looks_like_compound_literal() const noexcept;
+    [[nodiscard]] size_t peek_skip_type(size_t at) const;
+
+    /**
+     * @brief Si el token en @p at empieza un tipo que se CONOCE como tipo:
+     *        un primitivo, `void`, un struct, clase, enum, alias o newtype ya
+     *        declarados, un parametro de tipo en ambito, o `ns.` de un
+     *        namespace importado.
+     *
+     * @ref peek_skip_type acepta cualquier nombre, porque en su sitio ya se
+     * sabe que va un tipo.  Donde un nombre tambien podria ser una variable
+     * -- `(a[3]) {` es `while (a[3]) {` --, esto es lo que decide.
+     *
+     * @param at Posicion del token (0 = el siguiente).
+     * @return true si ahi empieza un tipo conocido.
+     */
+    [[nodiscard]] bool is_known_type_head(size_t at) const;
+
+    /**
+     * @brief Detecta un literal compuesto: `(Tipo){...}` con CUALQUIER tipo
+     *        -- struct, generico, array (`(i32[3]){...}`, `(Punto[2]){...}`),
+     *        alias o newtype --.  Precondicion: @c current_ es '('.  El tipo
+     *        tiene que empezar por un tipo conocido (@ref is_known_type_head):
+     *        asi `while (x) {` y `while (a[3]) {` no se confunden.
+     */
+    [[nodiscard]] bool looks_like_compound_literal() const;
 
     Lexer &lex_;
     Diagnostics &diags_;
@@ -1095,6 +1124,13 @@ class Parser {
     /// `match (val) {` -- solo se trata como compound literal si el nombre es
     /// un struct conocido.
     std::unordered_set<std::string> declared_structs_;
+
+    /// Nombres de CLASES y ENUMS declarados (single-pass, antes de su uso).
+    /// Van aparte de @c declared_structs_ porque este decide cosas que a
+    /// ellos no les tocan (`(Punto*) p`, `(Punto){...}` como struct); aqui
+    /// solo se pregunta "esto nombra un tipo" (@ref is_known_type_head).
+    std::unordered_set<util::InternedName, util::InternedNameHash>
+        declared_nominal_types_;
 
     /// Los parametros de tipo de la funcion que se esta parseando, o nulo.
     ///

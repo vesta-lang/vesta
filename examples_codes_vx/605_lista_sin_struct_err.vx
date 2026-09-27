@@ -1,0 +1,10 @@
+// Una lista de inicializacion toma su tipo de donde va, y solo sabe construir
+// un struct.  Asignada a un entero no hay nada que construir: antes el bajado
+// la rechazaba con un "aun no soportada" generico; ahora se dice que pasa y
+// como arreglarlo, y este programa NO compila (VX3008).
+
+i32 main() {
+	i32 x = 0_i32;
+	x     = {.a = 1};
+	return x;
+}

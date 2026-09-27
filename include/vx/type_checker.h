@@ -1402,6 +1402,20 @@ class TypeChecker {
     bool type_is_managed(const Type &t) const;
 
     /**
+     * @brief Si @p t es POD: sus bytes SON su valor -- se copian, se mueven y
+     *        cruzan a C sin nada que hacer --.  Representable en C y sin nada
+     *        gestionado (ni destructor, ni campos que liberar); un enum, si lo
+     *        son todas sus cargas.
+     *
+     * Es LA regla: la usan el concepto `Pod` y la huella `@pod` de un tipo, que
+     * antes la escribia a mano por su cuenta.
+     *
+     * @param t El tipo.
+     * @return true si es POD.
+     */
+    bool type_is_pod(const Type &t) const;
+
+    /**
      * @brief Acceso de solo lectura a la tabla de layouts de clases.
      *
      * El lowering la consulta para emitir el bloque __module_init
@@ -1620,7 +1634,29 @@ class TypeChecker {
      */
     const ast::ClassMethodDecl *
     find_generic_method_template(const std::string &container,
-                                 const std::string &method_name) const;
+                                 const std::string &method_name);
+
+    /**
+     * @brief Los metodos DECLARADOS en el struct o clase @p container (el AST,
+     *        no el layout: los genericos solo estan ahi), o nulo si no hay tal
+     *        tipo.
+     *
+     * Por el indice @c aggregate_decl_of_: antes cada consulta recorria todas
+     * las declaraciones del modulo.
+     *
+     * @param container Nombre del struct o clase.
+     * @return Sus metodos, o nulo.
+     */
+    const std::vector<std::unique_ptr<ast::ClassMethodDecl>> *
+    declared_methods_of(const std::string &container);
+
+    /// Nombre de struct/clase -> su posicion en @c mod_.decls.  Se completa
+    /// bajo demanda desde @c aggregate_decls_indexed_: las instancias de
+    /// genericos se anyaden al final de @c mod_.decls durante la comprobacion.
+    std::unordered_map<util::InternedName, uint32_t, util::InternedNameHash>
+        aggregate_decl_of_;
+    /// Hasta donde de @c mod_.decls esta ya en @c aggregate_decl_of_.
+    size_t aggregate_decls_indexed_ = 0;
 
     /**
      * @brief Que paso al intentar resolver la llamada como metodo GENERICO.
@@ -2784,6 +2820,59 @@ class TypeChecker {
     bool pick_generic_fn_template(ast::CallExpr *e, const std::string &name,
                                   size_t &out);
 
+    /**
+     * @brief Lo que la eleccion entre plantillas genericas HOMONIMAS mira de
+     *        cada candidata: sus parametros de tipo y sus parametros.
+     *
+     * Una funcion libre y un metodo generico se eligen igual; solo cambia de
+     * donde salen, y esto es lo que tienen en comun.
+     */
+    struct GenericCandidate {
+        const void *key = nullptr; ///< la declaracion (plan de deduccion)
+        const std::vector<std::string> *type_params = nullptr; ///< `<T, U>`
+        const std::vector<std::unique_ptr<ast::ParamDecl>> *params = nullptr;
+    };
+
+    /// @brief Como acabo la eleccion entre homonimas.
+    enum class GenericPick : uint8_t {
+        Picked,   ///< una sola encaja (la mas especifica)
+        NoneFits, ///< ninguna encaja con la llamada
+        Ambiguous ///< varias empatan en lo mas especifico
+    };
+
+    /**
+     * @brief Elige, entre @p n plantillas homonimas, la que encaja con la
+     *        llamada @p e: por aridad, ranuras nombradas, numero de argumentos
+     *        de tipo escritos o deduccion, y entre las que encajan la de mas
+     *        forma (@c generics::shape_specificity).
+     * @param e     La llamada.
+     * @param cands Las candidatas.
+     * @param n     Cuantas.
+     * @param out   [out] El indice en @p cands de la elegida.
+     * @return Como acabo.  No diagnostica: lo dice quien sabe que se llamaba.
+     */
+    GenericPick pick_generic_candidate(ast::CallExpr *e,
+                                       const GenericCandidate *cands, size_t n,
+                                       size_t &out);
+
+    /**
+     * @brief Lo que separa el nombre de la instancia de una plantilla del de
+     *        sus homonimas: el discriminante de sobrecarga de sus parametros
+     *        YA sustituidos, con los nombres de sus ranuras.
+     *
+     * Sin el, `f<i64>` de `f<T>(u64)` y de `f<T>(u64, u64)` salian con la
+     * misma etiqueta y la segunda instancia se daba por ya generada.
+     *
+     * @param params      Parametros de la plantilla.
+     * @param type_params Sus parametros de tipo.
+     * @param args        Los argumentos de tipo de la instancia.
+     * @return El discriminante (sin separador delante).
+     */
+    std::string homonym_discriminator(
+        const std::vector<std::unique_ptr<ast::ParamDecl>> &params,
+        const std::vector<std::string> &type_params,
+        const std::vector<Type> &args);
+
     bool try_ufcs_reverse(ast::CallExpr *e, const ast::IdentExpr *id);
 
     /**
@@ -3109,10 +3198,13 @@ class TypeChecker {
      * publica es justo lo que no vale para `main` -- pertenece a su namespace
      * y no se renombra --, y ahi es donde se escriben casi todas las llamadas.
      *
+     * Una instancia de generica, que no se declara sino que nace al usarse,
+     * esta en el namespace de su plantilla (@c instance_template_of_).
+     *
      * @param mangled El nombre aplanado.
-     * @return El prefijo, o vacio.
+     * @return El prefijo internado, o vacio.
      */
-    std::string ns_prefix_of(const std::string &mangled) const;
+    util::InternedName ns_prefix_of(const std::string &mangled) const;
 
     /**
      * @brief El prefijo del namespace que se esta comprobando AHORA.
@@ -3124,7 +3216,7 @@ class TypeChecker {
      * @return El prefijo con su `__` final, o vacio en la raiz.
      */
     const std::string &current_ns_prefix() const noexcept {
-        return current_ns_prefix_;
+        return current_ns_prefix_.str();
     }
 
   private:
@@ -3450,6 +3542,18 @@ class TypeChecker {
                                  const std::vector<ParamDir> &dirs,
                                  const std::vector<Type> &ptypes,
                                  uint64_t by_ref, const std::string &callee);
+
+    /**
+     * @brief R1 para las LECTURAS: leer un lugar prestado en exclusiva.
+     *
+     * Mientras vive un `borrow_mut`, lo prestado solo se toca a traves de el.
+     * Se pregunta por el lugar EXACTO leido -- `a[1]` no choca con `a[0]`
+     * prestado, `s.b` no choca con `s.a` --, y leer a traves del propio
+     * prestamo no cuenta como leer al dueno.
+     *
+     * @param e La expresion leida: un nombre, un campo, un indice o un `*p`.
+     */
+    void check_place_read_(const ast::Expr *e);
 
     /**
      * @brief Devuelve el nombre de un tipo NO resuelto dentro de @p tn.
@@ -4628,6 +4732,18 @@ class TypeChecker {
     /// entrar a cada funcion.
     BorrowChecker borrow_checker_{diags_};
 
+    /**
+     * @brief La expresion cuyo USO juzga quien la contiene, no una lectura.
+     *
+     * La base de `s.f` o de `a[i]` no se lee entera -- se lee `s.f`, que es
+     * otro lugar --; el argumento de `lend`/`move` lo juzgan sus propias
+     * reglas (R1..R3); el destino de una asignacion es una escritura.  Quien
+     * contiene la expresion la apunta aqui justo antes de comprobarla, y
+     * @ref check_expr no la cuenta como lectura.  Un solo puntero basta: se
+     * apunta inmediatamente antes de la visita y se consume en ella.
+     */
+    const ast::Expr *use_judged_by_parent_ = nullptr;
+
     /// F1 NLL - contador de stmt durante el chequeo del cuerpo de
     /// una funcion.  Incrementado en cada stmt; el borrow checker
     /// consulta @c last_use_idx vs current_stmt_idx_ para dropear
@@ -4810,6 +4926,66 @@ class TypeChecker {
     /// concept aunque el predicado estructural tambien lo confirme).
     std::unordered_map<std::string, std::unordered_set<std::string>>
         impl_conformances_;
+
+    /**
+     * @brief Un `impl C for X` por comprobar cuando el tipo tenga ya todos sus
+     *        metodos.
+     */
+    struct PendingImplCheck {
+        const ast::Node *decl = nullptr;   ///< el `impl`, para senalarlo
+        util::InternedName type_key;       ///< el tipo, clave de su layout
+        util::InternedName concept_name;   ///< el concepto prometido
+        PrimitiveKind kind = PrimitiveKind::STRUCT; ///< STRUCT o CLASS
+    };
+
+    /**
+     * @brief Comprueba que el `impl` @p pc cumple lo que promete: que el
+     *        concepto existe y que el tipo lo satisface.
+     * @param pc El `impl` pendiente.
+     */
+    void check_impl_conformance(const PendingImplCheck &pc);
+
+    /**
+     * @brief Tipa una lista `{...}` por el destino al que va: una asignacion
+     *        (`a[i] = {.x = 1}`, `p.c = {...}`, `*q = {...}`), un `return` o
+     *        un argumento.
+     *
+     * La lista no tiene tipo propio; lo toma de donde se guarda.  Si el
+     * destino es un struct, se le anota el nombre y el lowering la construye
+     * como un `(T){...}`.  Si @p value no es una lista, no hace nada.
+     *
+     * @param value  El valor que se guarda.
+     * @param target El tipo del destino.
+     */
+    void type_init_list_from_target(ast::Expr *value, const Type &target);
+
+    /**
+     * @brief Comprueba @p value sabiendo el tipo @p target al que va: lo que
+     *        no tiene tipo propio lo toma de ahi (`Some`/`None` de su
+     *        `Optional`, `Ok`/`Err` de su `Result`, una lista `{...}` de su
+     *        struct o array).
+     *
+     * Es lo comun a una declaracion, un `return`, una asignacion y cada
+     * elemento de una lista.
+     *
+     * @param value  El valor.
+     * @param target El tipo del destino.
+     * @return El tipo del valor.
+     */
+    Type check_value_for(ast::Expr *value, const Type &target);
+
+    /**
+     * @brief Comprueba una lista `{...}` y da su tipo.
+     *
+     * Con destino anotado (@ref type_init_list_from_target) su tipo es ese;
+     * si es un array, ademas comprueba que la lista sea posicional, que quepa
+     * y que cada elemento quepa en el elemento del array.  Sin anotar es
+     * @c COUNT: la declaracion la resuelve por su propio tipo.
+     *
+     * @param il La lista.
+     * @return Su tipo.
+     */
+    Type check_init_list(ast::InitListExpr *il);
     /// Templates de struct genericos (`struct Box<T> { ... }`).  Mapea
     /// template_name -> indice en mod_.decls.  Cada uso `Box<i32>` se
     /// monomorphiza on demand via monomorphize_struct() (mismo modelo que
@@ -4906,6 +5082,14 @@ class TypeChecker {
     // "Box_i32"; valor = true si ya esta generada.  Evita regenerar
     // la misma instanciacion mas de una vez.
     std::unordered_map<std::string, bool> monomorphized_;
+
+    /// De que PLANTILLA sale cada instancia de funcion generica: etiqueta de
+    /// la instancia -> etiqueta (aplanada) de la plantilla.  La instancia
+    /// pertenece al namespace de su plantilla, y su cuerpo tiene que ver las
+    /// libres de ese namespace como las ve la plantilla (ver @ref ns_prefix_of).
+    std::unordered_map<util::InternedName, util::InternedName,
+                       util::InternedNameHash>
+        instance_template_of_;
 
   public:
     /**
@@ -5402,9 +5586,10 @@ class TypeChecker {
      * llamada uniforme: el aplanado renombra la DECLARACION (`app__f`) pero no
      * lo que va tras un punto, asi que `x.f()` tiene que probar tambien con el
      * prefijo -- y con ESE, no con los de los demas namespaces del fichero,
-     * que no estan en ambito desde aqui.
+     * que no estan en ambito desde aqui.  Internado: se fija por cada cuerpo y
+     * se consulta en cada llamada por punto.
      */
-    std::string current_ns_prefix_;
+    util::InternedName current_ns_prefix_;
 
     // Conteo de errores al inicio del run() para detectar exito.
     size_t initial_errors_ = 0;

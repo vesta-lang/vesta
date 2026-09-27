@@ -11,6 +11,8 @@ namespace ssf;
 
 struct Counter {
 	static u64 count;
+	// Con valor inicial: antes la global se creaba SIN el y valia 0 callada.
+	static u64 base = 39_u64;
 	u64        id;
 	public static void inc() { Counter.count = Counter.count + 1; }
 	public static u64 get() { return Counter.count; }
@@ -21,6 +23,6 @@ i32 main() {
 	Counter.inc();
 	Counter.inc();
 	Counter.inc();
-	Counter.count = Counter.count + 39; // 3 + 39 = 42
+	Counter.count = Counter.count + Counter.base; // 3 + 39 = 42
 	return (i32)Counter.get();
 }

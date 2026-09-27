@@ -1,0 +1,19 @@
+// `impl C for X` PROMETE que X cumple el concepto C.  Antes se apuntaba y nadie
+// lo comprobaba: un `impl` de un concepto que el tipo no cumple -- o que ni
+// existe -- compilaba callado.  Ahora se comprueba con todos los metodos del
+// tipo ya juntos, y este programa NO compila (VX2139).
+
+concept Fuente<Self, E> {
+	Optional<E> sig();
+}
+
+struct Cuenta {
+	i64 n;
+}
+
+// Promete Fuente<Cuenta, ...> pero `sig` devuelve i64, no Optional<E>.
+impl Fuente for Cuenta {
+	i64 sig() => this.n;
+}
+
+i32 main() => 0;

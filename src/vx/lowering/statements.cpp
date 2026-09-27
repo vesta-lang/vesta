@@ -20,6 +20,7 @@
  */
 #include "vx/lowering.h"
 #include "vx/comptime/comptime_introspect.h"
+#include "vx/generics/generic_clone.h" // copiar el tipo escrito del for
 #include "ir/ir_type_info.h" // vocabulario UNICO de anchura/clase de un IrType
 #include "ir/synthetic_symbols.h" // que funciones se invento el compilador
 #include <algorithm>
@@ -1706,10 +1707,18 @@ void Lowering::lower_foreach(ast::ForEachStmt *s) {
     {
         auto vd = std::make_unique<ast::VarDeclStmt>();
         vd->loc = s->loc;
-        auto pt = std::make_unique<ast::PrimitiveTypeNode>();
-        pt->loc = s->loc;
-        pt->prim = elem_t.kind;
-        vd->type = std::move(pt);
+        /* El tipo que ESCRIBIO el usuario (el comprobador ya exigio que case
+         * con el del elemento).  Reconstruirlo desde la clase primitiva
+         * perdia el nombre de un struct: `for (Punto p : ps)` declaraba `p`
+         * como un STRUCT sin nombre. */
+        if (s->iter_type) {
+            vd->type = vxgen::clone_type_with_subst(s->iter_type.get());
+        } else {
+            auto pt = std::make_unique<ast::PrimitiveTypeNode>();
+            pt->loc = s->loc;
+            pt->prim = elem_t.kind;
+            vd->type = std::move(pt);
+        }
         vd->name = s->iter_name;
         // expr: col[__fe_idx].  IMPORTANTE: rellenamos result_type a
         // mano porque este nodo no pasa por check_expr.  Sin esto el

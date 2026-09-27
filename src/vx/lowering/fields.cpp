@@ -991,38 +991,7 @@ ir::IrValueId Lowering::lower_class_field_store(ast::FieldAccessExpr *target,
         auto it_sl = tc_.struct_layouts().find(ftyp.struct_name);
         if (it_sl != tc_.struct_layouts().end())
             sz = static_cast<uint64_t>(it_sl->second.size_bytes);
-        const bool dst_host = fn_->values[addr].is_host_ptr();
-        const bool src_host = fn_->values[rhs].is_host_ptr();
-        const uint64_t qwords = (sz + 7) / 8;
-        for (uint64_t qi = 0; qi < qwords; ++qi) {
-            const ir::IrValueId v_off = emit_const(
-                ir::IrType::I64, static_cast<int64_t>(qi * 8), loc.line);
-            const ir::IrValueId v_src_at = fn_->new_value(ir::IrType::PTR);
-            fn_->values[v_src_at].set_host(src_host);
-            {
-                ir::IrInstr ad{};
-                ad.op = ir::IrOp::ADD;
-                ad.type = ir::IrType::I64;
-                ad.dst = v_src_at;
-                ad.operands = {rhs, v_off};
-                ad.source_line = loc.line;
-                emit(current_block_, std::move(ad));
-            }
-            const ir::IrValueId v_word =
-                emit_load_typed(v_src_at, ir::IrType::I64, loc.line);
-            const ir::IrValueId v_dst_at = fn_->new_value(ir::IrType::PTR);
-            fn_->values[v_dst_at].set_host(dst_host);
-            {
-                ir::IrInstr ad{};
-                ad.op = ir::IrOp::ADD;
-                ad.type = ir::IrType::I64;
-                ad.dst = v_dst_at;
-                ad.operands = {addr, v_off};
-                ad.source_line = loc.line;
-                emit(current_block_, std::move(ad));
-            }
-            emit_store_typed(v_dst_at, v_word, ir::IrType::I64, loc.line);
-        }
+        emit_memberwise_copy(addr, rhs, sz, loc.line);
         // Copy-hook (ruta B): si el campo struct declara `__clone__`, este
         // store es una COPIA -> tras el memcpy, `campo.__clone__()` aplica el
         // efecto (p.ej. ++refcount) sobre la copia del campo.  El campo vive en

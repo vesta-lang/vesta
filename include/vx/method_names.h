@@ -58,6 +58,18 @@ inline constexpr const char kDestructorMethod[] = "__dtor";
 inline constexpr const char kCopyHookMethod[] = "__clone__";
 
 /**
+ * @brief El operador de LECTURA por indice: `x[i]` sobre un struct o clase es
+ *        `x.__index__(i)`.
+ */
+inline constexpr const char kIndexGetMethod[] = "__index__";
+
+/**
+ * @brief El operador de ESCRITURA por indice: `x[i] = v` sobre un struct o
+ *        clase es `x.__index_set__(i, v)`.
+ */
+inline constexpr const char kIndexSetMethod[] = "__index_set__";
+
+/**
  * @brief El simbolo del destructor de @p owner: `<owner>____dtor`.
  * @param owner Tipo dueno.
  * @return El simbolo.

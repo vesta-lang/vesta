@@ -17,6 +17,28 @@ borrow<i32> identity_borrow(borrow<i32> p) => p;
 // devuelve un valor (no un borrow) NO necesita elision.
 i32 deref_borrow(borrow<i32> p) => read_borrow(p);
 
+// Un prestamo SIN NOMBRE tambien sale por `return`, y se juzga igual: por la
+// memoria que presta.  `p` apunta dentro de lo que el LLAMANTE paso, asi que el
+// prestamo vive lo que viva eso y puede salir.  El mismo `return` sobre un
+// local de esta funcion es un error (ver 609).
+struct Caja {
+	i64 v;
+}
+
+borrow_mut<i64> campo_de(Caja* c) {
+	i64* p = &(*c).v;
+	return lend_mut(p);
+}
+
+// Presta lo APUNTADO por un puntero, no la ranura del puntero: escribir por el
+// prestamo cambia `c.v`.
+i32 por_puntero() {
+	Caja            c = {.v = 41};
+	borrow_mut<i64> b = campo_de(&c);
+	write_borrow(b, 42);
+	return (i32)c.v;
+}
+
 i32 main() {
 	unique<i32> myvec = unique_box(77);
 
@@ -30,6 +52,7 @@ i32 main() {
 	borrow<i32> r3 = lend(myvec);
 	i32         v2 = read_borrow(r3);
 	if (v2 != 77) return 200;
+	if (por_puntero() != 42) return 300;
 
 	return 42;
 }

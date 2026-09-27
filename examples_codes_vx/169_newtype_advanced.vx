@@ -52,7 +52,22 @@ typedef u64 session_handle new @opaque {
 	explicit to u64;
 };
 
+// --- (4) explicit from/to con un tipo que NO es primitivo -----------
+// Las conversiones son de un TIPO FUERTE (`new`).  Tras `from`/`to` solo puede
+// ir un tipo, asi que vale cualquiera: un alias (`contador`, otro nombre para
+// `u64`), otro tipo fuerte, uno importado (`usize`).  Antes solo pasaban los
+// primitivos.
+typedef u64 contador; // alias: el MISMO tipo que u64
+typedef contador ficha new @opaque {
+	explicit from contador;
+	explicit to   contador;
+};
+
 i32 main() {
+	contador c  = 42;
+	ficha    fi = (ficha)c;
+	if ((contador)fi != 42) return 1100;
+
 	// --- alineacion -------------------------------------------------
 	// El compilador verifica los offsets en compile time.
 	if (field.offset<AlignedPacket>("magic") != 0) return 100;

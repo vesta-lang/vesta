@@ -38,6 +38,16 @@ std::string mangle_args(const std::vector<Type> &args) {
     return s;
 }
 
+std::string generic_instance_name(const std::string &tmpl,
+                                  const std::vector<Type> &args) {
+    std::string out = tmpl;
+    for (char &c : out)
+        if (c == '.') c = '_';
+    out += '_';
+    out += mangle_args(args);
+    return out;
+}
+
 std::string mangle_type(const Type &t) {
     switch (t.kind) {
     case PrimitiveKind::I8: return "i8";
@@ -518,7 +528,7 @@ std::unique_ptr<ast::Expr> clone_expr(const ast::Expr *e, const GenSubst &g) {
         x->loc = s->loc;
         x->is_designated = s->is_designated;
         x->field_names = s->field_names;
-        x->target_type_name = s->target_type_name;
+        x->target_type = s->target_type;
         for (auto &el : s->elements)
             x->elements.push_back(clone_expr(el.get(), g));
         return x;

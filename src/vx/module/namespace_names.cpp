@@ -26,6 +26,11 @@ std::string namespace_symbol_path(const std::string &dotted) {
     return out;
 }
 
+std::string namespace_symbol_prefix(const std::string &dotted) {
+    if (dotted.empty()) return std::string();
+    return namespace_symbol_path(dotted) + kSymbolPathSeparator;
+}
+
 std::string qualified_symbol(const std::string &path,
                              const std::string &member) {
     std::string out;

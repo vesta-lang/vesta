@@ -1,0 +1,13 @@
+namespace ejemplos.borrow_err_return_local_ptr;
+
+// R4 con un prestamo SIN NOMBRE: `return lend_mut(p)` se juzga por la memoria
+// que presta, no por el nombre que no tiene.  `p` apunta a un local de esta
+// funcion, que muere al volver: el prestamo no puede salir (VX2144).  El
+// mismo `return` sobre lo que paso el llamante es valido (ver 117).
+borrow_mut<i64> escapa() {
+	i64[1] x = {5};
+	i64*   p = &x[0];
+	return lend_mut(p);
+}
+
+i32 main() => 0;

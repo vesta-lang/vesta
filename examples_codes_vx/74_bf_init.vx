@@ -15,5 +15,12 @@ i32 main() {
 	if (f.b != 7) return 2;
 	if (f.c != 42) return 3;
 	if (f.rest != 12_345) return 4;
+
+	// La misma lista como literal compuesto y ASIGNADA: antes solo la
+	// declaracion sabia escribir campos de bits; `(T){...}` los rechazaba.
+	Flags g = (Flags){.a = 2, .c = 9};
+	if (g.a != 2 || g.b != 0 || g.c != 9) return 5;
+	f = {.b = 31, .rest = 1};
+	if (f.a != 0 || f.b != 31 || f.c != 0 || f.rest != 1) return 6;
 	return 42;
 }

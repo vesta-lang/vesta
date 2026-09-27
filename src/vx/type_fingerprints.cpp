@@ -6,6 +6,7 @@
 #include "vx/type_fingerprints.h"
 
 #include "vx/type_checker.h"
+#include "vx/type_classify.h" // destructor y limpieza de un tipo
 
 #include <utility>
 
@@ -54,18 +55,12 @@ analyze::TypeFingerprints compute_type_fingerprints(const TypeChecker &tc) {
         tf.size_bytes = lay.size_bytes;
         tf.align_bytes = lay.align_bytes;
         tf.field_count = static_cast<uint32_t>(lay.fields.size());
-        bool has_dtor = lay.has_destructible_field;
-        for (const auto &m : lay.methods)
-            if (m.is_destructor) has_dtor = true;
-        tf.has_destructor = has_dtor;
+        tf.has_destructor = struct_needs_cleanup(lay);
         bool no_heap = true;
-        bool all_c_repr = true;
-        for (const auto &f : lay.fields) {
+        for (const auto &f : lay.fields)
             if (tc.type_is_managed(f.type)) no_heap = false;
-            if (!tc.type_is_c_representable(f.type)) all_c_repr = false;
-        }
         tf.no_heap = no_heap;
-        tf.is_pod = all_c_repr && !has_dtor && no_heap;
+        tf.is_pod = tc.type_is_pod(Type{PrimitiveKind::STRUCT, lay.name});
         tf.is_reference = false;
         tf.is_union = lay.is_union;
         tf.is_overlay = lay.is_overlay;
@@ -85,10 +80,7 @@ analyze::TypeFingerprints compute_type_fingerprints(const TypeChecker &tc) {
         tf.kind = TF::CLASS;
         tf.size_bytes = lay.size_bytes;
         tf.field_count = static_cast<uint32_t>(lay.fields.size());
-        bool has_dtor = false;
-        for (const auto &m : lay.methods)
-            if (m.is_destructor) has_dtor = true;
-        tf.has_destructor = has_dtor;
+        tf.has_destructor = find_destructor(lay.methods) != nullptr;
         tf.is_reference = true;
         tf.is_pod = false;
         tf.no_heap = false;
@@ -107,14 +99,11 @@ analyze::TypeFingerprints compute_type_fingerprints(const TypeChecker &tc) {
         tf.size_bytes = lay.size_bytes;
         tf.field_count = lay.max_payload_fields;
         bool no_heap = true;
-        bool all_c_repr = true;
         for (const auto &v : lay.variants)
-            for (const auto &ft : v.field_types) {
+            for (const auto &ft : v.field_types)
                 if (tc.type_is_managed(ft)) no_heap = false;
-                if (!tc.type_is_c_representable(ft)) all_c_repr = false;
-            }
         tf.no_heap = no_heap;
-        tf.is_pod = all_c_repr && no_heap;
+        tf.is_pod = tc.type_is_pod(Type{PrimitiveKind::STRUCT, lay.name});
         tf.is_reference = false;
         tf.variants.reserve(lay.variants.size());
         for (const auto &v : lay.variants) {

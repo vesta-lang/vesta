@@ -28,12 +28,12 @@ bool place_region_unresolved(const Place &p) noexcept {
 }
 
 std::string Place::text() const {
-    std::string out = root;
+    std::string out = root.str();
     for (const PlaceStep &s : path) {
         switch (s.kind) {
         case PlaceStep::Kind::Field:
             out += '.';
-            out += s.field;
+            out += s.field.str();
             break;
         case PlaceStep::Kind::ConstIndex: {
             char buf[24];

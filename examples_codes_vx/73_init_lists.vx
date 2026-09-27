@@ -7,6 +7,123 @@ struct Point {
 	i32 y;
 }
 
+// Un campo con valor por defecto JUSTO detras de uno `i32`: si el `i32` se
+// escribe con 8 bytes, el defecto se pierde.
+struct Caja {
+	i32 n;
+	i32 marca = 7_i32;
+}
+
+// La lista toma su tipo de donde va: aqui, del tipo que se devuelve.  `v`
+// llega de un literal: el argumento tiene que ser `i32` como el parametro
+// (antes llegaba `i64` y, al inlinear, pisaba `marca`).
+Caja hacer(i32 v) => {.n = v};
+
+// ... aqui, del parametro.
+i32 total(Caja c) => c.n + c.marca;
+
+// ... y aqui, de lo apuntado.
+void poner(Point* p) {
+	*p = {.x = 3, .y = 4};
+}
+
+// Un array de tamano fijo tambien es un destino: la lista va a su elemento.
+i32 suma3(i32[3] v) => v[0] + v[1] + v[2];
+
+// Doce bytes: copiar esto como palabras de ocho escribia dieciseis y pisaba
+// el principio del elemento siguiente.
+struct Tres {
+	i32 a;
+	i32 b;
+	i32 c;
+}
+
+// Un array DENTRO de un struct.
+struct Tira {
+	i32[3] v;
+	i64    n;
+}
+
+// --- Listas de ARRAY con elementos de cada familia de tipos ---------------
+
+typedef i64 Metros new;     // tipo fuerte: cada elemento lleva su cast
+typedef i64 Edad;           // alias
+using Fn = fn(i64) -> i64;  // lambda: 16 bytes, el par {funcion, entorno}
+using Op = cfn(i32) -> i32; // puntero a funcion crudo: 8 bytes
+
+enum Color {
+	Rojo,
+	Verde,
+	Azul
+}
+
+enum Forma {
+	Nada,
+	Circulo(i32),
+	Rect(i32, i32)
+}
+
+class Animal {
+	public i32 patas;
+	public Animal(i32 p) { this.patas = p; }
+	public i32 cuenta() => this.patas;
+}
+
+struct Box<T> {
+	T v;
+}
+
+i32 area(Forma f) {
+	match f {
+		case Nada       => return 0;
+		case Circulo(r) => return r * 3;
+		case Rect(w, h) => return w * h;
+	}
+	return -1;
+}
+
+i32 doble(i32 v) => v * 2;
+
+/// Cada familia en declaracion, asignada y como literal compuesto.
+/// @return 0 si todo cuadra; si no, el numero de la comprobacion que falla.
+i32 listas_de_tipos() {
+	Metros[2] ms = {(Metros)3, (Metros)4 };
+	ms           = {(Metros)10, ms[0]};
+	if ((i64)ms[0] != 10 || (i64)ms[1] != 3) return 101;
+	Edad[3] es = (Edad[3]){7, 8, 9};
+	if (es[2] != 9) return 102;
+	Color[3] cs = {Color.Azul, Color.Rojo, Color.Verde};
+	if (cs[0] != Color.Azul || cs[2] != Color.Verde) return 103;
+	Forma[3] fs = {Forma.Circulo(2), Forma.Rect(3, 4), Forma.Nada};
+	fs          = {fs[1], Forma.Circulo(5), fs[2]};
+	if (area(fs[0]) != 12 || area(fs[1]) != 15 || area(fs[2]) != 0) return 104;
+	// Reasignar leyendo del propio array: la lista se construye ENTERA antes
+	// de copiarse, asi que `zoo[0]` es el valor viejo.
+	Animal[2] zoo = {new Animal(4), new Animal(2)};
+	zoo           = (Animal[2]){new Animal(8), zoo[0]};
+	if (zoo[0].cuenta() != 8 || zoo[1].cuenta() != 4) return 105;
+	Box<i64>[2] bs = { {.v = 5}, {.v = 6}};
+	bs             = (Box<i64>[2]){{.v = 7}, bs[0]};
+	if (bs[0].v != 7 || bs[1].v != 5) return 106;
+	Optional<i64>[2] os = {Some(4), None()};
+	if (os[0].unwrap() != 4 || os[1].unwrap_or(-1) != -1) return 107;
+	Result<i32, i32>[2] rs = {Ok(7), Err(3)};
+	rs                     = {Err(9), rs[0]};
+	if (error(rs[0]) != 9 || value(rs[1]) != 7) return 108;
+	i64   k  = 10_i64;
+	Fn[2] ls = {(v) => v + k, (v) => v * k};
+	if (ls[0](1) != 11 || ls[1](2) != 20) return 109;
+	Op[1] ops = {doble};
+	if (ops[0](21) != 42) return 110;
+	string[2] ss = {"hola", "mundo"};
+	ss           = {"a", ss[1]};
+	if (ss[0].length() + ss[1].length() != 6) return 111;
+	i32[2][2] m = { {1, 2}, {3, 4}};
+	m           = (i32[2][2]){{5, 6}, m[1]};
+	if (m[0][1] != 6 || m[1][0] != 3) return 112;
+	return 0;
+}
+
 i32 main() {
 	// Array init posicional.
 	i32[5] arr = {10, 20, 30, 40, 50};
@@ -29,5 +146,50 @@ i32 main() {
 	if (r.x != 12) return 8;
 	// r.y queda con valor por defecto (0).
 
+	// Una lista ASIGNADA (no solo declarada): a un elemento de array, a una
+	// variable, a un campo y a traves de un puntero.
+	Point[2] ps;
+	ps[0] = {.x = 1, .y = 2};
+	ps[1] = {5, 6};
+	if (ps[0].x + ps[0].y + ps[1].x + ps[1].y != 14) return 9;
+	q = {.x = 20};
+	if (q.x != 20 || q.y != 0) return 10;
+	Caja[1] cs;
+	cs[0] = {.n = 1};
+	if (cs[0].marca != 7) return 11;
+	poner(&r);
+	if (r.x != 3 || r.y != 4) return 12;
+
+	// Devuelta y pasada como argumento.
+	Caja c = hacer(5);
+	if (c.n != 5 || c.marca != 7) return 13;
+	if (total({.n = 2}) != 9) return 14;
+
+	// Listas de ARRAY: lo que la lista no nombra vale cero, y asignarla
+	// escribe en el MISMO almacenamiento -- quien ya apuntaba al array ve el
+	// valor nuevo --.
+	i32[4] ceros = {1, 2};
+	if (ceros[2] != 0 || ceros[3] != 0) return 15;
+	i32* primero = &arr[0];
+	arr          = {5, 6, 7, 8, 9};
+	if (*primero != 5 || arr[4] != 9) return 16;
+	i32[5] otro = {0, 0, 0, 0, 1};
+	arr         = otro;
+	otro[4]     = 2; // `arr` es una copia, no un alias
+	if (arr[4] != 1) return 17;
+	if (suma3({1, 2, 3}) != 6) return 18;
+	Tira t = {.v = {1, 1, 1}, .n = 5};
+	t.v    = {4, 5, 6};
+	if (t.v[0] + t.v[2] != 10 || t.n != 5) return 19;
+	i32[2][3] m; // tres filas de `i32[2]`
+	m[1] = {7, 8};
+	if (m[1][1] != 8 || m[0][1] != 0) return 20;
+	Tres[2] ts;
+	ts[1] = {.a = 5, .b = 6, .c = 7};
+	ts[0] = {.a = 1, .b = 2, .c = 3};
+	if (ts[1].a != 5 || ts[0].c != 3) return 21;
+
+	i32 tipos = listas_de_tipos();
+	if (tipos != 0) return tipos;
 	return 42;
 }

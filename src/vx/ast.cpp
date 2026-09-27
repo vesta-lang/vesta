@@ -84,4 +84,14 @@ bool assignop_from_token(TokenKind k, AssignOp &out) noexcept {
     }
 }
 
+void typedef_type_nodes(const TypeAliasDecl &td, std::vector<TypeNode *> &out) {
+    if (td.aliased) out.push_back(td.aliased.get());
+    // Las conversiones solo las declara un tipo fuerte; en un alias estan
+    // vacias.
+    for (const auto *lst : {&td.explicit_from, &td.explicit_to,
+                            &td.implicit_from, &td.implicit_to})
+        for (const auto &ec : *lst)
+            if (ec.type) out.push_back(ec.type.get());
+}
+
 } // namespace vx::ast

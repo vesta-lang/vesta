@@ -18,6 +18,11 @@ namespace ejemplos.metodos_genericos;
 //   5. Cast `(U) expr` con U = type-param del metodo.
 //   6. Metodo generico en un STRUCT GENERICO: U independiente del T contenedor.
 //   7. Un metodo generico que llama a otro metodo generico del mismo tipo.
+//   8. Dos metodos genericos HOMONIMOS con distinta aridad: cada llamada va a
+//      la suya (antes las dos instancias se llamaban `f_i64` y la segunda
+//      tomaba la aridad de la primera).
+//   9. La llamada por el punto dentro de una funcion GENERICA de un namespace
+//      encuentra las libres de ese namespace (antes no las veia).
 
 // ---- 1 + 3 + 5: struct con metodos genericos -----------------------------
 struct Caja {
@@ -54,7 +59,22 @@ struct Par<T> {
 	i64 mezcla<U>(U x) => (i64)this.v + (i64)x;
 }
 
+// ---- 8: homonimos genericos que solo se distinguen por la aridad ---------
+struct Reserva {
+	u64 c;
+	i64 pide<T>(u64 n) => (i64)n;
+	i64 pide<T>(u64 n, u64 tam) => (i64)(n * tam);
+}
+
+// ---- 9: llamada uniforme dentro de una generica del namespace ------------
+i64 interno<T>(inout Reserva r, u64 a) => (i64)a + (i64)r.c;
+i64 externo<T>(inout Reserva r, u64 a) => r.interno<T>(a);
+
 i32 main() {
+	Reserva rv = {.c = 1};
+	if (rv.pide<i64>(3) != 3 || rv.pide<i64>(3, 4) != 12) return 1;
+	if (rv.externo<i64>(4) != 5) return 2;
+
 	Caja c = {.v = 40};
 	i64  a = c.identidad<i64>(2); // explicito  -> 2
 	i32  b = c.identidad(3);      // inferido i32 -> 3

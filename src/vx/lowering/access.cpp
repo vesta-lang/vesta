@@ -245,7 +245,14 @@ ir::IrValueId Lowering::lower_index_addr(ast::IndexExpr *e) {
         error_at(e->loc, "lowering: '[]' sobre tipo no-PTR ni array");
         return ir::IR_NO_VALUE;
     }
-    const size_t esz = size_of_type(*bt.pointee);
+    /* De un `borrow<T[N]>` se avanza por elementos: el prestamo es la
+     * direccion del primero, y lo prestado es el array entero. */
+    const bool borrows_array =
+        (bt.kind == PrimitiveKind::BORROW ||
+         bt.kind == PrimitiveKind::BORROW_MUT) &&
+        bt.pointee->kind == PrimitiveKind::ARRAY && bt.pointee->pointee;
+    const size_t esz = size_of_type(borrows_array ? *bt.pointee->pointee
+                                                  : *bt.pointee);
     if (esz == 0) {
         error_at(e->loc, "lowering: sizeof del tipo apuntado es 0 (void* u "
                          "struct desconocido)");
@@ -275,6 +282,12 @@ ir::IrValueId Lowering::lower_index_addr(ast::IndexExpr *e) {
     // logica que ptr_of().  Los borrows YA son el puntero de datos -> sin
     // extraccion.
     ir::IrValueId base_eff = base_v;
+    /* Un prestamo es una direccion del ANFITRION por convencion, la misma que
+     * aplican `read_borrow` y `write_borrow`.  Un parametro `borrow<T[N]>`
+     * llega sin la marca, y sin ella sus elementos se leian de la memoria de
+     * la maquina: el llamado sumaba otra cosa que el array del llamante. */
+    if (bt.kind == PrimitiveKind::BORROW || bt.kind == PrimitiveKind::BORROW_MUT)
+        fn_->values[base_v].memory = ir::MemorySpace::HostByConstruction;
     if (bt.kind == PrimitiveKind::UNIQUE_PTR ||
         bt.kind == PrimitiveKind::SHARED_PTR) {
         const ir::IrValueId v_data = emit_load_host_ptr(base_v, e->loc.line);
@@ -413,9 +426,16 @@ ir::IrValueId Lowering::lower_index(ast::IndexExpr *e) {
     // una vista, `Sec secs[n] @offset(p) stride(s)`): ahi el elemento vive
     // INLINE en la memoria ajena, asi que su direccion (la que ya calculo
     // @c lower_index_addr escalando por STRIDE) ES el valor de la vista.
-    if ((e->result_type.kind == PrimitiveKind::ARRAY ||
-         e->result_type.kind == PrimitiveKind::STRUCT) &&
-        (e->is_overlay_array || !type_is_overlay(e->result_type))) {
+    // Una lambda (`fn(...)`) es otro agregado inline: el elemento SON sus 16
+    // bytes y su valor es su direccion.  Cargarlo leia la direccion de la
+    // funcion como si fuera un puntero al par.
+    const bool elem_is_aggregate =
+        e->is_overlay_array
+            ? (e->result_type.kind == PrimitiveKind::ARRAY ||
+               e->result_type.kind == PrimitiveKind::STRUCT)
+            : (is_inline_aggregate(e->result_type) ||
+               e->result_type.kind == PrimitiveKind::ARRAY);
+    if (elem_is_aggregate) {
         // Resultado es un sub-array o struct value-type; addr ya es la
         // direccion correcta del elemento.  Sin esto, `arr[i].field` con
         // `arr: Struct[N]` cargaba el primer qword del struct como un

@@ -28,6 +28,22 @@ Punto origen_desplazado(i32 d) => (Punto){.x = d, .y = d};
 
 i64 caja_total(Caja<i64> c) => c.val + (i64)c.tag;
 
+// El tipo de un compound literal puede ser CUALQUIERA, no solo un struct: un
+// array se construye igual y se pasa por valor.
+i32 suma3(i32[3] v) => v[0] + v[1] + v[2];
+
+// Y el parser no lo confunde con lo que tiene la misma forma: una condicion
+// entre parentesis seguida de un bloque.
+i32 no_son_literales() {
+	i32[3] a = {1, 2, 3};
+	i32    n = 0_i32;
+	while (a[2]) { // `(a[2]) {` NO es un literal: `a` no es un tipo
+		a[2] = a[2] - 1;
+		n    = n + 1;
+	}
+	return n;
+}
+
 i32 main() {
 	// 1. Como ARGUMENTO: sin declarar una variable Punto aparte.
 	i32 d1 = distancia_manhattan((Punto){.x = -3, .y = 4});
@@ -38,8 +54,14 @@ i32 main() {
 	println("origen = (${o.x}, ${o.y})"); // (5, 5)
 
 	// 3. Con un TEMPLATE como argumento: el default de `tag` (0x7) se aplica.
-	i64 t = caja_total((Caja<i64>) {.val = 100});
+	i64 t = caja_total((Caja<i64>){.val = 100});
 	println("caja   = ${t}"); // 100 + 7 = 107
+
+	// 4. Un ARRAY como compound literal, de primitivos y de structs.
+	if (suma3((i32[3]){1, 2, 3}) != 6) return 1;
+	Punto[2] ps = (Punto[2]){{.x = 1, .y = 2}, (Punto){.x = 3, .y = 4}};
+	if (ps[1].y != 4) return 2;
+	if (no_son_literales() != 3) return 3;
 
 	// Retorno determinista (harness): 30 (arg) + 10 (return o.x) + 107 (templ) = 147.
 	return distancia_manhattan((Punto){.x = -3, .y = 4}) + o.x + (i32)t;

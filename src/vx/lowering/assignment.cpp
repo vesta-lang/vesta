@@ -19,6 +19,7 @@
  */
 #include "vx/lowering.h"
 #include "ir/ir_type_info.h" // vocabulario UNICO de anchura/clase de un IrType
+#include "util/scoped_assign.h" // una bandera mientras se baja un valor
 #include <algorithm>
 #include <functional>
 #include <map>
@@ -183,16 +184,8 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
     // Si el valor es un lambda-literal que se almacena en un campo / slot /
     // deref, su env ESCAPA del scope actual (el objeto contenedor puede
     // sobrevivir al frame) -> debe alocarse en heap (GC).  Activamos el flag
-    // mientras se baja el valor; un guard RAII lo restaura en cualquier
+    // mientras se baja el valor; util::ScopedAssign lo restaura en cualquier
     // return de esta funcion.  lower_lambda_expr lo consulta.
-    struct EscapeFlagGuard {
-        bool &flag;
-        bool prev;
-
-        EscapeFlagGuard(bool &f, bool v) : flag(f), prev(f) { flag = v; }
-
-        ~EscapeFlagGuard() { flag = prev; }
-    };
     // El modelo de env owned-by-holder (RAW_ALLOC liberado por el destructor)
     // requiere que el contenedor tenga un punto de destruccion determinista.
     // En v1 solo lo aplicamos a campos de CLASE (su destructor aumentado
@@ -237,7 +230,7 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
                 _tgt_is_escaping_struct_field = true;
         }
     }
-    EscapeFlagGuard _esc_guard(
+    const util::ScopedAssign<bool> _esc_guard(
         current_lambda_store_escapes_,
         _val_is_lambda &&
             (_tgt_is_class_field || _tgt_is_escaping_struct_field));
@@ -744,6 +737,24 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
         }
     }
 
+    /* Un array de tamano FIJO se COPIA siempre a su propio almacenamiento.
+     *
+     * A diferencia de un struct, no hay forma de saber si alguien lo esta
+     * mirando: decae a puntero con solo nombrarlo (`&a[0]`, `int *p = a`,
+     * pasarlo a una funcion), y eso no se apunta en ningun sitio.  Re-atar el
+     * nombre al origen dejaba a esos punteros viendo el contenido VIEJO:
+     * `p = &a[0]; a = {10, 20, 30}; *p` daba 1. */
+    if (rhs != ir::IR_NO_VALUE && e->op == ast::AssignOp::Assign &&
+        id->result_type.kind == PrimitiveKind::ARRAY &&
+        id->result_type.array_size > 0) {
+        const ir::IrValueId dst_addr = lookup(id->name);
+        if (dst_addr != ir::IR_NO_VALUE && dst_addr != rhs) {
+            emit_memberwise_copy(dst_addr, rhs, size_of_type(id->result_type),
+                                 e->loc.line);
+            return dst_addr;
+        }
+    }
+
     // Cast final al tipo declarado de la variable y actualizar el scope.
     const ir::IrType rhs_ir =
         (rhs != ir::IR_NO_VALUE) ? fn_->values[rhs].type : dst_ir;
@@ -910,65 +921,7 @@ bool Lowering::try_lower_assign_to_field(ast::AssignExpr *e,
         if (it_l != layouts.end()) {
             const StructFieldInfo *f = find_field(it_l->second, fa->field_name);
             if (f && f->bit_width > 0) {
-                // 1. LOAD storage word completo.
-                ir::IrValueId v_old = emit_load_typed(addr, ft, e->loc.line);
-                // 2. mask = (1 << bit_width) - 1 (en el tipo
-                //    del storage; truncar a tamano del LOAD).
-                const uint64_t mask = (f->bit_width == 64)
-                                          ? UINT64_MAX
-                                          : ((uint64_t(1) << f->bit_width) - 1);
-                const uint64_t inv_mask = ~(mask << f->bit_offset);
-                // 3. cleared = old & inv_mask
-                ir::IrValueId v_inv = emit_const(ft, inv_mask, e->loc.line);
-                ir::IrValueId v_clr = fn_->new_value(ft);
-                {
-                    ir::IrInstr an{};
-                    an.op = ir::IrOp::AND;
-                    an.type = ft;
-                    an.dst = v_clr;
-                    an.operands = {v_old, v_inv};
-                    an.source_line = e->loc.line;
-                    emit(current_block_, std::move(an));
-                }
-                // 4. trimmed = rhs & mask  (clamp a rango).
-                ir::IrValueId v_msk = emit_const(ft, mask, e->loc.line);
-                ir::IrValueId v_tr = fn_->new_value(ft);
-                {
-                    ir::IrInstr an{};
-                    an.op = ir::IrOp::AND;
-                    an.type = ft;
-                    an.dst = v_tr;
-                    an.operands = {rhs, v_msk};
-                    an.source_line = e->loc.line;
-                    emit(current_block_, std::move(an));
-                }
-                // 5. shifted = trimmed << bit_offset
-                ir::IrValueId v_sh = v_tr;
-                if (f->bit_offset > 0) {
-                    ir::IrValueId v_amt =
-                        emit_const(ft, (uint64_t)f->bit_offset, e->loc.line);
-                    v_sh = fn_->new_value(ft);
-                    ir::IrInstr sh{};
-                    sh.op = ir::IrOp::SHL;
-                    sh.type = ft;
-                    sh.dst = v_sh;
-                    sh.operands = {v_tr, v_amt};
-                    sh.source_line = e->loc.line;
-                    emit(current_block_, std::move(sh));
-                }
-                // 6. new = cleared | shifted
-                ir::IrValueId v_new = fn_->new_value(ft);
-                {
-                    ir::IrInstr or_{};
-                    or_.op = ir::IrOp::OR;
-                    or_.type = ft;
-                    or_.dst = v_new;
-                    or_.operands = {v_clr, v_sh};
-                    or_.source_line = e->loc.line;
-                    emit(current_block_, std::move(or_));
-                }
-                // 7. STORE new -> addr
-                emit_store_typed(addr, v_new, ft, e->loc.line);
+                emit_bit_field_store(addr, *f, rhs, e->loc.line);
                 out = rhs;
                 return true;
             }
@@ -983,37 +936,17 @@ bool Lowering::try_lower_assign_to_field(ast::AssignExpr *e,
      */
     if (fa->result_type.kind == PrimitiveKind::FUNCTION &&
         !fa->result_type.fn_is_raw) {
-        const bool dst_host = fn_->values[addr].is_host_ptr();
-        const bool src_host = fn_->values[rhs].is_host_ptr();
-        for (uint64_t qi = 0; qi < 2; ++qi) {
-            const ir::IrValueId v_off = emit_const(
-                ir::IrType::I64, static_cast<int64_t>(qi * 8), e->loc.line);
-            const ir::IrValueId s_at = fn_->new_value(ir::IrType::PTR);
-            fn_->values[s_at].set_host(src_host);
-            {
-                ir::IrInstr ad{};
-                ad.op = ir::IrOp::ADD;
-                ad.type = ir::IrType::I64;
-                ad.dst = s_at;
-                ad.operands = {rhs, v_off};
-                ad.source_line = e->loc.line;
-                emit(current_block_, std::move(ad));
-            }
-            const ir::IrValueId w =
-                emit_load_typed(s_at, ir::IrType::I64, e->loc.line);
-            const ir::IrValueId d_at = fn_->new_value(ir::IrType::PTR);
-            fn_->values[d_at].set_host(dst_host);
-            {
-                ir::IrInstr ad{};
-                ad.op = ir::IrOp::ADD;
-                ad.type = ir::IrType::I64;
-                ad.dst = d_at;
-                ad.operands = {addr, v_off};
-                ad.source_line = e->loc.line;
-                emit(current_block_, std::move(ad));
-            }
-            emit_store_typed(d_at, w, ir::IrType::I64, e->loc.line);
-        }
+        emit_memberwise_copy(addr, rhs, 16, e->loc.line);
+        out = rhs;
+        return true;
+    }
+    // Campo ARRAY de tamano fijo (`i32[3] v`): tambien es un bloque inline y
+    // @c rhs la direccion del origen.  Un STORE escalar guardaba esa direccion
+    // en los primeros bytes del campo.
+    if (fa->result_type.kind == PrimitiveKind::ARRAY &&
+        fa->result_type.array_size > 0) {
+        emit_memberwise_copy(addr, rhs, size_of_type(fa->result_type),
+                             e->loc.line);
         out = rhs;
         return true;
     }
@@ -1036,38 +969,7 @@ bool Lowering::try_lower_assign_to_field(ast::AssignExpr *e,
         auto it_sl = tc_.struct_layouts().find(fa->result_type.struct_name);
         if (it_sl != tc_.struct_layouts().end())
             sz = static_cast<uint64_t>(it_sl->second.size_bytes);
-        const bool dst_host = fn_->values[addr].is_host_ptr();
-        const bool src_host = fn_->values[rhs].is_host_ptr();
-        const uint64_t qwords = (sz + 7) / 8;
-        for (uint64_t qi = 0; qi < qwords; ++qi) {
-            const ir::IrValueId v_off = emit_const(
-                ir::IrType::I64, static_cast<int64_t>(qi * 8), e->loc.line);
-            const ir::IrValueId s_at = fn_->new_value(ir::IrType::PTR);
-            fn_->values[s_at].set_host(src_host);
-            {
-                ir::IrInstr ad{};
-                ad.op = ir::IrOp::ADD;
-                ad.type = ir::IrType::I64;
-                ad.dst = s_at;
-                ad.operands = {rhs, v_off};
-                ad.source_line = e->loc.line;
-                emit(current_block_, std::move(ad));
-            }
-            const ir::IrValueId w =
-                emit_load_typed(s_at, ir::IrType::I64, e->loc.line);
-            const ir::IrValueId d_at = fn_->new_value(ir::IrType::PTR);
-            fn_->values[d_at].set_host(dst_host);
-            {
-                ir::IrInstr ad{};
-                ad.op = ir::IrOp::ADD;
-                ad.type = ir::IrType::I64;
-                ad.dst = d_at;
-                ad.operands = {addr, v_off};
-                ad.source_line = e->loc.line;
-                emit(current_block_, std::move(ad));
-            }
-            emit_store_typed(d_at, w, ir::IrType::I64, e->loc.line);
-        }
+        emit_memberwise_copy(addr, rhs, sz, e->loc.line);
         if (it_sl != tc_.struct_layouts().end() &&
             it_sl->second.has_copy_hook) {
             emit_struct_method_on_host_field(
@@ -1210,71 +1112,22 @@ bool Lowering::try_lower_assign_to_index(ast::AssignExpr *e,
     // STORE -> guardaba el CONTENIDO apuntado en vez del puntero.
     // `v.arr[i] = ...` (@c is_overlay_array, elemento INLINE en la vista)
     // conserva la copia de bytes: ahi no hay puntero que guardar.
-    if ((ix->result_type.kind == PrimitiveKind::STRUCT ||
-         ix->result_type.kind == PrimitiveKind::ARRAY) &&
-        (ix->is_overlay_array || !type_is_overlay(ix->result_type)) &&
-        e->op == ast::AssignOp::Assign) {
-        uint64_t struct_size = 0;
-        if (ix->result_type.kind == PrimitiveKind::STRUCT) {
-            const auto &layouts = tc_.struct_layouts();
-            auto it = layouts.find(ix->result_type.struct_name);
-            if (it != layouts.end()) {
-                struct_size = static_cast<uint64_t>(it->second.size_bytes);
-            }
-            if (struct_size == 0) {
-                const auto &elays = tc_.enum_layouts();
-                auto ite = elays.find(ix->result_type.struct_name);
-                if (ite != elays.end()) {
-                    struct_size = static_cast<uint64_t>(ite->second.size_bytes);
-                }
-            }
-        }
-        if (struct_size > 0 && (struct_size % 8) == 0) {
+    // Una lambda (`fn(...)`) tambien: el elemento son sus 16 bytes, no un
+    // puntero a un par que vive en la pila de quien la creo.
+    const bool elem_is_aggregate =
+        ix->is_overlay_array
+            ? (ix->result_type.kind == PrimitiveKind::STRUCT ||
+               ix->result_type.kind == PrimitiveKind::ARRAY)
+            : is_inline_aggregate(ix->result_type);
+    if (elem_is_aggregate && e->op == ast::AssignOp::Assign) {
+        // Del tamano EXACTO del elemento (struct, enum, array anidado,
+        // lambda): antes solo se copiaba si era multiplo de 8, y un struct de
+        // 12 bytes caia al STORE escalar de abajo, que guardaba su DIRECCION.
+        const uint64_t elem_size = size_of_type(ix->result_type);
+        if (elem_size > 0) {
             const ir::IrValueId src = lower_expr(e->value.get());
             if (src == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
-            const bool src_host = fn_->values[src].is_host_ptr();
-            const bool dst_host = fn_->values[addr].is_host_ptr();
-            const uint64_t qwords = struct_size / 8;
-            for (uint64_t q = 0; q < qwords; ++q) {
-                ir::IrValueId off_src = src;
-                ir::IrValueId off_dst = addr;
-                if (q > 0) {
-                    const uint64_t byte_off = q * 8;
-                    ir::IrValueId v_off =
-                        emit_const(ir::IrType::I64, byte_off, e->loc.line);
-                    {
-                        ir::IrValueId v_new = fn_->new_value(ir::IrType::PTR);
-                        if (src_host)
-                            fn_->values[v_new].memory =
-                                ir::MemorySpace::HostByConstruction;
-                        ir::IrInstr ad{};
-                        ad.op = ir::IrOp::ADD;
-                        ad.type = ir::IrType::I64;
-                        ad.dst = v_new;
-                        ad.operands = {src, v_off};
-                        ad.source_line = e->loc.line;
-                        emit(current_block_, std::move(ad));
-                        off_src = v_new;
-                    }
-                    {
-                        ir::IrValueId v_new = fn_->new_value(ir::IrType::PTR);
-                        if (dst_host)
-                            fn_->values[v_new].memory =
-                                ir::MemorySpace::HostByConstruction;
-                        ir::IrInstr ad{};
-                        ad.op = ir::IrOp::ADD;
-                        ad.type = ir::IrType::I64;
-                        ad.dst = v_new;
-                        ad.operands = {addr, v_off};
-                        ad.source_line = e->loc.line;
-                        emit(current_block_, std::move(ad));
-                        off_dst = v_new;
-                    }
-                }
-                ir::IrValueId v_qw =
-                    emit_load_typed(off_src, ir::IrType::I64, e->loc.line);
-                emit_store_typed(off_dst, v_qw, ir::IrType::I64, e->loc.line);
-            }
+            emit_memberwise_copy(addr, src, elem_size, e->loc.line);
             out = addr;
             return true;
         }
@@ -1351,92 +1204,22 @@ bool Lowering::try_lower_assign_to_deref(ast::AssignExpr *e,
         const bool value_agg = (value_t.kind == PrimitiveKind::STRUCT ||
                                 value_t.kind == PrimitiveKind::ARRAY);
         if ((deref_agg || value_agg) && e->op == ast::AssignOp::Assign) {
-            // Calcular sizeof.  STRUCT: lookup en struct_layouts_;
-            // ARRAY: type.array_size * sizeof(elt) si conocido.
-            uint64_t struct_size = 0;
+            // Del tamano EXACTO del agregado (struct, enum, array fijo):
+            // antes solo se copiaba si era multiplo de 8, y un `i32[3]` caia
+            // al STORE escalar, que guardaba su direccion.  Un `T[]` sin
+            // tamano es un puntero y va al STORE.
             const Type &agg_t = deref_agg ? deref_t : value_t;
-            if (agg_t.kind == PrimitiveKind::STRUCT) {
-                const auto &layouts = tc_.struct_layouts();
-                auto it = layouts.find(agg_t.struct_name);
-                if (it != layouts.end()) {
-                    struct_size = static_cast<uint64_t>(it->second.size_bytes);
-                }
-                // Tambien enum (encoded como STRUCT con struct_name).
-                if (struct_size == 0) {
-                    const auto &elays = tc_.enum_layouts();
-                    auto ite = elays.find(agg_t.struct_name);
-                    if (ite != elays.end()) {
-                        struct_size =
-                            static_cast<uint64_t>(ite->second.size_bytes);
-                    }
-                }
-            }
-            if (struct_size > 0 && (struct_size % 8) == 0) {
-                // Bajar RHS para obtener el PTR fuente.
+            const uint64_t agg_size =
+                (agg_t.kind == PrimitiveKind::ARRAY && agg_t.array_size == 0)
+                    ? 0
+                    : size_of_type(agg_t);
+            if (agg_size > 0) {
                 const ir::IrValueId src = lower_expr(e->value.get());
                 if (src == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
-                // Copia qword a qword.  Para size_bytes no multiplo
-                // de 8 usariamos byte-loops; los structs Vesta tienen
-                // padding a 8-bytes por field-alignment, asi que
-                // size_bytes siempre es multiplo de 8 para Vesta
-                // structs.  Defensa por bytes <8: fall-through.
-                // Propagamos is_host_ptr de src/addr a los LOAD/STORE
-                // para emitir movh cuando corresponda.
-                const bool src_host = fn_->values[src].is_host_ptr();
-                const bool dst_host = fn_->values[addr].is_host_ptr();
-                const uint64_t qwords = struct_size / 8;
-                for (uint64_t q = 0; q < qwords; ++q) {
-                    // src + q*8
-                    ir::IrValueId off_src = src;
-                    ir::IrValueId off_dst = addr;
-                    if (q > 0) {
-                        const uint64_t byte_off = q * 8;
-                        ir::IrValueId v_off =
-                            emit_const(ir::IrType::I64, byte_off, e->loc.line);
-                        // src + off
-                        {
-                            ir::IrValueId v_new =
-                                fn_->new_value(ir::IrType::PTR);
-                            if (src_host)
-                                fn_->values[v_new].memory =
-                                    ir::MemorySpace::HostByConstruction;
-                            ir::IrInstr ad{};
-                            ad.op = ir::IrOp::ADD;
-                            ad.type = ir::IrType::I64;
-                            ad.dst = v_new;
-                            ad.operands = {src, v_off};
-                            ad.source_line = e->loc.line;
-                            emit(current_block_, std::move(ad));
-                            off_src = v_new;
-                        }
-                        {
-                            ir::IrValueId v_new =
-                                fn_->new_value(ir::IrType::PTR);
-                            if (dst_host)
-                                fn_->values[v_new].memory =
-                                    ir::MemorySpace::HostByConstruction;
-                            ir::IrInstr ad{};
-                            ad.op = ir::IrOp::ADD;
-                            ad.type = ir::IrType::I64;
-                            ad.dst = v_new;
-                            ad.operands = {addr, v_off};
-                            ad.source_line = e->loc.line;
-                            emit(current_block_, std::move(ad));
-                            off_dst = v_new;
-                        }
-                    }
-                    // LOAD i64 del src + q*8
-                    ir::IrValueId v_qw =
-                        emit_load_typed(off_src, ir::IrType::I64, e->loc.line);
-                    // STORE al dst + q*8
-                    emit_store_typed(off_dst, v_qw, ir::IrType::I64,
-                                     e->loc.line);
-                }
+                emit_memberwise_copy(addr, src, agg_size, e->loc.line);
                 out = addr;
                 return true;
             }
-            // Si no se pudo calcular el size, cae al path generico
-            // (que solo copia 8 bytes -- bug documentado).
         }
         // Bug fix 2026-05-23 (Audit 45): auto-promotion para `*p = "lit"`
         // cuando p es string* (deref produce STRING).

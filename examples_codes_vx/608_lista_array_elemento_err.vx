@@ -1,0 +1,8 @@
+// Cada elemento de la lista tiene que caber en el elemento del array: una
+// cadena no es un `i32`.  Este programa NO compila (VX2143).
+
+i32 main() {
+	i32[2] a = {1, 2};
+	a        = {1, "dos"};
+	return a[0];
+}

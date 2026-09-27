@@ -28,6 +28,7 @@
 #include "vx/comptime/comptime_introspect.h"
 #include "ir/ir_type_info.h" // vocabulario UNICO de anchura/clase de un IrType
 #include "ir/synthetic_symbols.h" // la familia de `__module_init`
+#include "util/scoped_assign.h" // el modo macro, restaurado al salir
 #include <algorithm>
 #include <functional>
 #include <map>
@@ -1010,16 +1011,10 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
     /*  MC.17.1: setear flag para que lower_var_decl trate
      * `comptime var/const` LOCALES como vars runtime regulares.
      * Reset al salir de la funcion. */
-    const bool prev_is_macro = current_fn_is_macro_;
     /* P1: fn-VM comparte modo macro. */
-    current_fn_is_macro_ =
-        (fd->is_comptime && fd->is_macro) || is_vm_comptime_fn;
-    struct ScopeGuard {
-        bool *flag;
-        bool saved;
-
-        ~ScopeGuard() { *flag = saved; }
-    } macro_flag_guard{&current_fn_is_macro_, prev_is_macro};
+    const util::ScopedAssign<bool> macro_flag_guard(
+        current_fn_is_macro_,
+        (fd->is_comptime && fd->is_macro) || is_vm_comptime_fn);
 
     ir::IrFunction fn;
     /*  MC.1: nombre prefijado para macros lowered al IR.

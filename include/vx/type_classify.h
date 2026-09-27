@@ -40,11 +40,13 @@
 
 #include <functional>
 #include <string>
+#include <vector>
 
 namespace vx {
 
 struct Type;         ///< fwd (definido en vx/types.h)
 struct StructLayout; ///< fwd (definido en vx/type_checker.h)
+struct ClassMethodInfo; ///< fwd (definido en vx/type_checker.h)
 
 /**
  * @brief Resolver de layouts de struct para la recursion sobre campos.
@@ -88,6 +90,34 @@ bool is_c_representable(const Type &t, const StructResolver &find_struct);
  *    (el puntero en si no posee; el cleanup, si lo hay, es del apuntado).
  */
 bool is_managed(const Type &t, const StructResolver &find_struct);
+
+/**
+ * @brief El destructor (`~Tipo()`) entre los metodos de un struct o clase, o
+ *        nulo si no declara ninguno.
+ *
+ * Estaba escrito como un bucle en una docena de sitios, con tres preguntas
+ * distintas mezcladas: si lo hay, cual es, y si el tipo necesita limpieza.
+ *
+ * @param methods Los metodos del tipo.
+ * @return El destructor, o nulo.
+ */
+const ClassMethodInfo *
+find_destructor(const std::vector<ClassMethodInfo> &methods) noexcept;
+
+/**
+ * @brief Si el struct declara `~Struct()`.
+ * @param lay Layout del struct.
+ * @return true si lo declara.
+ */
+bool struct_has_destructor(const StructLayout &lay) noexcept;
+
+/**
+ * @brief Si un valor de este struct necesita LIMPIEZA al morir: declara
+ *        destructor o tiene algun campo que lo necesite.
+ * @param lay Layout del struct.
+ * @return true si hay que limpiarlo.
+ */
+bool struct_needs_cleanup(const StructLayout &lay) noexcept;
 
 } // namespace vx
 

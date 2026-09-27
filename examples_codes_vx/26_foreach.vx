@@ -17,7 +17,16 @@ namespace ejemplos.foreach;
 // Limitacion MVP: solo arrays con tamano conocido en compile time
 // (T[N], no T[] decay-to-pointer).
 //
-// Test: suma de 1..10 = 55.
+// Test: suma de 1..10 = 55, y un recorrido de structs que suma 0.
+//
+// El elemento conserva el tipo ESCRITO: con un array de structs, la variable
+// del bucle es ese struct con su nombre (antes quedaba como un struct sin
+// nombre y no se podia leer ningun campo).
+
+struct Punto {
+	i32 x;
+	i32 y;
+}
 
 i32 main() {
 	i32[10] arr;
@@ -29,6 +38,13 @@ i32 main() {
 	i32 sum = 0_i32;
 	for (i32 x : arr) {
 		sum = sum + x;
+	}
+
+	Punto[2] ps;
+	ps[0] = {.x = 1_i32, .y = -1_i32};
+	ps[1] = {.x = 5_i32, .y = -5_i32};
+	for (Punto p : ps) {
+		sum = sum + p.x + p.y; // cada punto suma 0
 	}
 	return sum; // 55
 }

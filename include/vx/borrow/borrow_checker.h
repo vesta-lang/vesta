@@ -53,6 +53,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "util/name_pool.h" // los punteros, por nombre internado
 #include "vx/ast.h"
 #include "vx/borrow/place.h" // EL LUGAR prestado, que sustituye al nombre
 #include "vx/diagnostic.h"
@@ -313,9 +314,10 @@ class BorrowChecker {
     bool on_borrow_escape(const std::string &borrower_name,
                           SourceLoc loc_escape, const std::string &escape_kind);
 
-    /// Busca el OwnerKind de un owner registrado.  Devuelve Local si
-    /// no esta registrado (caso defensivo).
-    OwnerKind owner_kind_of(const std::string &owner_name) const noexcept;
+    /// @brief Busca el OwnerKind de un owner registrado.
+    /// @param owner_root La raiz, internada como la lleva el lugar.
+    /// @return Local si no esta registrado (caso defensivo).
+    OwnerKind owner_kind_of(util::InternedName owner_root) const noexcept;
 
     /// F3 - resuelve el owner ROOT de @p borrower_name siguiendo la
     /// cadena de reborrows.  Devuelve "" si no es un borrower
@@ -378,11 +380,72 @@ class BorrowChecker {
     void mark_as_reborrow(const std::string &reborrower_name,
                           const std::string &source_borrower_name);
 
+    /**
+     * @brief Apunta a QUE lugar senala el puntero crudo @p ptr_name (`T* p =
+     *        &arena[0]`), o lo olvida si @p pointee no es valido.
+     *
+     * Es la procedencia que un prestamo ya tiene por construccion y un puntero
+     * crudo no: sin ella, `*p` y `lend(p)` eran la variable `p` -- un LOCAL --
+     * y no la region que presta.  Con ella, prestar desde `p` presta esa
+     * region, y escribir por otro puntero a la misma choca con el prestamo.
+     *
+     * @param ptr_name El puntero.
+     * @param pointee  El lugar al que senala.
+     */
+    void note_pointer_target(const std::string &ptr_name,
+                             borrow::Place pointee);
+
+    /**
+     * @brief El lugar al que senala el puntero crudo @p ptr_name, si se sabe;
+     *        sin raiz (@c Place::valid() falso) si no.
+     * @param ptr_name El puntero.
+     * @return El lugar apuntado.
+     */
+    borrow::Place pointer_target_of(const std::string &ptr_name) const;
+
+    /**
+     * @brief R4 para un prestamo SIN NOMBRE que se devuelve (`return
+     *        lend_mut(p)`): la misma regla que @ref on_borrow_escape, sobre el
+     *        lugar prestado.
+     * @param owner       El lugar prestado.
+     * @param loc_escape  Donde escapa.
+     * @param escape_kind Como escapa (`return`).
+     * @return `false` si el lugar es de un local y ya se reporto.
+     */
+    bool on_place_escape(const borrow::Place &owner, SourceLoc loc_escape,
+                         const std::string &escape_kind);
+
+    /**
+     * @brief Hay algun prestamo registrado en la funcion en curso?
+     *
+     * La salida rapida de quien pregunta por cada LECTURA: sin prestamos no
+     * hay nada que una lectura pueda pisar, y la inmensa mayoria de funciones
+     * no presta nada.  Asi comprobar lecturas no cuesta ni construir el lugar.
+     *
+     * @return @c true si hay prestamos con nombre o sin el.
+     */
+    bool has_borrows() const noexcept {
+        return !borrows_.empty() || !anon_borrows_.empty();
+    }
+
   private:
+    /// Puntero crudo -> lugar al que senala (@ref note_pointer_target).
+    std::unordered_map<util::InternedName, borrow::Place,
+                       util::InternedNameHash>
+        pointer_targets_;
+
+    /// @brief La regla de R4, sobre la RAIZ del lugar: un prestamo de algo que
+    ///        muere con la funcion no puede salir de ella.  La comparten el
+    ///        prestamo con nombre y el que no.
+    bool check_escape_(const borrow::Place &owner, const std::string &cite,
+                       SourceLoc loc_escape, const std::string &escape_kind);
+
     Diagnostics &diags_;
     /// Por RAIZ, no por lugar: buscar es O(1) y lo que se recorre despues son
-    /// los prestamos vivos de esa raiz.  @see OwnerState
-    std::unordered_map<std::string, OwnerState> owners_;
+    /// los prestamos vivos de esa raiz.  La clave es la raiz INTERNADA del
+    /// lugar, la misma que lleva @c borrow::Place::root.  @see OwnerState
+    std::unordered_map<util::InternedName, OwnerState, util::InternedNameHash>
+        owners_;
 
     /// @brief El prestamo vivo de @p place en @p st, si lo hay.
     ///

@@ -1637,10 +1637,10 @@ static ComptimeEvalResult eval_builtin_call(const TypeChecker &tc,
      * concepto (built-in o de usuario), `Concepto<T>()` evalua a 0/1.  Esto
      * permite `concept Ordenable<T> = Comparable<T>() && Sized<T>();`. */
     {
-        const ConceptEval ce = comptime_eval_concept(tc, nm, t1);
-        if (ce.found) {
+        const ConceptEval answer = eval_concept_question(tc, nm, *ce);
+        if (answer.found) {
             r.ok = true;
-            r.value = ce.satisfied ? 1 : 0;
+            r.value = answer.satisfied ? 1 : 0;
             return r;
         }
     }

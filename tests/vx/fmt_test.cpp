@@ -299,6 +299,24 @@ void check_spacing() {
     check(cast_prefijo.find("(v + 1) & 3") != std::string::npos,
           "tras una AGRUPACION, `&` sigue siendo un `y` logico");
 
+    /* Un literal compuesto va PEGADO sea cual sea su tipo: el salto del tipo
+     * del cast no sabia de genericos ni de `[N]`, y `(i32[3]) {` salia con un
+     * espacio que `(Punto){` no llevaba.  Y el `[N]` es tipo SOLO entre
+     * corchetes: `(j * 10)` sigue siendo una multiplicacion. */
+    const std::string compuesto =
+        fmt("struct Punto { i32 x; }\nstruct Caja<T> { T v; }\n"
+            "i32 f(i32 j) { i32[3] a = (i32[3]) { 1, 2, 3};\n"
+            "Caja<i64> c = (Caja<i64>) {.v = 1};\n"
+            "Punto p = (Punto){.x = 1}; return (i32)(j * 10); }\n");
+    check(compuesto.find("(i32[3]){1, 2, 3}") != std::string::npos,
+          "literal compuesto de ARRAY pegado");
+    check(compuesto.find("(Caja<i64>){.v = 1}") != std::string::npos,
+          "literal compuesto GENERICO pegado");
+    check(compuesto.find("(Punto){.x = 1}") != std::string::npos,
+          "literal compuesto de struct pegado");
+    check(compuesto.find("(j * 10)") != std::string::npos,
+          "un literal fuera de `[]` no es parte de un tipo");
+
     /* `R5` en UNA pasada: un cuerpo escrito en una linea que hay que repartir
      * sale ya con sus llaves solas.
      *

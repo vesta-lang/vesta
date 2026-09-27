@@ -189,6 +189,23 @@ const CatEntry kEntries[] = {
     {"VX2134", {"[fnaddr] addresses={0} crossing={1} (native-call={2} inline-asm={3} store={4} return={5} via-callee={6})", "[fnaddr] direcciones={0} cruzan={1} (llamada-nativa={2} asm={3} almacen={4} retorno={5} por-callee={6})"}},
     {"VX2135", {"the default value of field '{0}' of '{1}' could not be lowered, so the field would be left at zero", "el valor por defecto del campo '{0}' de '{1}' no se ha podido bajar, asi que el campo quedaria a cero"}},
     {"VX2136", {"unknown type '{0}' in the declaration of '{1}'", "tipo desconocido '{0}' en la declaracion de '{1}'"}},
+    {"VX2137", {"the concept '{0}' takes {1} type argument(s) -- the checked type first, then its arguments -- but got {2}", "el concepto '{0}' toma {1} argumento(s) de tipo -- primero el tipo comprobado, luego sus argumentos -- y recibio {2}"}},
+    {"VX2138", {"asking the concept '{0}' takes no runtime arguments: only its type arguments, as in '{0}<T>()'", "preguntar por el concepto '{0}' no lleva argumentos de ejecucion: solo los de tipo, como en '{0}<T>()'"}},
+    {"VX2139", {"'{0}' declares 'impl {1}' but does not satisfy the concept '{1}'", "'{0}' declara 'impl {1}' pero no cumple el concepto '{1}'"}},
+    {"VX2140", {"unknown concept '{0}' in 'impl {0} for {1}'", "concepto desconocido '{0}' en 'impl {0} for {1}'"}},
+    {"VX2141", {"an initializer list for the array '{0}' is positional: '.{1} =' names a struct field, and an array has none", "una lista de inicializacion para el array '{0}' es posicional: '.{1} =' nombra un campo de struct, y un array no tiene"}},
+    {"VX2142", {"the initializer list has {1} element(s) and the array '{0}' holds {2}", "la lista de inicializacion tiene {1} elemento(s) y el array '{0}' tiene {2}"}},
+    {"VX2143", {"element {0} of the initializer list is '{1}', which does not fit in an array element of type '{2}'", "el elemento {0} de la lista de inicializacion es '{1}', que no cabe en un elemento del array de tipo '{2}'"}},
+    {"VX2144", {"the borrow cannot outlive what it came from: '{0}' belongs to a local that lives only for this function, and {1} exposes a borrow of it outside the scope where that local exists", "el prestamo no puede sobrevivir a su origen: '{0}' es de un local que vive solo durante esta funcion, y {1} expone un prestamo suyo fuera del ambito donde ese local existe"}},
+    {"VX2145", {"'{0}' takes {1} argument(s), and {2} were passed", "'{0}' recibe {1} argumento(s), y se pasaron {2}"}},
+    {"VX2146", {"'{0}' lends a variable, named by itself, and this argument is an expression: nothing owns what it computes, so there is no owner to hold the borrow to its rules", "'{0}' presta una variable, nombrada por si misma, y este argumento es una expresion: lo que calcula no es de nadie, asi que no hay dueno al que atar el prestamo y sus reglas"}},
+    {"VX2147", {"'{0}' cannot lend '{1}': it is a plain local, which lives in the machine's stack, and a borrow is a host address that can reach any function.  Declare it `unique<{2}> {1} = unique_box(...)`", "'{0}' no puede prestar '{1}': es un local corriente, que vive en la pila de la maquina, y un prestamo es una direccion del anfitrion que puede llegar a cualquier funcion.  Declaralo `unique<{2}> {1} = unique_box(...)`"}},
+    {"VX2148", {"'lend_mut' cannot take an exclusive borrow from a shared one: '{0}' is a `borrow<T>`, and exclusivity is not raised after the fact", "'lend_mut' no puede sacar un prestamo exclusivo de uno compartido: '{0}' es un `borrow<T>`, y la exclusividad no se sube a posteriori"}},
+    {"VX2149", {"'read_borrow' reads through a `borrow<T>` or a `borrow_mut<T>`, and its argument is '{0}'", "'read_borrow' lee a traves de un `borrow<T>` o un `borrow_mut<T>`, y su argumento es '{0}'"}},
+    {"VX2150", {"'write_borrow' writes through a `borrow_mut<T>`, and its first argument is '{0}'", "'write_borrow' escribe a traves de un `borrow_mut<T>`, y su primer argumento es '{0}'"}},
+    {"VX2151", {"'write_borrow' writes a '{0}' into a borrow of '{1}'", "'write_borrow' escribe un '{0}' en un prestamo de '{1}'"}},
+    {"VX2152", {"'{0}' borrows a single '{1}', so it has nothing to index: an index would reach memory the borrow does not cover.  To index, lend the whole array -- `lend(arr)` gives `borrow<{1}[N]>`", "'{0}' presta un solo '{1}', asi que no hay nada que indexar: un indice llegaria a memoria que el prestamo no cubre.  Para indexar, presta el array entero -- `lend(arr)` da `borrow<{1}[N]>`"}},
+    {"VX2153", {"'{0}' is a shared borrow: it only reads, and this writes through it.  Take it with `lend_mut` to write", "'{0}' es un prestamo compartido: solo lee, y esto escribe a traves de el.  Tomalo con `lend_mut` para escribir"}},
     {"VX3001", {"{0} of {1} bytes is outside {2}: the object reserves [0, {3}) and the access is [{4}, {5})", "{0} de {1} bytes fuera de {2}: el objeto reserva [0, {3}) y el acceso es [{4}, {5})"}},
     {"VX3002", {"write", "escritura"}},
     {"VX3003", {"read", "lectura"}},
@@ -196,6 +213,7 @@ const CatEntry kEntries[] = {
     {"VX3005", {"either reserve at least {0} bytes for the object, or keep the access within [0, {1})", "o reserva al menos {0} bytes para el objeto, o manten el acceso dentro de [0, {1})"}},
     {"VX3006", {"in function '{0}' (the line refers to its own module, which may not be the one being compiled)", "en la funcion '{0}' (la linea es la de su propio modulo, que puede no ser el que se compila)"}},
     {"VX3007", {"lowering: unresolved name '{0}'", "bajado: nombre no resuelto '{0}'"}},
+    {"VX3008", {"an initializer list only builds a struct, and here it goes to something that is not one: write the value itself, or give the list its type with a cast to the struct", "una lista de inicializacion solo construye un struct, y aqui va a algo que no lo es: escribe el valor tal cual, o dale su tipo a la lista con un cast al struct"}},
     {"VX4001", {"'{0}' is declared with @Target(\"{1}\"), which does not hold for this target -- that declaration is not available here", "'{0}' esta declarado con @Target(\"{1}\"), que no se cumple en este objetivo -- esa declaracion no esta disponible aqui"}},
     {"VX4002", {"'{0}' is only declared for other targets ({1}) -- no variant matches the target being compiled", "'{0}' solo esta declarado para otros objetivos ({1}) -- ninguna variante encaja con el objetivo que se esta compilando"}},
     {"VX4003", {"the namespace '{0}' is offered by two different places; the one in '{1}' is used and the one in '{2}' is ignored ({3} namespaces in total)", "el namespace '{0}' lo ofrecen dos sitios distintos; se usa el de '{1}' y se ignora el de '{2}' ({3} namespaces en total)"}},
@@ -869,7 +887,7 @@ const CatEntry kEntries[] = {
     {"use_def.unused", {"'{2}' is never used", "'{2}' no se usa en ningun sitio"}},
     {"value_shape.none", {"it has no values with components", "no tiene valores con componentes"}},
 };
-const int kEntryCount = 848;
+const int kEntryCount = 866;
 
 } // namespace
 
