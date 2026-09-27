@@ -205,9 +205,25 @@ inline std::string macro_base_name(const std::string &name) {
     return strip_synthetic_prefix(name, kMacroPrefix);
 }
 
-/// @brief El bloque `comptime { }` numero @p index.  @return El simbolo.
-inline std::string ctblock_symbol(size_t index) {
-    return kCtBlockPrefix + std::to_string(index);
+/**
+ * @brief El bloque `comptime { }` numero @p index de un modulo.
+ *
+ * Con el modulo dentro del nombre: los bloques se numeran por modulo, y al
+ * fusionar dos que tengan un `comptime { }` los dos serian `__ctblock_0`.
+ * El raiz no lleva modulo, como el resto de sus simbolos.
+ *
+ * @param owner Modulo que lo declara; vacio en el raiz.
+ * @param index Su numero dentro del modulo.
+ * @return El simbolo: `__ctblock_N` o `__ctblock_<modulo>__N`.
+ */
+inline std::string ctblock_symbol(const std::string &owner, size_t index) {
+    std::string out = kCtBlockPrefix;
+    if (!owner.empty()) {
+        out += owner;
+        out += "__";
+    }
+    out += std::to_string(index);
+    return out;
 }
 
 /// @brief Si @p name es un bloque `comptime { }`.  @return true si lo es.

@@ -7,6 +7,7 @@
 
 #include "util/env_flags.h"
 #include "vx/ast.h"
+#include "vx/comptime/comptime_blocks.h" // `comptime { }` -> funcion comptime
 #include "vx/comptime/comptime_collect.h"
 #include "vx/project/module_names.h" // module_symbol_prefix
 #include "vx/project/module_paths.h" // module_dump_path
@@ -428,6 +429,14 @@ std::vector<FlattenedNamespace> prepare_unit(const UnitEnv &env, size_t i) {
      * tomaba sobre casos sinteticos y la granularidad del artefacto se
      * elegia por arquitectura en vez de por dato.  Solo diagnostico. */
     collect_unit_comptime(pm, inline_namespaces);
+
+    /* Los `comptime { }` de modulo, a funciones comptime, igual que en el
+     * camino de fichero suelto: corren en la maquina de compilacion (JIT) y
+     * no en el evaluador de arbol del comprobador.  Con el modulo en el
+     * nombre, salvo en el raiz, para que dos modulos no den el mismo al
+     * fusionarse. */
+    comptime_blocks_to_functions(
+        *pm.ast, is_root ? std::string() : pm.module_name.str());
     return inline_namespaces;
 }
 
