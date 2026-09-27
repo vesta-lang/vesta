@@ -46,6 +46,7 @@
 #include "vx/diagram/graphviz_diagrams.h"
 #include "vx/diagram/html_diagrams.h"
 #include "vx/diagram/source_diagrams.h" // los del AST y los tipos, en su momento
+#include "vx/comptime/comptime_values.h" // los valores comptime para el editor
 #include "vx/module/namespace_flatten.h"
 #include "vx/parser.h"
 #include <iostream>
@@ -453,18 +454,18 @@ CompileResult compile_vx_source(const std::string &source,
     // que hace el camino de proyecto, por la misma funcion.
     comptime_blocks_to_functions(*mod, std::string());
 
-    res.tiempos.analisis_us = cerrar_fase();
-    phases.close(res.tiempos.analisis_us);
+    res.times.analysis_us = cerrar_fase();
+    phases.close(res.times.analysis_us);
     phases.open("frontend:types");
     /* El reparto DENTRO de esa fase.  Lexer y parser no son dos bloques -- el
      * parser tira de tokens bajo demanda --, asi que el lexico se muestrea y lo
      * que queda es la sintaxis.  Y los tamanos al lado: lo caro de un lexer se
      * juzga por token, no por fichero, y sin el denominador el numero no dice
      * si el fuente era grande o el codigo lento. */
-    res.tiempos.lexing_us_est = static_cast<long>(lx.estimated_micros());
-    res.tiempos.tokens = static_cast<long long>(lx.tokens());
-    res.tiempos.lexing_samples = static_cast<long long>(lx.samples());
-    res.tiempos.ast_decls = static_cast<long long>(mod->decls.size());
+    res.times.lexing_us_est = static_cast<long>(lx.estimated_micros());
+    res.times.tokens = static_cast<long long>(lx.tokens());
+    res.times.lexing_samples = static_cast<long long>(lx.samples());
+    res.times.ast_decls = static_cast<long long>(mod->decls.size());
 
     // 2. TypeChecker: rellena result_type y valida semantica.
     TypeChecker tc(*mod, res.diagnostics);
@@ -524,74 +525,17 @@ CompileResult compile_vx_source(const std::string &source,
     // NADA cambia respecto al flujo historico.  Solo LEEMOS las constantes
     // comptime top-level que el TypeChecker ya resolvio (sin tocar lowering
     // ni la logica de macros).  Lo consume el metodo LSP vesta/comptimeValues.
-    if (opts.dump_comptime_values) {
-        // Renderiza un ComptimeConst a (type_kind, value_str) legible.
-        // Conservador: int -> decimal; string -> texto entre comillas;
-        // array -> resumen "[n elementos]"; struct -> "{n campos}";
-        // type -> nombre del tipo.
-        for (const auto &kv : tc.comptime_const_values()) {
-            const auto &name = kv.first;
-            const auto &c = kv.second;
-            CompileResult::ComptimeValueSnapshot snap;
-            snap.name = name;
-            snap.scope = ""; // top-level (global); best-effort.
-            if (c.is_type) {
-                snap.type_kind = "type";
-                snap.value_str = type_to_string(c.type_val);
-            } else if (c.is_str) {
-                snap.type_kind = "string";
-                snap.value_str = "\"" + c.str_value + "\"";
-            } else if (c.is_array) {
-                snap.type_kind = "array";
-                snap.value_str =
-                    "[" + std::to_string(c.array_vals.size()) + " elementos]";
-            } else if (c.is_struct) {
-                snap.type_kind = "struct";
-                snap.value_str =
-                    "{" + std::to_string(c.struct_fields.size()) + " campos}";
-            } else {
-                snap.type_kind = "int";
-                snap.value_str = std::to_string(c.value);
-            }
-            res.comptime_values.push_back(std::move(snap));
-        }
-        // Ademas de las constantes top-level, volcamos las variables
-        // locales que computaron los bloques `comptime { ... }` (arrays
-        // y structs poblados por loops, etc).  El TypeChecker las captura
-        // justo antes de salir de cada bloque.
-        for (const auto &b : tc.comptime_block_snapshots()) {
-            CompileResult::ComptimeValueSnapshot snap;
-            snap.name = b.name;
-            snap.scope = b.scope;
-            snap.type_kind = b.type_kind;
-            snap.value_str = b.value_str;
-            res.comptime_values.push_back(std::move(snap));
-        }
-        // Y los valores que resolvieron los builtins de introspeccion
-        // (sizeof<T>, alignof<T>, kind<T>, type_id<T>, typename<T>), con su
-        // ubicacion para que el LSP los muestre por hover sobre la expresion.
-        for (const auto &h : tc.comptime_builtin_hits()) {
-            CompileResult::ComptimeValueSnapshot snap;
-            snap.name = h.name;
-            snap.scope = "";
-            snap.type_kind = h.type_kind;
-            snap.value_str = h.value_str;
-            snap.loc = h.loc;
-            // builtin_kind = el nombre antes del '<' (p.ej. "type.size").
-            const size_t lt = h.name.find('<');
-            snap.builtin_kind =
-                (lt != std::string::npos) ? h.name.substr(0, lt) : h.name;
-            res.comptime_values.push_back(std::move(snap));
-        }
-    }
+    // Por la misma funcion que el camino de proyecto.
+    if (opts.dump_comptime_values)
+        collect_comptime_values(tc, res.comptime_values);
 
     // 2.5. (opcional) Diagramas del AST y de los tipos: ahora, con los tipos
     // resueltos y antes de que el lowering altere el arbol.  Por la misma
     // funcion que el camino de proyecto.
     fill_source_diagrams(*mod, opts, res);
 
-    res.tiempos.tipos_us = cerrar_fase();
-    phases.close(res.tiempos.tipos_us);
+    res.times.types_us = cerrar_fase();
+    phases.close(res.times.types_us);
     phases.open("frontend:lowering");
 
     // 3. Lowering: AST -> ir::IrModule.  Pasamos el TypeChecker para
@@ -1072,8 +1016,8 @@ CompileResult compile_vx_source(const std::string &source,
     // vectorial recibe registro igual que uno entero.  Aqui hubo un rechazo
     // mientras el asignador solo sabia del banco entero.
 
-    res.tiempos.bajada_us = cerrar_fase();
-    phases.close(res.tiempos.bajada_us);
+    res.times.lowering_us = cerrar_fase();
+    phases.close(res.times.lowering_us);
     /* De aqui al final conviven optimizar y emitir, y sus tiempos se reparten
      * por resta al cerrar.  El tramo se llama por lo que de verdad envuelve --
      * las dos -- en vez de mentir llamandose `emit`, que es lo que hacia que el
@@ -1167,9 +1111,9 @@ CompileResult compile_vx_source(const std::string &source,
         // PARCIAL es propiedad del cuerpo escrito, no del optimizador.  El
         // coste TOTAL lo compone el analizador via el callgraph.  Fuera de
         // --analyze, inline normal (no se genera .velb en --analyze).
-        /* Se cronometra aparte.  Antes el campo `optimizar_us` valia CERO en el
+        /* Se cronometra aparte.  Antes el campo `optimize_us` valia CERO en el
          * camino de un fichero suelto -- no porque no se optimizara, sino
-         * porque su coste se contaba dentro de `emitir_us` --, asi que quien
+         * porque su coste se contaba dentro de `emit_us` --, asi que quien
          * mirase el reparto concluia que optimizar es gratis.  Un numero que se
          * publica y no es el que dice ser es peor que no publicarlo. */
         const auto marca_opt = RelojFase::now();
@@ -1282,7 +1226,7 @@ CompileResult compile_vx_source(const std::string &source,
                         /*allow_inline=*/!opts.emit_ir_preopt,
                         opts.asa.wants_stage(analysis::asa::kStageDuringOpt) ? &res.facts
                                                                     : nullptr);
-        res.tiempos.optimizar_us += static_cast<long>(
+        res.times.optimize_us += static_cast<long>(
             std::chrono::duration_cast<std::chrono::microseconds>(
                 RelojFase::now() - marca_opt)
                 .count());
@@ -1534,8 +1478,8 @@ CompileResult compile_vx_source(const std::string &source,
      * se puede saber cual de los dos es el que cuesta.  Hacia falta para poder
      * responder si `--analyze` -- que necesita el IR optimizado pero NO el
      * texto `.vel` -- se puede ahorrar la emision. */
-    res.tiempos.emitir_us = cerrar_fase() - res.tiempos.optimizar_us;
-    phases.close(res.tiempos.emitir_us + res.tiempos.optimizar_us);
+    res.times.emit_us = cerrar_fase() - res.times.optimize_us;
+    phases.close(res.times.emit_us + res.times.optimize_us);
 
     res.ok = !res.diagnostics.has_errors();
     return res;

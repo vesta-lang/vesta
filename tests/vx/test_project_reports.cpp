@@ -31,6 +31,7 @@ int g_failures = 0; ///< Cuantas comprobaciones han fallado.
 /// El programa: un struct para el diagrama de tipos y un `@Macro` llamado con
 /// un argumento entero, que es lo que el comprobador registra.
 const char *const kProgram = "i32 doblar(i32 x) => x * 2;\n"
+                             "comptime auto REPORT_SIZE = 6 * 7;\n"
                              "struct Point {\n"
                              "\ti64 x;\n"
                              "\ti64 y;\n"
@@ -69,6 +70,22 @@ bool has_expansion(const vx::CompileResult &res, const std::string &code) {
 }
 
 /**
+ * @brief Busca, entre los valores comptime publicados, uno cuyo nombre
+ *        contenga @p name y cuyo valor sea @p value.
+ * @param res   El resultado de compilar.
+ * @param name  Parte del nombre (con `namespace` va aplanado).
+ * @param value El valor escrito.
+ * @return Si esta.
+ */
+bool has_comptime_value(const vx::CompileResult &res, const std::string &name,
+                        const std::string &value) {
+    for (const auto &v : res.comptime_values)
+        if (v.name.find(name) != std::string::npos && v.value_str == value)
+            return true;
+    return false;
+}
+
+/**
  * @brief Las opciones con que se compila: el diagrama de tipos pedido.
  * @return Las opciones.
  */
@@ -76,6 +93,7 @@ vx::CompileOptions report_options() {
     vx::CompileOptions opts;
     opts.module_name = "main";
     opts.dump_mermaid_types = true;
+    opts.dump_comptime_values = true;
     return opts;
 }
 
@@ -97,6 +115,8 @@ int main() {
           "el fichero suelto dibuja el struct");
     check(has_expansion(single, "doblar(21)"),
           "el fichero suelto registra la llamada al @Macro");
+    check(has_comptime_value(single, "REPORT_SIZE", "42"),
+          "el fichero suelto publica el valor comptime");
 
     // El mismo programa con `namespace`: va por el camino de proyecto.
     std::error_code ec;
@@ -114,6 +134,8 @@ int main() {
           "el proyecto dibuja el struct");
     check(has_expansion(project, "doblar(21)"),
           "el proyecto registra la llamada al @Macro");
+    check(has_comptime_value(project, "REPORT_SIZE", "42"),
+          "el proyecto publica el valor comptime");
     fs::remove_all(dir, ec);
 
     if (g_failures == 0) std::printf("test_project_reports: OK\n");

@@ -96,6 +96,12 @@ struct ProjectModuleWork {
     /// suelto.  Un modulo servido de la cache no trae ninguno: no se evaluo.
     MacroExpectations macro_expectations;
     MacroSkips macro_skips;
+    /// Cuanto costo comprobar sus tipos y bajarlo, en microsegundos.  Por
+    /// modulo: los modulos se compilan en paralelo, asi que sumarlos no da el
+    /// tiempo de la compilacion (eso es `FrontendTimes::modules_us`).  El
+    /// camino de fichero suelto, que tiene uno solo, los publica tal cual.
+    long types_us = 0;
+    long lowering_us = 0;
     ///@}
 
     /**

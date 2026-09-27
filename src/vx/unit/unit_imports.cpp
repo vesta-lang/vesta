@@ -93,6 +93,12 @@ void create_unit_checker(const UnitEnv &env, size_t i,
 
     pm.tc->register_target_skipped_all(*env.target_skipped);
 
+    /* Si el editor pidio los valores comptime del documento -- el raiz --,
+     * las locales de sus bloques `comptime { }` se capturan AL EVALUARLOS:
+     * despues ya no existen. */
+    if (i + 1 == env.work->size() && env.opts->dump_comptime_values)
+        pm.tc->set_capture_comptime_block_locals(true);
+
     for (const auto &ins : inline_namespaces) {
         const uint32_t ns_idx =
             pm.tc->register_imported_namespace(ins.name, ins.name);

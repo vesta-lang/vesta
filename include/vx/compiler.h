@@ -543,7 +543,7 @@ struct CompileResult {
     Diagnostics diagnostics; ///< Errores y warnings acumulados.
 
     /**
-     * @struct TiemposFrontend
+     * @struct FrontendTimes
      * @brief Cuanto costo cada fase del frontend, en microsegundos.
      *
      * La construccion ya publicaba lo que tardan ensamblar y enlazar, pero de
@@ -554,51 +554,54 @@ struct CompileResult {
      * Se mide SIEMPRE, no bajo una opcion: el coste son cinco lecturas de
      * reloj por compilacion, y una medida que hay que pedir es una medida que
      * nadie mira.  Ademas responde a la pregunta de "cuanto tardo en ver el
-     * error" sin necesidad de un modo aparte: es @c comprobar_us, que abarca
+     * error" sin necesidad de un modo aparte: es @c check_us, que abarca
      * hasta el final del analisis de tipos.
+     *
+     * Los nombres de los campos son las claves con que se publican en JSON.
      */
-    struct TiemposFrontend {
-        long analisis_us = 0; ///< Lexico + sintaxis: fuente -> AST.
+    struct FrontendTimes {
+        long analysis_us = 0; ///< Lexico + sintaxis: fuente -> AST.
         /**
-         * @brief De @c analisis_us , lo que se ESTIMA del lexico.
+         * @brief De @c analysis_us , lo que se ESTIMA del lexico.
          *
          * Estimado y no medido: el lexer y el parser estan entrelazados -- el
          * parser tira de tokens bajo demanda --, asi que no son dos bloques que
          * se puedan cronometrar por separado.  Se muestrea uno de cada 256
          * tokens y se extrapola.  @see Lexer::estimated_micros
          *
-         * Lo que queda -- @c analisis_us menos esto -- es la sintaxis.
+         * Lo que queda -- @c analysis_us menos esto -- es la sintaxis.
          */
         long lexing_us_est = 0;
         long long tokens = 0;         ///< Tokens entregados.  EXACTO.
         long long lexing_samples = 0; ///< Muestras que sostienen la estimacion.
         long long ast_decls = 0;      ///< Declaraciones de primer nivel.
-        long tipos_us = 0;            ///< Comprobacion de tipos sobre el AST.
-        long bajada_us = 0;           ///< AST -> IR.
-        long optimizar_us = 0;        ///< Pases sobre el IR.
-        long emitir_us = 0;           ///< IR -> texto .vel.
+        long types_us = 0;            ///< Comprobacion de tipos sobre el AST.
+        long lowering_us = 0;         ///< AST -> IR.
+        long optimize_us = 0;         ///< Pases sobre el IR.
+        long emit_us = 0;             ///< IR -> texto .vel.
 
         /** Resolver el grafo de dependencias: averiguar QUE modulos entran en
          *  la compilacion.  Solo se llena al compilar un proyecto (varios
          *  modulos); en un fichero suelto no hay nada que resolver y vale 0.
-         *  Va aparte de @c analisis_us porque no es el mismo trabajo ni crece
+         *  Va aparte de @c analysis_us porque no es el mismo trabajo ni crece
          *  igual: uno depende del tamano del fuente y este del NUMERO de
          *  modulos y de si hay que redescubrirlos. */
-        long resolver_us = 0;
+        long resolve_us = 0;
         /** Compilar cada modulo del proyecto y fusionar su IR.  Incluye los
          *  que se saltan por estar en cache, que es justo lo que se quiere
-         *  poder comparar. */
-        long modulos_us = 0;
+         *  poder comparar.  Es tiempo de PARED: los modulos se compilan en
+         *  paralelo, asi que sus tiempos por separado no se suman aqui. */
+        long modules_us = 0;
 
         /// Hasta donde llega el diagnostico: analisis + tipos.  Es lo que
         /// esperaria quien solo quiere saber si su codigo esta bien.
-        long comprobar_us() const { return analisis_us + tipos_us; }
+        long check_us() const { return analysis_us + types_us; }
         long total_us() const {
-            return analisis_us + tipos_us + bajada_us + optimizar_us +
-                   emitir_us + resolver_us + modulos_us;
+            return analysis_us + types_us + lowering_us + optimize_us +
+                   emit_us + resolve_us + modules_us;
         }
     };
-    TiemposFrontend tiempos; ///< Reparto del coste del frontend.
+    FrontendTimes times; ///< Reparto del coste del frontend.
 
     /**
      * @brief Opcion W: IR serializado en bytes para embebido en `.velb`.

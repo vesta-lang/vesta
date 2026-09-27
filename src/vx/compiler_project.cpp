@@ -1290,7 +1290,7 @@ CompileResult compile_vx_project(
         return res;
     }
 
-    cerrar_fase(res.tiempos.resolver_us, "vx.phase.modules");
+    cerrar_fase(res.times.resolve_us, "vx.phase.modules");
 
     /* El reparto de instanciaciones genericas, UNO por proyecto.
      *
@@ -2177,7 +2177,7 @@ CompileResult compile_vx_project(
      * ninguna forma: en la curva se veia como una caida de 231 MiB sin nombre
      * -- las estructuras de cada modulo muriendo segun se funden en el root --
      * cuatro cortes antes de la marca de optimizar. */
-    cerrar_fase(res.tiempos.modulos_us, "vx.phase.merge");
+    cerrar_fase(res.times.modules_us, "vx.phase.merge");
 
     // 4. Merge IR de todos los modulos en uno solo.
     //
@@ -2896,7 +2896,7 @@ CompileResult compile_vx_project(
     ir::IrModule ir_pre_dump;
     if (opts.dump_ir) ir_pre_dump = merged;
 
-    cerrar_fase(res.tiempos.modulos_us, "vx.phase.optimize");
+    cerrar_fase(res.times.modules_us, "vx.phase.optimize");
 
     // 5. Optimizar el IR mergeado.  En modo --analyze SIN inline: el coste
     //    PARCIAL es propiedad del cuerpo escrito -- si el inline lo alterase,
@@ -3160,7 +3160,7 @@ CompileResult compile_vx_project(
      * verificaba; el que toma todo programa real, no. */
     ir::ir_verify_if_asked(merged, "post-opt", root_path);
 
-    cerrar_fase(res.tiempos.optimizar_us, "vx.phase.emit");
+    cerrar_fase(res.times.optimize_us, "vx.phase.emit");
 
     // 6. Emitir .vel desde el IR mergeado.
     ir::EmitOptions emit_opts;
@@ -3439,7 +3439,7 @@ CompileResult compile_vx_project(
      * funcion Y el ensamblado entero --.  Ahora el ensamblado abre la suya en
      * cuanto el frontend devuelve, y esta se queda con lo que de verdad cubre.
      */
-    cerrar_fase(res.tiempos.emitir_us, "vx.phase.finish");
+    cerrar_fase(res.times.emit_us, "vx.phase.finish");
 
     // AOT.2.d: detectar @AllocatorOverride / @PanicHandler en el modulo ROOT,
     // igual que hace compile_vx_source.  Sin esto, un .vx que declara el

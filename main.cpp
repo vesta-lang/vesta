@@ -3017,16 +3017,16 @@ int main(int argc, char *argv[]) {
 
         if (medir_analisis) {
             const long us_efectos = tramo_us();
-            const auto &tf = cr.tiempos;
-            std::cerr << "[analyze] tiempos: compilar " << us_compilar_coste
-                      << " us | coste " << us_coste_bigo
-                      << " us | modulo-final " << us_modulo_final
-                      << " us | efectos " << us_efectos << " us\n";
-            std::cerr << "[analyze]   dentro de compilar: resolver "
-                      << tf.resolver_us << " us | modulos " << tf.modulos_us
-                      << " us | analisis " << tf.analisis_us << " us | tipos "
-                      << tf.tipos_us << " us | bajada " << tf.bajada_us
-                      << " us | optimizar " << tf.optimizar_us << " us\n";
+            const auto &tf = cr.times;
+            std::cerr << "[analyze] times: compile " << us_compilar_coste
+                      << " us | cost " << us_coste_bigo
+                      << " us | final-module " << us_modulo_final
+                      << " us | effects " << us_efectos << " us\n";
+            std::cerr << "[analyze]   inside compile: resolve "
+                      << tf.resolve_us << " us | modules " << tf.modules_us
+                      << " us | analysis " << tf.analysis_us << " us | types "
+                      << tf.types_us << " us | lowering " << tf.lowering_us
+                      << " us | optimize " << tf.optimize_us << " us\n";
         }
 
         // Salida legible: por cada funcion (orden del modulo POST-opt),
@@ -5390,7 +5390,7 @@ int main(int argc, char *argv[]) {
          * un diagnostico, que es la pregunta que se hace quien esta editando.
          * Sale de la construccion normal, sin un modo aparte que pedir. */
         {
-            const auto &tf = cr.tiempos;
+            const auto &tf = cr.times;
             /* Un proyecto y un fichero suelto no se reparten igual: en el
              * primero el trabajo esta en resolver el grafo y compilar cada
              * modulo, y las fases de un unico fuente no aplican.  Se dice lo
@@ -5400,24 +5400,24 @@ int main(int argc, char *argv[]) {
              * antes que ella no ayuda. */
             {
                 auto linea = vesta::scout();
-                if (tf.resolver_us > 0 || tf.modulos_us > 0) {
+                if (tf.resolve_us > 0 || tf.modules_us > 0) {
                     linea << "[vx] "
                           << vx::diag::format("VXA082",
-                                              {std::to_string(tf.resolver_us),
-                                               std::to_string(tf.modulos_us),
-                                               std::to_string(tf.optimizar_us),
-                                               std::to_string(tf.emitir_us),
+                                              {std::to_string(tf.resolve_us),
+                                               std::to_string(tf.modules_us),
+                                               std::to_string(tf.optimize_us),
+                                               std::to_string(tf.emit_us),
                                                std::to_string(tf.total_us())})
                           << "\n";
                 } else {
                     linea << "[vx] "
                           << vx::diag::format(
-                                 "VXA081", {std::to_string(tf.analisis_us),
-                                            std::to_string(tf.tipos_us),
-                                            std::to_string(tf.bajada_us),
-                                            std::to_string(tf.optimizar_us),
-                                            std::to_string(tf.emitir_us),
-                                            std::to_string(tf.comprobar_us()),
+                                 "VXA081", {std::to_string(tf.analysis_us),
+                                            std::to_string(tf.types_us),
+                                            std::to_string(tf.lowering_us),
+                                            std::to_string(tf.optimize_us),
+                                            std::to_string(tf.emit_us),
+                                            std::to_string(tf.check_us()),
                                             std::to_string(tf.total_us())})
                           << "\n";
                 }
@@ -5522,7 +5522,7 @@ int main(int argc, char *argv[]) {
                    << vx::diag::format(
                           "VXA080",
                           {std::to_string(tf.lexing_us_est),
-                           std::to_string(tf.analisis_us - tf.lexing_us_est),
+                           std::to_string(tf.analysis_us - tf.lexing_us_est),
                            std::to_string(tf.tokens),
                            std::to_string(tf.lexing_samples),
                            std::to_string(vx::Lexer::kSampleEvery),
@@ -5608,14 +5608,14 @@ int main(int argc, char *argv[]) {
              * leen herramientas, o sea identificadores.  Y siguen acabando en
              * `_us`, que es por lo que el banco las filtra: cambiar el nombre
              * no puede cambiar lo que otro sabe leer. */
-            jf["analysis_us"] = tf.analisis_us;
-            jf["types_us"] = tf.tipos_us;
-            jf["lowering_us"] = tf.bajada_us;
-            jf["emit_us"] = tf.emitir_us;
-            jf["resolve_us"] = tf.resolver_us;
-            jf["modules_us"] = tf.modulos_us;
-            jf["optimize_us"] = tf.optimizar_us;
-            jf["frontcheck_us"] = tf.comprobar_us();
+            jf["analysis_us"] = tf.analysis_us;
+            jf["types_us"] = tf.types_us;
+            jf["lowering_us"] = tf.lowering_us;
+            jf["emit_us"] = tf.emit_us;
+            jf["resolve_us"] = tf.resolve_us;
+            jf["modules_us"] = tf.modules_us;
+            jf["optimize_us"] = tf.optimize_us;
+            jf["frontcheck_us"] = tf.check_us();
             jf["frontend_total_us"] = tf.total_us();
             jf["lexing_us_est"] = tf.lexing_us_est;
             jf["tokens"] = tf.tokens;

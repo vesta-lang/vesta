@@ -130,6 +130,9 @@ bool lower_unit(const UnitEnv &env, size_t i) {
     // vivir en un modulo importado; su simbolo se resuelve en el IR
     // mergeado via el reloc fnsym del LABEL_ADDR).
     if (is_root && !apply_root_overrides(env, pm, lo)) return false;
+    /* Solo para el editor: bajar tambien las funciones comptime para poder
+     * inspeccionarlas.  Del documento, que es el raiz. */
+    if (is_root) lo.set_emit_comptime_fns(opts.emit_comptime_fns);
     if (!opts.instrument_mode.empty() && opts.instrument_mode != "none") {
         lo.set_instrument_mode(opts.instrument_mode);
     }

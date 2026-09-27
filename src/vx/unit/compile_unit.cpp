@@ -8,16 +8,40 @@
 #include "vx/unit/compile_unit.h"
 
 #include "util/crash_report.h" // dejar dicho QUE modulo se esta compilando
+#include "vx/compiler.h"
+#include "vx/comptime/comptime_values.h"
 #include "vx/comptime/macro_report.h"
 #include "vx/diagram/source_diagrams.h"
 #include "vx/project/module_work.h"
 #include "vx/type_checker.h"
 
+#include <chrono>
 #include <iostream>
 #include <mutex>
 #include <sstream>
 
 namespace vx {
+
+namespace {
+
+/// El reloj con que se miden las fases de un modulo.
+using PhaseClock = std::chrono::steady_clock;
+
+/**
+ * @brief Microsegundos desde @p mark, y mueve la marca a ahora.
+ * @param mark La marca de la fase anterior; queda en el instante actual.
+ * @return Lo que duro la fase.
+ */
+long close_phase_us(PhaseClock::time_point &mark) {
+    const PhaseClock::time_point now = PhaseClock::now();
+    const long us = static_cast<long>(
+        std::chrono::duration_cast<std::chrono::microseconds>(now - mark)
+            .count());
+    mark = now;
+    return us;
+}
+
+} // namespace
 
 void compile_unit(const UnitEnv &env, size_t i) {
     std::vector<ProjectModuleWork> &work = *env.work;
@@ -46,6 +70,10 @@ void compile_unit(const UnitEnv &env, size_t i) {
     const std::vector<FlattenedNamespace> inline_namespaces =
         prepare_unit(env, i);
 
+    /* Desde aqui, la fase de TIPOS: crear el comprobador con lo que traen los
+     * imports, ejecutarlo y lo que se saca de el.  Mismas fronteras que en el
+     * camino de fichero suelto, que las publica tal cual. */
+    PhaseClock::time_point mark = PhaseClock::now();
     std::vector<ImportRequest> imports;
     if (!inject_unit_imports(env, i, inline_namespaces, imports)) {
         pm.ok = false;
@@ -63,10 +91,17 @@ void compile_unit(const UnitEnv &env, size_t i) {
      * se compila solo en su nivel, asi que escribir en el resultado no
      * compite con nadie. */
     if (is_root) fill_source_diagrams(*pm.ast, *env.opts, *env.res);
+    /* Y los valores comptime del documento, si el editor los pidio: el
+     * documento es el raiz. */
+    if (is_root && env.opts->dump_comptime_values)
+        collect_comptime_values(*pm.tc, env.res->comptime_values);
+    pm.types_us = close_phase_us(mark);
+
     if (!lower_unit(env, i)) {
         pm.ok = false;
         return;
     }
+    pm.lowering_us = close_phase_us(mark);
 
     build_unit_interface(env, i, keys, imports);
     persist_unit(env, i, keys);

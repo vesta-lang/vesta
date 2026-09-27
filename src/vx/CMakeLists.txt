@@ -516,6 +516,8 @@ add_library(vx_lib STATIC
     # Lo que se informa de cada `@Macro` (que genero, por que no se bajo): lo
     # recogen los dos caminos.
     comptime/macro_report.cpp
+    # Los valores comptime que ensena el editor: los dos caminos.
+    comptime/comptime_values.cpp
     # El artefacto comptime por contenido: compila el conjunto una vez y lo
     # reusa via el CAS
     comptime/comptime_artifact.cpp
