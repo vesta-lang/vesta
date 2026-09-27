@@ -696,29 +696,6 @@ ModulePassResult ir_pass_inline_multiblock(IrModule &mod,
                                            size_t threshold = 24);
 
 /**
- * @brief Inline del CUERPO de una lambda en el CALLCLOSURE (cross-backend).
- *
- * Cuando una funcion construye UNA closure (MAKE_CLOSURE) con capturas
- * by-value y la invoca UNA vez (CALLCLOSURE) en el mismo bloque, este pase
- * sustituye el CALLCLOSURE por el cuerpo del helper @c __lambda_N,
- * mapeando los params -> args y las capturas -> los valores capturados
- * (operands del MAKE_CLOSURE).  Elimina la llamada indirecta + el acceso
- * al env por completo (el DCE posterior limpia las stores/allocs del env
- * que quedan muertas).  Beneficia a TODOS los backends: el interprete y el
- * JIT evitan el dispatch @c vrt_callclosure, y el AOT evita el call
- * indirecto -- mejor que un puntero de funcion de C/C++.
- *
- * Conservador (cero riesgo de mispairing): solo actua si la funcion tiene
- * EXACTAMENTE un MAKE_CLOSURE y un CALLCLOSURE en el mismo bloque, todas
- * las capturas son by-value (no mutable), y el helper es single-block.
- * Ante cualquier anomalia, no transforma (mantiene el CALLCLOSURE).
- *
- * @param mod Modulo a transformar in-place.
- * @return true si inlino al menos una closure.
- */
-ModulePassResult ir_pass_inline_closures(IrModule &mod);
-
-/**
  * @brief Loop-Invariant Code Motion.
  *
  * Detecta loops via back-edges (JMP/BR_COND a un bloque anterior),
@@ -803,7 +780,7 @@ struct NakedFnAddrIndex {
 /**
  * @brief Construye @ref NakedFnAddrIndex a partir de un modulo.
  *
- * Se hace UNA vez y se le pasa a @ref ir_pass_devirt_cfn, que corre por
+ * Se hace UNA vez y se le pasa a @ref ir_pass_devirt_known_target, que corre por
  * funcion: rehacerlo dentro seria recorrer el modulo entero tantas veces como
  * funciones tenga.
  *
@@ -816,39 +793,6 @@ struct NakedFnAddrIndex {
  * @return El indice, ya ordenado.
  */
 NakedFnAddrIndex ir_naked_fnaddr_index(const IrModule &mod);
-
-/**
- * @brief Devirtualizacion de CALLIND a puntero a funcion crudo (cfn) constante.
- *
- * Si el @c func_ptr de un CALLIND viene de una direccion de funcion CONOCIDA al
- * compilar, lo reescribe a un CALL directo -- quita la rama indirecta y deja
- * que el inliner entre --.  Una llamada cuyo destino se sabe no tiene por que
- * bajar como indirecta.
- *
- * La direccion llega por DOS caminos y hay que mirar los dos:
- *
- *   - `LABEL_ADDR`, que es la direccion de bytecode.
- *   - `CALLN vrt:naked_fnaddr(proc, <hash>)`, que es como se toma la direccion
- *     NATIVA de una funcion plana en interprete/JIT.  El hash es una constante
- *     de compilacion derivada del nombre, asi que se deshace mirando los
- *     nombres del modulo; sin esto el pase no veia NADA por este camino, y una
- *     llamada perfectamente conocida se quedaba indirecta.
- *
- * @param fn    Funcion a transformar.
- * Tambien mira A TRAVES DE MEMORIA: un `cfn` guardado una sola vez y leido de
- * vuelta -- un `unique<cfn>`, un campo, una tabla con indice constante -- tiene
- * destino conocido, pero el valor que llega al `load` no es el mismo SSA que
- * el del `store`.  Quien empareja los dos es points-to, y se le pregunta a la
- * base; sin eso la llamada se quedaba indirecta teniendo el destino escrito al
- * lado, y una indirecta no se puede inlinar.
- *
- * @param index Las funciones del modulo por su hash, para deshacer el de
- *              `naked_fnaddr`.  Vacio = solo se mira `LABEL_ADDR`.
- * @param base  A quien preguntarle por los punteros de @p fn.
- * @return true si reescribio al menos un CALLIND.
- */
-PassResult ir_pass_devirt_cfn(IrFunction &fn, const NakedFnAddrIndex &index,
-                              analysis::asa::FactBase &base);
 
 /**
  * @brief Una llamada indirecta a una direccion del ANFITRION no es un CALLIND.

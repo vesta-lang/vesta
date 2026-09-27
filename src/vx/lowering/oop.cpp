@@ -391,10 +391,15 @@ void Lowering::lower_class_methods(ast::ClassDecl *cd, ir::IrModule &out) {
                     // native_poo.
                     uint32_t inner_dtor_idx = UINT32_MAX;
                     std::string inner_dtor_name;
+                    /* El destino DEMOSTRADO del despacho del destructor, por
+                     * el tipo declarado del campo. */
+                    util::InternedName inner_dtor_proven;
                     for (const auto &im : inner.methods) {
                         if (im.is_destructor) {
                             inner_dtor_idx = im.vtable_index;
                             inner_dtor_name = method_symbol_of(im);
+                            inner_dtor_proven = proven_dispatch_callee(
+                                f.type.struct_name, im, false);
                             break;
                         }
                     }
@@ -462,6 +467,7 @@ void Lowering::lower_class_methods(ast::ClassDecl *cd, ir::IrModule &out) {
                     } else {
                         cv.op = ir::IrOp::CALLVIRT;
                         cv.imm = static_cast<uint64_t>(inner_dtor_idx);
+                        cv.proven_callee = inner_dtor_proven;
                     }
                     cv.type = ir::IrType::VOID;
                     cv.dst = ir::IR_NO_VALUE;
@@ -1288,6 +1294,9 @@ void Lowering::generate_new_helpers(ir::IrModule &out) {
                         cv.operands.push_back(fn.params[i]);
                     }
                     cv.imm = static_cast<uint64_t>(ctor_vtable_idx);
+                    /* El objeto se acaba de crear: el constructor es este. */
+                    cv.proven_callee =
+                        proven_exact_callee(method_symbol_of(*effective_ctor));
                     cv.source_line = cd->loc.line;
                     fn.append(entry, std::move(cv));
                 }
@@ -2189,6 +2198,10 @@ ir::IrValueId Lowering::lower_class_method_call(ast::CallExpr *e) {
                         cv.type = ret_ir;
                         cv.dst = dst;
                         cv.imm = static_cast<uint64_t>(cm.vtable_index);
+                        /* Receptor de clase concreta conocida: el metodo es
+                         * exactamente este, salvo que lleve aspectos. */
+                        cv.proven_callee =
+                            proven_exact_callee(method_symbol_of(cm));
                         cv.operands.push_back(obj);
                         // SRET: retbuf tras obj, antes de args.
                         if (method_call_sret)
@@ -2222,6 +2235,9 @@ ir::IrValueId Lowering::lower_class_method_call(ast::CallExpr *e) {
         ci.type = ret_ir;
         ci.dst = dst;
         ci.func_ptr = v_fn;
+        /* Una interfaz que solo cumple una clase -- o varias con la misma
+         * implementacion heredada -- tiene un unico destino. */
+        ci.proven_callee = proven_dispatch_callee(lay.name, *mtd, true);
         ci.operands.push_back(obj);
         if (method_call_sret) ci.operands.push_back(v_method_call_retbuf);
         for (auto av : arg_vals)
@@ -2362,12 +2378,17 @@ ir::IrValueId Lowering::lower_class_method_call(ast::CallExpr *e) {
         // Resolucion v1 (2a): findclass directo en el entry, 1x/invocacion
         // (despreciable para dispatch-en-loop).  2b lo cambiara a slot-cache
         // eager en __module_init (1x total).
+        /* Si la jerarquia DEMUESTRA el destino no hay nada que adivinar: el
+         * hecho viaja en la instruccion y no se prepara ninguna guarda. */
+        const util::InternedName proven =
+            proven_dispatch_callee(iface_name, *mtd, true);
         std::vector<ir::DevirtCandidate> spec_cands;
-        if (dst != ir::IR_NO_VALUE && !method_call_sret) {
-            for (const auto &pr : spec_devirt_impls(iface_name, *mtd, true)) {
+        if (proven.empty() && dst != ir::IR_NO_VALUE && !method_call_sret) {
+            for (const DispatchImpl &d :
+                 spec_devirt_impls(iface_name, *mtd, true)) {
                 spec_cands.push_back(ir::DevirtCandidate{
-                    emit_findclass_into(setup, pr.first, e->loc.line),
-                    pr.second});
+                    emit_findclass_into(setup, d.cls.str(), e->loc.line),
+                    d.callee.str()});
             }
         }
 
@@ -2384,6 +2405,7 @@ ir::IrValueId Lowering::lower_class_method_call(ast::CallExpr *e) {
         ci.func_name += method_name;
         ci.imm = (static_cast<uint64_t>(mcount) << 32) |
                  static_cast<uint64_t>(method_index);
+        ci.proven_callee = proven;
         ci.operands.push_back(obj);
         ci.operands.push_back(v_buf);
         if (method_call_sret) ci.operands.push_back(v_method_call_retbuf);
@@ -2446,6 +2468,11 @@ ir::IrValueId Lowering::lower_class_method_call(ast::CallExpr *e) {
             ci.type = ret_ir;
             ci.dst = dst;
             ci.func_ptr = v_fn;
+            /* Una base con subclases que no sobrescriben el metodo resuelve
+             * igual en todas: la jerarquia lo demuestra y el optimizador hace
+             * la llamada directa. */
+            ci.proven_callee =
+                proven_dispatch_callee(bt.struct_name, *mtd, false);
             ci.operands.push_back(obj);
             if (method_call_sret) ci.operands.push_back(v_method_call_retbuf);
             for (auto av : arg_vals)
@@ -2468,13 +2495,19 @@ ir::IrValueId Lowering::lower_class_method_call(ast::CallExpr *e) {
      * un metodo de interfaz se resolvia con una comparacion y una llamada
      * directa, y la de un metodo de clase -- que es el despacho corriente de
      * todo el lenguaje -- pasaba entera por la tabla. */
+    /* Antes que adivinar, lo que la jerarquia DEMUESTRA: si todas las clases
+     * posibles resuelven a la misma funcion, no hay guarda que preparar. */
+    const util::InternedName proven =
+        proven_dispatch_callee(bt.struct_name, *mtd, false);
     std::vector<ir::DevirtCandidate> cv_spec;
-    if (dst != ir::IR_NO_VALUE && !method_call_sret && !native_poo_) {
+    if (proven.empty() && dst != ir::IR_NO_VALUE && !method_call_sret &&
+        !native_poo_) {
         std::vector<ir::IrInstr> cv_setup;
-        for (const auto &pr : spec_devirt_impls(bt.struct_name, *mtd, false)) {
+        for (const DispatchImpl &d :
+             spec_devirt_impls(bt.struct_name, *mtd, false)) {
             cv_spec.push_back(ir::DevirtCandidate{
-                emit_findclass_into(cv_setup, pr.first, e->loc.line),
-                pr.second});
+                emit_findclass_into(cv_setup, d.cls.str(), e->loc.line),
+                d.callee.str()});
         }
         splice_into_entry_block(cv_setup);
     }
@@ -2491,6 +2524,7 @@ ir::IrValueId Lowering::lower_class_method_call(ast::CallExpr *e) {
     for (auto av : arg_vals)
         ins.operands.push_back(av);
     ins.imm = static_cast<uint64_t>(mtd->vtable_index);
+    ins.proven_callee = proven;
     ins.source_line = e->loc.line;
     emit(current_block_, std::move(ins));
     if (!cv_spec.empty()) fn_->spec_devirt_sites[dst] = std::move(cv_spec);
@@ -2823,69 +2857,6 @@ bool Lowering::try_lower_static_method_call(ast::CallExpr *e,
         out = sret ? v_retbuf : dst;
     }
     return true;
-}
-
-/**
- * @copydoc vx::Lowering::spec_devirt_impls
- */
-std::vector<std::pair<std::string, std::string>>
-Lowering::spec_devirt_impls(const std::string &static_class,
-                            const ClassMethodInfo &target,
-                            bool is_interface) const {
-    std::vector<std::pair<std::string, std::string>> impls;
-    /* Basta un aspecto que no se haya podido atribuir a un metodo concreto
-     * para no adivinar en ningun sitio: podria apuntar a cualquiera. */
-    if (!all_advices_attributed_) return impls;
-
-    constexpr size_t K_MAX = 4;
-    for (const auto &kv : tc_.class_layouts()) {
-        const ClassLayout &cl = kv.second;
-        if (cl.is_interface || cl.is_aspect) continue;
-
-        /* Que la clase encaje: que cumpla la interfaz, o que sea el tipo
-         * declarado o descienda de el. */
-        bool encaja = false;
-        if (is_interface) {
-            for (const auto &in : cl.interface_names)
-                if (in == static_class) {
-                    encaja = true;
-                    break;
-                }
-        } else {
-            std::string cur = cl.name;
-            for (int guard = 0; !cur.empty() && guard < 64; ++guard) {
-                if (cur == static_class) {
-                    encaja = true;
-                    break;
-                }
-                const auto itc = tc_.class_layouts().find(cur);
-                if (itc == tc_.class_layouts().end()) break;
-                cur = itc->second.super_name;
-            }
-        }
-        if (!encaja) continue;
-
-        /* Quien DEFINE el metodo: puede estar heredado sin aplanar, asi que se
-         * sube por la cadena.  No vale buscar el primero con ese nombre: un
-         * constructor puede llamarse igual y dejaria sin encontrar al que se
-         * busca, y con SOBRECARGA tampoco basta el nombre -- hay que dar con el
-         * de la MISMA firma, o se especula hacia otro metodo --. */
-        const ClassMethodInfo *impl = nullptr;
-        for (const ClassMethodInfo &mm : cl.methods) {
-            if (mm.is_constructor || mm.name != target.name) continue;
-            if (!overload::same_params(mm.param_types, target.param_types))
-                continue;
-            impl = &mm;
-            break;
-        }
-        if (impl == nullptr) continue;
-
-        const std::string callee = method_symbol_of(*impl);
-        if (advice_chains_.count(callee) != 0) continue; // lleva aspectos
-        impls.emplace_back(cl.name, callee);
-        if (impls.size() > K_MAX) return {}; // demasiados: no compensa
-    }
-    return impls;
 }
 
 /**

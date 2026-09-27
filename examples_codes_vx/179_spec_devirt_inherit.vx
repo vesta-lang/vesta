@@ -19,7 +19,7 @@ namespace ejemplos.spec_devirt_inherit;
 //   Circle(5).area  = 5*5 = 25
 //   Rect(4,6).area  = 4*6 = 24
 //   ColoredCircle(7).area = 7*7 = 49  (heredado de Circle, via fallback)
-//   resultado = 25 + 24 + 49 = 98
+//   resultado = 25 + 24 + 49 = 98, mas 121 de la seccion de abajo = 219
 
 interface Shape { public i32 area(); }
 
@@ -64,7 +64,58 @@ class Bench {
 	}
 }
 
+// --- Destino DEMOSTRADO: sin guarda ni respaldo ------------------------------
+// Cuando TODAS las clases que pueden estar detras del receptor resuelven el
+// metodo a la misma funcion, la jerarquia lo demuestra y la llamada es directa
+// en los tres modos -- no se adivina nada --:
+//   - Medida.valor(): la subclase Doble no lo sobrescribe;
+//   - Contable.cuenta(): la interfaz solo la cumple Contador;
+//   - super.etiqueta(): el metodo de la base, siempre;
+//   - ~Medida(): Doble no declara destructor, asi que el de la base es el
+//     unico posible tambien para una Medida que sea una Doble.
+// Arriba, en cambio, Shape tiene DOS implementaciones distintas de area(): eso
+// sigue siendo una apuesta con guarda.
+
+interface Contable { public i32 cuenta(); }
+
+class Contador : Contable {
+	public i32 n;
+	public Contador(i32 k) { this.n = k; }
+	public i32 cuenta() => this.n + 1;
+}
+
+/// Cuantas Medidas se han destruido.
+i32 g_destruidas = 0_i32;
+
+class Medida {
+	public i32 v;
+	public Medida(i32 x) { this.v = x; }
+	~Medida() { g_destruidas = g_destruidas + 1; }
+	public i32 valor() => this.v * 2;
+	public i32 etiqueta() => 100;
+}
+
+class Doble : Medida {
+	public Doble(i32 x) { super(x); }
+	public i32 etiqueta() => super.etiqueta() + 1;
+}
+
+i32 lee(Medida m) => m.valor();
+i32 cuenta_de(Contable c) => c.cuenta();
+
 i32 main() {
-	Bench b = new Bench();
-	return b.run();
+	Bench b   = new Bench();
+	i32   acc = b.run();                          // 98
+	acc       = acc + lee(new Doble(3));          // 6   -> 104
+	acc       = acc + lee(new Medida(2));         // 4   -> 108
+	acc       = acc + cuenta_de(new Contador(9)); // 10 -> 118
+	Doble d   = new Doble(0);
+	acc       = acc + d.etiqueta(); // 101 -> 219
+	{
+		// Una Medida que es una Doble: al salir, su destructor corre UNA vez.
+		Medida m = new Doble(7);
+		acc      = acc + m.valor() - 14; // 14 - 14 = 0
+	}
+	if (g_destruidas != 1) return 1;
+	return acc;
 }

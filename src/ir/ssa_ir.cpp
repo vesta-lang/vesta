@@ -1301,6 +1301,9 @@ void print_instr(std::ostream &o, const IrFunction &fn, const IrInstr &ins) {
         }
         break;
     }
+    /* El destino demostrado de un despacho dinamico, en cualquier forma que
+     * lo lleve: es lo que se mira cuando una llamada no se hizo directa. */
+    if (!ins.proven_callee.empty()) o << " proven=@" << ins.proven_callee;
     o << "\n";
 }
 

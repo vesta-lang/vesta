@@ -3391,7 +3391,7 @@ r0_case("gen_deep", "Generics anidados profundos: Box<Pair<i32, Box<i64>>>", "17
 r0_case("adt_cplx", "ADTs con payloads complejos: Shape{Empty,Circle,Rectangle,Triangle,Labeled}", "176_adt_complex_payloads.vx", 42, line=2395)
 r0_case("cb_12args", "Callback nativo con 12 args (max ABI) + multi-invocacion + globals", "177_callback_many_args.vx", 42, line=2397)
 r0_case("esc_sr", "Escape analysis: scalar-replace read-only + mutable + PHI-bail", "178_escape_scalar_repl.vx", 42, line=2401)
-r0_case("spec_dv", "Spec-devirt: guard-chain + fallback (implementor heredado -> CALLITF)", "179_spec_devirt_inherit.vx", 98, line=2404)
+r0_case("spec_dv", "Spec-devirt: guard-chain + fallback (implementor heredado -> CALLITF), y el destino DEMOSTRADO por la jerarquia (subclase que no sobrescribe, interfaz de un solo implementador, super.m()) como llamada directa", "179_spec_devirt_inherit.vx", 219, line=2404)
 r0_case("vec182", "vectorize element-wise f64", "182_vectorize_elementwise.vx", 180960, line=3627)
 r0_case("vec183", "vectorize memcpy idiom", "183_memcpy_idiom.vx", 597, line=3628)
 r0_case("vec184", "vectorize reduccion f64", "184_vectorize_reduction.vx", 1204, line=3629)

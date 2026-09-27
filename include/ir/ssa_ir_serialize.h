@@ -135,7 +135,9 @@ static constexpr uint32_t IR_SECTION_MAGIC = 0x52494556U; /* 'V''E''I''R' */
  * @brief Version del formato @ir.  Bump cuando cambia el layout.
  */
 static constexpr uint16_t IR_SECTION_VERSION =
-    19; // v19: el IR dice de que FICHERO salio cada cosa.  Una tabla de rutas
+    20; // v20: la instruccion lleva `proven_callee`, el destino DEMOSTRADO de
+        // un despacho dinamico (ver IrInstr::proven_callee).
+        // v19: el IR dice de que FICHERO salio cada cosa.  Una tabla de rutas
         // por modulo, un indice en cada funcion y otro en cada sitio de
         // inlinado; la instruccion no cambia.  Hacia falta porque el modulo
         // que se compila es un FUSIONADO -- dentro conviven funciones de

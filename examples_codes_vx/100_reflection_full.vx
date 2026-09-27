@@ -61,8 +61,20 @@ i32 main() {
 	i64 m = getMethod(cls, "doblar");
 	if (m == 0) return 3;
 
-	// Invocar dinamicamente: doblar(21) == 42.
+	// Invocar dinamicamente: doblar(21) == 42.  La clase es un literal y el
+	// nombre resuelve a UN metodo, asi que el compilador lo sabe y la llamada
+	// es directa; lo que el despacho hacia de paso se conserva:
 	i64 result = invoke(m, obj, 21);
+
+	// ... invocar sobre un objeto nulo sigue lanzando, y se puede capturar.
+	Calculadora nula = null;
+	i64         kind = 0_i64;
+	try {
+		invoke(m, nula, 21);
+	} catch (FatalError e) {
+		kind = e.kind; // 1 = puntero nulo
+	}
+	if (kind != 1) return 4;
 
 	for (i64 i = 0_i64; i < 30_000_000; i++) {
 		i32 val = pruebas();

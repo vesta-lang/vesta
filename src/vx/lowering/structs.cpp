@@ -680,6 +680,8 @@ ir::IrValueId Lowering::lower_super_call_expr(ast::SuperCallExpr *e) {
     for (auto av : arg_vals)
         cs.operands.push_back(av);
     cs.imm = static_cast<uint64_t>(super_ctor->vtable_index);
+    /* `super(...)` no tiene nada de dinamico: el constructor es este. */
+    cs.proven_callee = proven_exact_callee(method_symbol_of(*super_ctor));
     cs.source_line = e->loc.line;
     emit(current_block_, std::move(cs));
     return ir::IR_NO_VALUE;

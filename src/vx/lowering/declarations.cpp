@@ -398,6 +398,8 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
                     if (class_has_vtable(sem_type.struct_name)) {
                         act.native_dtor_virtual = true;
                         act.dtor_vtable_index = dtor->vtable_index;
+                        act.dtor_proven = proven_dispatch_callee(
+                            sem_type.struct_name, *dtor, false);
                     }
                 }
                 cleanup_stack_.push_back(std::move(act));
@@ -424,6 +426,11 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
                 // CALLVIRT.
                 if (!class_has_vtable(sem_type.struct_name))
                     act.func_name = method_symbol_of(*dtor);
+                else
+                    /* Con tabla, el destructor puede estar DEMOSTRADO igual:
+                     * ninguna subclase declara el suyo. */
+                    act.dtor_proven = proven_dispatch_callee(
+                        sem_type.struct_name, *dtor, false);
                 cleanup_stack_.push_back(std::move(act));
             }
             // fix9 - eliminado el cleanup RAW_ASM `gchandle+drop`
@@ -594,6 +601,8 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
                             // que el objeto ES, no por como se declaro.
                             act.inner_dtor_virtual =
                                 class_has_vtable(sem_type.pointee->struct_name);
+                            act.inner_dtor_proven = proven_dispatch_callee(
+                                sem_type.pointee->struct_name, mi, false);
                             break;
                         }
                     }

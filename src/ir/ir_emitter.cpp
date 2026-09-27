@@ -50,6 +50,7 @@
 #include <iostream>
 #include <optional>
 #include "ir/ir_optimizer.h"
+#include "ir/passes/devirt_known_target.h" // destino escrito de una closure
 #include "ctpe/fold.h"
 #include "codegen/rbank/function_snapshot.h" // hechos de la funcion, una vez
 #include "ir/linear_pos.h" // posiciones lineales con tipo propio
@@ -277,6 +278,10 @@ struct EmitCtx {
     // ser null en emisiones sueltas (tests) -> entonces todo va a `code`, que
     // es el comportamiento historico.
     const IrModule *mod = nullptr;
+
+    // La funcion cuya direccion es cada valor de un LABEL_ADDR: una
+    // CALLCLOSURE con el destino escrito se emite como salto DIRECTO.
+    const LabelAddrIndex labels{fn};
 
     // Cache de constantes en scratches para evitar `mov r14, K; mov r14, K`
     // consecutivos (patron tipico: dos SEXTs back-to-back con K=32 entre
@@ -3477,9 +3482,14 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         std::vector<int> regs_to_save =
             live_regs_through_call(ctx, call_pos, ins.dst);
 
+        // Con el destino escrito (LABEL_ADDR) la llamada es DIRECTA: el
+        // entorno se entrega igual, pero se salta a la etiqueta y no a un
+        // registro.
+        const util::InternedName direct = known_closure_target(ins, ctx.labels);
+
         // Materializar fn_addr y env_addr a registros antes de los pushes
         // y de los moves de argumentos para evitar conflictos.
-        Reg rfn = ctx.load_src(ins.func_ptr, 0);
+        Reg rfn = direct.empty() ? ctx.load_src(ins.func_ptr, 0) : Reg::gp(13);
         // Hay entorno o no lo hay, y eso es una BANDERA.  Cuando renv era una
         // cadena, "no hay" se decia con la cadena vacia -- un estado que un
         // registro no tiene, y que obligaba a preguntar `.empty()` sobre algo
@@ -3510,13 +3520,13 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
                 ? std::min(ins.operands.size() - 1, (size_t)12)
                 : 0;
         bool fn_in_arg_slot = false;
-        if (rfn.bank == Reg::Bank::GP) {
+        if (direct.empty() && rfn.bank == Reg::Bank::GP) {
             const int rn = static_cast<int>(rfn.index);
             if (rn >= 1 && rn <= static_cast<int>(nargs_check)) {
                 fn_in_arg_slot = true;
             }
         }
-        if (rfn.is_gp(14) || fn_in_arg_slot) {
+        if (direct.empty() && (rfn.is_gp(14) || fn_in_arg_slot)) {
             ctx.out.emit(emmit::Mnemonic::MOV, Reg::gp(13), rfn);
             rfn = Reg::gp(13);
         }
@@ -3576,7 +3586,12 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         }
 
         ctx.out.emit(emmit::Mnemonic::MOV, Reg::gp(15), nargs_decl);
-        ctx.out.emit(emmit::Mnemonic::CALLVMR, rfn);
+        if (!direct.empty())
+            ctx.out.emit(emmit::Mnemonic::CALLVM,
+                         Ann::absolute(EmitCtx::abs_lbl(
+                             EmitCtx::sanitize(direct.str()))));
+        else
+            ctx.out.emit(emmit::Mnemonic::CALLVMR, rfn);
         if (ins.dst != IR_NO_VALUE) {
             Reg rd = ctx.dst_of(ins.dst);
             emit_mov_if_needed(ctx, rd, Reg::gp(0));

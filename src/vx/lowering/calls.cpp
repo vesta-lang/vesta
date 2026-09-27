@@ -1274,7 +1274,7 @@ std::string Lowering::generate_lambda_helper(ast::LambdaExpr *e) {
             rr.op = ir::IrOp::READ_VM_REG;
             rr.type = ir::IrType::PTR;
             rr.dst = env_ptr;
-            rr.imm = 14; // R14 = env_ptr en la convention de callclosure
+            rr.imm = ir::kClosureEnvVmReg;
             rr.source_line = e->loc.line;
             child_fn.append(entry, std::move(rr));
         }

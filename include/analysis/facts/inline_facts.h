@@ -45,6 +45,8 @@
 #ifndef VESTA_ANALYSIS_FACTS_INLINE_FACTS_H
 #define VESTA_ANALYSIS_FACTS_INLINE_FACTS_H
 
+#include "ir/closure_env.h" // lo que un cuerpo lee de los registros
+
 #include <cstddef>
 #include <cstdint>
 
@@ -120,6 +122,13 @@ struct InlineFacts {
     /// El ensamblador en linea sale por su cuenta (`ret`, `iret`, `sysret`...).
     /// Inlinar eso mete un retorno en mitad del llamante.
     bool asm_returns_manually = false;
+    /// Que registros de la maquina lee.  El del entorno de una closure solo
+    /// lo fija una @c CALLCLOSURE: se puede inlinar en una de ellas -- la
+    /// lectura pasa a ser su operando de entorno --, pero no en un @c CALL,
+    /// donde leeria el registro DEL llamante.  Cualquier otro no lo fija
+    /// ninguna llamada.  Es lo que de verdad impedia inlinar una lambda, no su
+    /// nombre.
+    ir::VmRegReads vm_reg_reads = ir::VmRegReads::None;
 };
 
 /**
@@ -155,6 +164,20 @@ struct InlineAnalysis {
 InlineFacts compute_inline_facts(const ir::IrFunction &fn);
 
 /**
+ * @enum InlineCallKind
+ * @brief Como llega la llamada que se quiere inlinar.
+ *
+ * Parte de la decision y no del hecho: la MISMA funcion se puede copiar en un
+ * sitio y no en otro.  El cuerpo de una lambda lee su entorno de un registro
+ * que solo fija una @c CALLCLOSURE; en ella la lectura pasa a ser el operando
+ * de entorno, y en un @c CALL leeria lo que el llamante tuviera ahi.
+ */
+enum class InlineCallKind : uint8_t {
+    Plain,   ///< @c CALL: no aporta entorno de closure.
+    Closure, ///< @c CALLCLOSURE de destino conocido: aporta el entorno.
+};
+
+/**
  * @brief Se puede inlinar con el inliner de UN bloque?
  *
  * @param f         Lo que se sabe de la funcion.
@@ -163,10 +186,11 @@ InlineFacts compute_inline_facts(const ir::IrFunction &fn);
  *        esta, un `__new_X` se deja como llamada a proposito: el pase elimina
  *        la reserva de los objetos que no escapan y los que escapan se quedan
  *        con una llamada barata a un ayudante trivial.
+ * @param kind      Como llega la llamada.
  * @return true si se puede.
  */
 bool inlineable_single_block(const InlineFacts &f, size_t threshold,
-                             bool escape_scalar_on);
+                             bool escape_scalar_on, InlineCallKind kind);
 
 /**
  * @brief Se puede inlinar con el inliner de VARIOS bloques?
@@ -177,9 +201,11 @@ bool inlineable_single_block(const InlineFacts &f, size_t threshold,
  *
  * @param f         Lo que se sabe de la funcion.
  * @param threshold Cuantas instrucciones se aceptan, en total.
+ * @param kind      Como llega la llamada.
  * @return true si se puede.
  */
-bool inlineable_multi_block(const InlineFacts &f, size_t threshold);
+bool inlineable_multi_block(const InlineFacts &f, size_t threshold,
+                            InlineCallKind kind);
 
 } // namespace analysis
 

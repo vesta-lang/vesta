@@ -344,6 +344,9 @@ add_library(vx_lib STATIC
     # construccion (__new_X), la funcion de arranque del modulo que CONSTRUYE
     # las clases antes de main, y la llamada a un metodo.
     lowering/oop.cpp
+    # Quien puede estar detras de un despacho dinamico: lo que se ADIVINA
+    # (con guarda) y lo que se DEMUESTRA (llamada directa).
+    lowering/dispatch_targets.cpp
     # Lo que altera el curso normal de una funcion: try/catch/finally, lanzar,
     # y la seccion protegida por un monitor (que es un try/finally con el
     # desbloqueo dentro).  Comparten el desmontaje del ambito al salir.

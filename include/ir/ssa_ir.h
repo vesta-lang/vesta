@@ -50,6 +50,7 @@
 #include <cstddef>
 
 #include "ir/native_effect_vocab.h" // de quien es lo que sale, y que puede fallar
+#include "ir/closure_env.h" // por donde llega el entorno de una closure
 #include "ir/synthetic_symbols.h" // los nombres que se inventa el compilador
 #include "util/name_pool.h"         // nombres internados: la clave sin copiar
 #include "util/alloc/small_vector.h" // los operandos casi siempre son uno o dos
@@ -1289,6 +1290,39 @@ struct IrValue {
     void set_host_by_construction(bool yes) {
         memory = yes ? MemorySpace::HostByConstruction : MemorySpace::NotHost;
     }
+
+    /**
+     * @brief Hereda de @p knower lo que se sabe de su memoria, cuando este
+     *        valor pasa a ocupar su lugar.
+     *
+     * Quien se sustituye puede SABER de que memoria es lo que sostiene -- una
+     * lectura, por el tipo del campo; el entorno de una lambda, porque el
+     * bajado lo construyo --, y quien lo sustituye puede no saberlo.  Perder la
+     * marca no da un error: el acceso lee otra memoria y sale otro valor.  Es
+     * UNA regla para toda sustitucion, dentro de una funcion o al copiar un
+     * cuerpo en otra.
+     *
+     * @param knower Valor sustituido, el que sabe.
+     */
+    void inherit_memory_marks(const IrValue &knower) {
+        if (knower.is_host_ptr()) memory = MemorySpace::HostByInference;
+        if (knower.is_gc_object) is_gc_object = true;
+    }
+
+    /**
+     * @brief Este valor ES el mismo puntero que @p same: copia todo lo que se
+     *        sabe de a donde apunta.
+     *
+     * Para las operaciones que devuelven su operando tal cual -- una
+     * comprobacion de nulo --: no se deduce nada, es la misma direccion.
+     *
+     * @param same El valor original.
+     */
+    void same_pointer_as(const IrValue &same) {
+        memory = same.memory;
+        pointee_is_host_ptr = same.pointee_is_host_ptr;
+        is_gc_object = same.is_gc_object;
+    }
     /// Limitacion A (cerrada): true si el valor es un PTR a memoria VM
     /// (tipicamente la direccion de un slot ALLOCA en el stack del
     /// proceso) cuyo CONTENIDO es a su vez un host_ptr.  Lo setea el
@@ -1467,6 +1501,27 @@ struct IrInstr {
      */
     std::vector<std::string> call_abi_regs;
 
+    /**
+     * @brief La funcion a la que este despacho dinamico resuelve SIEMPRE, con
+     *        la jerarquia de clases como prueba.  Vacio = no se sabe.
+     *
+     * Lo pone el bajado en un @c CALLVIRT, un @c CALLITF, un @c CALLSUPER, el
+     * @c CALLIND por tabla del nativo -- metodos, propiedades, constructores
+     * y destructores -- cuando TODAS las clases que pueden estar detras del
+     * receptor -- el tipo declarado y lo que desciende de el, o lo que cumple
+     * la interfaz -- resuelven el metodo a la misma funcion, sin aspectos por
+     * medio; y en un @c CALLM cuando el metodo sale de `getMethod` sobre un
+     * `forName` literal con un nombre que resuelve a uno.  Es CERTEZA sobre el
+     * DESTINO: lo que el despacho hacia de paso -- lanzar sobre un receptor
+     * nulo -- se conserva con una guarda y el despacho original de respaldo.
+     * La apuesta (varios candidatos) sigue en @c IrFunction::spec_devirt_sites.
+     *
+     * Lo consume @ref ir_pass_devirt_known_target, que hace directa la llamada;
+     * despues no queda nada que lo lea, asi que no llega a MachineIR.  Se
+     * serializa porque el intermedio de un modulo se guarda antes de optimizar.
+     */
+    util::InternedName proven_callee;
+
     IrBlockId target_block; ///< destino de BR o rama true de BR_COND
     IrBlockId false_block;  ///< rama false de BR_COND
 
@@ -1606,6 +1661,17 @@ struct IrInstr {
           func_ptr(IR_NO_VALUE), target_block(IR_NO_BLOCK),
           false_block(IR_NO_BLOCK), source_line(0), source_column(0) {}
 };
+
+/**
+ * @brief Lo que lee de los registros de la maquina la instruccion @p in.
+ * @param in Instruccion.
+ * @return La clase de lectura (ver ir/closure_env.h).
+ */
+inline VmRegReads vm_reg_reads_of(const IrInstr &in) noexcept {
+    if (in.op != IrOp::READ_VM_REG) return VmRegReads::None;
+    return in.imm == kClosureEnvVmReg ? VmRegReads::ClosureEnv
+                                      : VmRegReads::Other;
+}
 
 // =========================================================================
 //  Bloque basico

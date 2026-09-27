@@ -60,15 +60,13 @@ bool es_op_de_marco(ir::IrOp op) {
  *  - `__module_init*`: el cargador lo invoca por su direccion de arranque, no
  *    con una llamada.  Y esta partido en tandas a proposito -- inlinarlas lo
  *    devolveria a la funcion gigante que se partio.
- *  - `__lambda_*`: se invoca por puntero desde CALLCLOSURE, con otra
- *    convencion (el entorno viaja en r14).
  *  - `__spawn_*`, `__async_*`, `__rspawn_*`: los invoca la maquinaria de
  *    procesos, no un CALL.
  *  - `__vx_str*`: los accesores de cadena de Vesta Embed.  Cada uno expande
  *    una decena de instrucciones y varios juntos reventaban el asignador.
  */
 bool en_lista_de_un_bloque(const std::string &name) {
-    return ir::is_module_init_family(name) || ir::is_lambda_symbol(name) ||
+    return ir::is_module_init_family(name) ||
            ir::has_synthetic_prefix(name, ir::kSpawnPrefix) ||
            ir::has_synthetic_prefix(name, ir::kAsyncPrefix) ||
            ir::has_synthetic_prefix(name, ir::kRemoteSpawnPrefix) ||
@@ -82,7 +80,7 @@ bool en_lista_de_un_bloque(const std::string &name) {
  * con su medida.
  */
 bool en_lista_de_varios_bloques(const std::string &name) {
-    return ir::is_module_init_family(name) || ir::is_lambda_symbol(name);
+    return ir::is_module_init_family(name);
 }
 
 /**
@@ -181,14 +179,37 @@ InlineFacts compute_inline_facts(const ir::IrFunction &fn) {
                 ir::is_new_helper_name(in.func_name, nullptr))
                 f.calls_new_helper = true;
             if (in.op == ir::IrOp::MAKE_CLOSURE) f.makes_closure = true;
+            f.vm_reg_reads =
+                ir::join_vm_reg_reads(f.vm_reg_reads, ir::vm_reg_reads_of(in));
             if (k == 0 && in.op == ir::IrOp::PHI) f.entry_has_phi = true;
         }
     }
     return f;
 }
 
+/**
+ * @brief Si lo que la funcion lee de los registros de la maquina impide
+ *        copiarla en una llamada de la forma @p kind.
+ *
+ * Comun a los dos inliners: la regla es la misma y no depende de cuantos
+ * bloques tenga el cuerpo.
+ *
+ * @param f    Lo que se sabe de la funcion.
+ * @param kind Como llega la llamada.
+ * @return true si lo impide.
+ */
+static bool vm_reg_reads_block_inline(const InlineFacts &f,
+                                      InlineCallKind kind) {
+    switch (f.vm_reg_reads) {
+    case ir::VmRegReads::None: return false;
+    case ir::VmRegReads::ClosureEnv: return kind != InlineCallKind::Closure;
+    case ir::VmRegReads::Other: return true;
+    }
+    return true; // inalcanzable
+}
+
 bool inlineable_single_block(const InlineFacts &f, size_t threshold,
-                             bool escape_scalar_on) {
+                             bool escape_scalar_on, InlineCallKind kind) {
     if (f.is_native || f.is_naked || f.has_section) return false;
     if (f.asm_returns_manually) return false;
     if (f.blacklisted_single) return false;
@@ -223,6 +244,7 @@ bool inlineable_single_block(const InlineFacts &f, size_t threshold,
     if (!f.wants_inline && cuerpo > efectivo) return false;
 
     if (f.recursive) return false;
+    if (vm_reg_reads_block_inline(f, kind)) return false;
     /* RAW_ASM asume la convencion de llamada de la VM y no se puede mover.
      * INLINE_ASM SI: el copiado remapea sus ataduras de registro al llamante.
      */
@@ -230,7 +252,8 @@ bool inlineable_single_block(const InlineFacts &f, size_t threshold,
     return true;
 }
 
-bool inlineable_multi_block(const InlineFacts &f, size_t threshold) {
+bool inlineable_multi_block(const InlineFacts &f, size_t threshold,
+                            InlineCallKind kind) {
     if (f.is_native || f.is_naked || f.has_section) return false;
     if (f.block_count == 0) return false;
     if (f.blacklisted_multi || f.is_overlay_resolver || f.is_new_helper)
@@ -239,6 +262,7 @@ bool inlineable_multi_block(const InlineFacts &f, size_t threshold) {
     if (f.any_block_empty) return false;
     if (!f.all_blocks_closed) return false;
     if (f.recursive) return false;
+    if (vm_reg_reads_block_inline(f, kind)) return false;
     if (f.has_raw_asm || f.has_inline_asm) return false;
     if (f.has_jump_table) return false;
     /* Reservar memoria NO impide inlinar.  Lo impedia porque una reserva de

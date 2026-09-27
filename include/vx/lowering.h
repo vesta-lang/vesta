@@ -709,6 +709,28 @@ class Lowering {
     }
 
     /**
+     * @enum DispatchAdvice
+     * @brief Si el metodo al que resuelve un despacho lleva aspectos.
+     *
+     * Con aspectos no se le puede llamar directo: el despacho recorre su
+     * cadena y la llamada directa se la saltaria.
+     */
+    enum class DispatchAdvice : uint8_t {
+        None,  ///< sin aspectos: se puede llamar directo.
+        Woven, ///< con aspectos: solo por el despacho, que recorre la cadena.
+    };
+
+    /**
+     * @brief Una clase concreta que puede estar detras de un despacho, y a
+     *        que funcion resuelve en ella el metodo llamado.
+     */
+    struct DispatchImpl {
+        util::InternedName cls;    ///< clase concreta
+        util::InternedName callee; ///< nombre IR del metodo que la resuelve
+        DispatchAdvice advice = DispatchAdvice::None; ///< si lleva aspectos
+    };
+
+    /**
      * @brief Que clases concretas puede tener de verdad el receptor de un
      *        despacho dinamico, para poder ADIVINARLO y llamar directo.
      *
@@ -727,12 +749,93 @@ class Lowering {
      *                      cada clase candidata hay que encontrar el de la
      *                      MISMA firma, o se especula hacia otro metodo.
      * @param is_interface  Si el tipo declarado es una interfaz.
-     * @return Pares (clase concreta, nombre IR del metodo), vacio si son
-     *         demasiados o hay algun aspecto sin atribuir.
+     * @return Las candidatas sin aspectos; vacio si son demasiadas o hay algun
+     *         aspecto sin atribuir.
      */
-    std::vector<std::pair<std::string, std::string>>
+    std::vector<DispatchImpl>
     spec_devirt_impls(const std::string &static_class,
                       const ClassMethodInfo &target, bool is_interface) const;
+
+    /**
+     * @brief TODAS las clases concretas que pueden estar detras de un
+     *        despacho dinamico, con lo que resuelve el metodo en cada una.
+     *
+     * El recorrido comun de las dos preguntas que se le hacen a la jerarquia:
+     * a quien ADIVINAR (@ref spec_devirt_impls) y si el destino esta
+     * DEMOSTRADO (@ref proven_dispatch_callee).  Dos recorridos acabarian
+     * contestando sobre jerarquias distintas.
+     *
+     * @param static_class Tipo declarado del receptor (clase o interfaz).
+     * @param target       El metodo llamado, ya resuelto por el comprobador.
+     * @param is_interface Si el tipo declarado es una interfaz.
+     * @return Una entrada por clase concreta que encaja y define el metodo.
+     */
+    std::vector<DispatchImpl> dispatch_impls(const std::string &static_class,
+                                             const ClassMethodInfo &target,
+                                             bool is_interface) const;
+
+    /**
+     * @brief La funcion a la que un despacho dinamico resuelve SIEMPRE, si la
+     *        jerarquia lo demuestra.
+     *
+     * Hace falta que la jerarquia este CERRADA -- ver
+     * @ref dispatch_hierarchy_closed -- y que todas las clases posibles
+     * resuelvan a la misma funcion, sin aspectos.  Es el hecho que viaja en
+     * @c ir::IrInstr::proven_callee.
+     *
+     * @param static_class Tipo declarado del receptor (clase o interfaz).
+     * @param target       El metodo llamado.
+     * @param is_interface Si el tipo declarado es una interfaz.
+     * @return La funcion, o el nombre vacio si no se puede afirmar.
+     */
+    util::InternedName proven_dispatch_callee(const std::string &static_class,
+                                              const ClassMethodInfo &target,
+                                              bool is_interface) const;
+
+    /**
+     * @brief Si todas las clases que pueden estar detras de un receptor del
+     *        tipo @p static_class estan a la vista de este modulo.
+     *
+     * Solo se sabe de las que declara el propio modulo: heredar de una clase
+     * importada, o implementar una interfaz importada, no esta permitido, asi
+     * que sus descendientes viven todos aqui.  De una IMPORTADA no: su modulo
+     * puede tener subclases privadas que nunca llegan al @c .vxi y que, sin
+     * embargo, salen hacia aqui como su base.  El dia que se permita heredar
+     * entre modulos, este es el unico sitio que cambia.
+     *
+     * @param static_class Tipo declarado del receptor.
+     * @return true si la jerarquia esta cerrada.
+     */
+    bool dispatch_hierarchy_closed(const std::string &static_class) const;
+
+    /**
+     * @brief @p callee como destino DEMOSTRADO de un despacho cuyo metodo ya
+     *        se conoce -- `super.m()`, o el unico que deja la jerarquia --,
+     *        salvo que lleve aspectos.
+     *
+     * Un metodo con aspectos se despacha recorriendo su cadena; llamarlo
+     * directo se la saltaria.
+     *
+     * @param callee Nombre IR del metodo.
+     * @return El nombre internado, o el vacio si no se puede afirmar.
+     */
+    util::InternedName proven_exact_callee(const std::string &callee) const;
+
+    /**
+     * @brief El metodo al que `invoke` llama si el `MethodInfo` sale de
+     *        `getMethod` sobre la clase @p cls con el nombre @p name.
+     *
+     * Misma regla que `findmethod` al ejecutar: un nombre que comparten
+     * varios metodos LANZA, y uno que no existe da nulo; solo un nombre que
+     * resuelve a UNO nombra un destino.  Y como con el despacho: la clase
+     * tiene que ser de este modulo y el metodo, sin aspectos.
+     *
+     * @param cls  Clase, tal como la nombro `forName`.
+     * @param name Nombre del metodo.
+     * @return El destino, o el nombre vacio si no se puede afirmar.
+     */
+    util::InternedName reflect_proven_method(const std::string &cls,
+                                             const std::string &name) const;
 
     /**
      * @brief Emite en @p setup la resolucion del @c ClassInfo* de una clase
@@ -4750,6 +4853,38 @@ class Lowering {
     /// se conoce el tipo concreto estatico.
     std::unordered_map<ir::IrValueId, std::string> ssa_concrete_class_;
 
+    /**
+     * @brief Lo que se sabe AL COMPILAR de un valor de reflexion.
+     *
+     * La clase de un `forName("X")` literal, y el metodo de un `getMethod`
+     * sobre ella cuando el nombre lo resuelve a UNO -- que es exactamente
+     * cuando `findmethod` no lanza --.  Con eso un `invoke` lleva su destino
+     * demostrado (@c ir::IrInstr::proven_callee).
+     *
+     * Por VALOR SSA, como @c ssa_concrete_class_, y no por nombre de local:
+     * reasignar la variable da otro valor, sin anotar, asi que un origen viejo
+     * no se cuela.
+     */
+    struct ReflectOrigin {
+        util::InternedName cls;    ///< clase, si es un ClassInfo* conocido
+        util::InternedName method; ///< metodo demostrado, si es un MethodInfo*
+    };
+    std::unordered_map<ir::IrValueId, ReflectOrigin> reflect_origin_;
+
+    /**
+     * @brief @p dst es el MISMO valor que @p src (una copia de bits): lo que
+     *        el bajado sabe de @p src -- su clase concreta, su origen de
+     *        reflexion -- pasa a @p dst.
+     *
+     * Un solo sitio para todas las anotaciones por valor: sin el, un
+     * `i64 cls = forName("X")` perdia su clase en el `bitcast` que declara la
+     * variable.
+     *
+     * @param dst Copia.
+     * @param src Original.
+     */
+    void note_same_value(ir::IrValueId dst, ir::IrValueId src);
+
     /// Modo de instrumentacion: "none", "trace", "profile".  Cuando
     /// no es "none", el lowering envuelve cada funcion usuario con
     /// CALLs a @c vx_trace:enter y @c vx_trace:exit (o equivalente).
@@ -5070,6 +5205,11 @@ class Lowering {
         std::string asm_text; ///< plantilla con {src0..}
         // --- CALL_DTOR ---
         uint32_t dtor_vtable_index = 0;
+        /// El destructor al que resuelve SIEMPRE el despacho de este, si la
+        /// jerarquia lo demuestra (ver @ref proven_dispatch_callee).  Se
+        /// calcula donde se conoce el tipo declarado -- al crear la accion --,
+        /// porque en el sitio de la llamada ya no se sabe.
+        util::InternedName dtor_proven;
         // --- NATIVE_FREE (AOT.2.d): dtor polimorfico ---
         /// @c true si la clase estatica tiene vtable y el dtor es virtual:
         /// el cleanup despacha @c ~T() por la vtable de la instancia (LOAD
@@ -5104,6 +5244,8 @@ class Lowering {
         /// @c true si el inner es polimorfico (tiene vtable): el dtor debe
         /// despacharse por la vtable de la instancia, no por el tipo estatico.
         bool inner_dtor_virtual = false;
+        /// Lo mismo que @c dtor_proven, para el destructor del contenido.
+        util::InternedName inner_dtor_proven;
         // --- CALLN_FREE / SMARTPTR_FREE / SHAREDPTR_REL ---
         std::string func_name;   ///< "lib:symbol" para CALLN
         bool needs_proc = false; ///< prepend GETPROC

@@ -51,6 +51,10 @@
 #include "ir/passes/bulk_memory_lower.h" // bucle que mueve memoria -> operacion de bloque
 #include "ir/passes/unroll.h" // desenrollado de bucles (factor automatico)
 #include "ir/passes/select_simplify.h" // canonicalizacion algebraica de SELECT
+#include "ir/passes/devirt_known_target.h" // indirecta de destino conocido -> directa
+#include "ir/passes/inline_bind.h" // entradas del cuerpo copiado -> la llamada
+#include "ir/passes/block_order.h" // orden RPO tras la cirugia de CFG
+#include "ir/passes/guarded_call.h" // guarda + llamada directa + respaldo
 #include "analysis/asa/fact_base.h"    // la puerta UNICA a los hechos del ASA
 #include "analysis/facts/dom_facts.h"  // grafo y dominadores, de UN sitio
 #include "analysis/facts/loop_iv_bounds.h" // hasta donde llega la variable de un bucle
@@ -3215,9 +3219,7 @@ inline void sr_forward_mem_marks(IrFunction &fn, IrValueId load_dst,
                                  IrValueId fwd) {
     if (load_dst == IR_NO_VALUE || load_dst >= fn.values.size()) return;
     if (fwd == IR_NO_VALUE || fwd >= fn.values.size()) return;
-    if (fn.values[load_dst].is_host_ptr())
-        fn.values[fwd].memory = ir::MemorySpace::HostByInference;
-    if (fn.values[load_dst].is_gc_object) fn.values[fwd].is_gc_object = true;
+    fn.values[fwd].inherit_memory_marks(fn.values[load_dst]);
 }
 
 /**
@@ -3761,6 +3763,43 @@ static bool sr_is_empty_nop(const IrInstr &in) {
 }
 
 /**
+ * @brief Si un campo con accesos de tipo @p t puede vivir en un registro.
+ *
+ * Un entero siempre.  Un PUNTERO tambien en un struct de pila: rechazarlo
+ * dejaba en memoria todo objeto que guarda una direccion -- la closure
+ * `{funcion, entorno}` entre ellos --, y la llamada a traves de ella nunca
+ * llegaba a ver su destino constante.  En un objeto GC no: su valor de
+ * construccion se materializa solo para enteros (ver sr_materialize_inits).
+ *
+ * @param t          Tipo del acceso.
+ * @param stack_mode true si el objeto es un struct de pila.
+ * @return true si el campo puede promoverse.
+ */
+static bool sr_field_fits_register(IrType t, bool stack_mode) {
+    return type_is_integer(t) || (stack_mode && t == IrType::PTR);
+}
+
+/**
+ * @brief Si dos accesos al mismo campo, de tipos @p a y @p b, leen los MISMOS
+ *        bits.
+ *
+ * Iguales, o dos palabras de 64 bits de registro general (entero o puntero):
+ * `store ptr` + `load i64` sobre la misma ranura es una copia, no una
+ * reinterpretacion.  Anchos distintos si cambian los bits, y siguen fuera.
+ *
+ * @param a Tipo de un acceso.
+ * @param b Tipo del otro.
+ * @return true si los dos accesos pueden compartir variable.
+ */
+static bool sr_same_field_bits(IrType a, IrType b) {
+    if (a == b) return true;
+    const bool gpr_a = type_is_integer(a) || a == IrType::PTR;
+    const bool gpr_b = type_is_integer(b) || b == IrType::PTR;
+    return gpr_a && gpr_b && type_slot_bytes(a) == 8 &&
+           type_slot_bytes(b) == 8;
+}
+
+/**
  * @brief Promueve a registros los campos de todos los objetos de @p promos.
  *
  * @param fn         Funcion.
@@ -3834,7 +3873,7 @@ bool sr_mem2reg_batch(IrFunction &fn, const SrFnGraph &graph,
                              : a.stored < fn.values.size()
                                  ? fn.values[a.stored].type
                                  : IrType::I64;
-            if (!type_is_integer(t)) {
+            if (!sr_field_fits_register(t, stack_mode)) {
                 o.reason = "VXA134";
                 continue;
             }
@@ -3842,9 +3881,13 @@ bool sr_mem2reg_batch(IrFunction &fn, const SrFnGraph &graph,
             if (!v.accessed) {
                 v.accessed = true;
                 v.type = t;
-            } else if (v.type != t) {
+            } else if (!sr_same_field_bits(v.type, t)) {
                 o.reason = "VXA135";
                 continue;
+            } else if (t == IrType::PTR) {
+                /* Mezcla entero/puntero: la variable queda PUNTERO, que es lo
+                 * que sigue diciendo que el valor es una referencia. */
+                v.type = t;
             }
             if (!a.is_load) v.store_blocks.push_back(IrBlockId(bi));
         }
@@ -8111,6 +8154,14 @@ static bool elide_unwrap_impl(IrFunction &fn) {
             fn.values[v].const_val != 0)
             return true;
         const IrInstr *d = v < def_instr.size() ? def_instr[v] : nullptr;
+        /* Desreferenciar el manejador de un objeto da su direccion: no nula
+         * si el manejador no lo es (`gc_deref_host(newobj ...)`). */
+        for (int g = 0; d != nullptr && d->op == IrOp::GC_DEREF_HOST &&
+                        !d->operands.empty() && g < 64;
+             ++g) {
+            const IrValueId h = d->operands[0];
+            d = h < def_instr.size() ? def_instr[h] : nullptr;
+        }
         if (d == nullptr) return false;
         // Allocaciones de OBJETO (clase) NUNCA devuelven null por contrato del
         // lenguaje: OOM lanza un fatal, no un null (`new X()` es non-null,
@@ -8261,17 +8312,46 @@ static bool elide_unwrap_impl(IrFunction &fn) {
         auto &bb = fn.blocks[bi];
         const Facts &facts = in_facts[bi];
         for (auto &in : bb.instrs) {
-            if (in.op != IrOp::UNWRAP || in.operands.empty()) continue;
-            const IrValueId v = in.operands[0];
+            /* Que valor se pregunta y, si es una comparacion, que responde
+             * cuando no es nulo.  El MISMO conocimiento quita la afirmacion
+             * (UNWRAP) y pliega la pregunta (x != 0, x == 0, isnull x): una
+             * guarda de nulo sobre algo que no puede serlo desaparece, y el
+             * respaldo muerto con ella. */
+            IrValueId v = IR_NO_VALUE;
+            uint64_t answer_if_nonnull = 0;
+            if (in.op == IrOp::UNWRAP && !in.operands.empty()) {
+                v = in.operands[0];
+            } else if (in.op == IrOp::ISNULL && !in.operands.empty()) {
+                v = in.operands[0];
+                answer_if_nonnull = 0;
+            } else if ((in.op == IrOp::CMP_EQ || in.op == IrOp::CMP_NE) &&
+                       in.operands.size() >= 2 && in.dst != IR_NO_VALUE) {
+                if (is_zero(in.operands[1]))
+                    v = in.operands[0];
+                else if (is_zero(in.operands[0]))
+                    v = in.operands[1];
+                answer_if_nonnull = in.op == IrOp::CMP_NE ? 1 : 0;
+            }
+            if (v == IR_NO_VALUE) continue;
             const IrValueId vr = resolve_alias(v); // normalizar a la raiz
             // TOP en bloques alcanzables converge a no-top; si quedo top es
             // inalcanzable -> no aplicamos el hecho de flujo.
             const bool flow_nn =
                 !facts.top && (facts.s.count(v) || facts.s.count(vr));
-            if (globally_nonnull(v) || globally_nonnull(vr) || flow_nn) {
+            if (!(globally_nonnull(v) || globally_nonnull(vr) || flow_nn))
+                continue;
+            if (in.op == IrOp::UNWRAP) {
                 in.op = IrOp::MOV; // dst = v ; copy_prop/DCE lo limpian
-                changed = true;
+            } else {
+                in.op = IrOp::CONST;
+                in.operands.clear();
+                in.imm = answer_if_nonnull;
+                if (in.dst < fn.values.size()) {
+                    fn.values[in.dst].is_const = true;
+                    fn.values[in.dst].const_val = answer_if_nonnull;
+                }
             }
+            changed = true;
         }
     }
     return changed;
@@ -10911,18 +10991,27 @@ static bool inline_impl(IrModule &mod, size_t threshold) {
      * salvo la variante por motor, que NO es propiedad de la funcion sino del
      * modulo: depende de que exista una hermana con sufijo. */
     static const bool sr_on = !util::flag_on(util::FlagId::NoEscapeScalar);
+    /* Por funcion, si se puede copiar en un CALL y si en una CALLCLOSURE: el
+     * cuerpo de una lambda lee su entorno de un registro que solo fija la
+     * segunda. */
     std::vector<bool> can_inline(mod.functions.size(), false);
+    std::vector<bool> can_inline_closure(mod.functions.size(), false);
     for (size_t i = 0; i < mod.functions.size(); ++i) {
         const IrFunction &fn = mod.functions[i];
         if (has_engine_variant(fn.name)) continue;
         const analysis::InlineFacts f = analysis::compute_inline_facts(fn);
-        can_inline[i] =
-            analysis::inlineable_single_block(f, INLINE_THRESHOLD, sr_on);
+        can_inline[i] = analysis::inlineable_single_block(
+            f, INLINE_THRESHOLD, sr_on, analysis::InlineCallKind::Plain);
+        can_inline_closure[i] = analysis::inlineable_single_block(
+            f, INLINE_THRESHOLD, sr_on, analysis::InlineCallKind::Closure);
     }
 
     for (size_t fi = 0; fi < mod.functions.size(); ++fi) {
         IrFunction &caller = mod.functions[fi];
         if (caller.is_native) continue;
+        /* Los destinos escritos de sus closures, antes de copiar nada: lo que
+         * se inline trae los suyos, y los ve la siguiente pasada. */
+        const LabelAddrIndex labels(caller);
 
         for (auto &bb : caller.blocks) {
             /* Procesar in-place; recolectar lista de cambios primero
@@ -10932,15 +11021,26 @@ static bool inline_impl(IrModule &mod, size_t threshold) {
 
             for (size_t i = 0; i < bb.instrs.size(); ++i) {
                 IrInstr &ins = bb.instrs[i];
-                if (ins.op != IrOp::CALL) {
+                /* Un CALL, o una CALLCLOSURE con el destino escrito: esa es
+                 * tambien una llamada directa, que ademas entrega el entorno
+                 * en su primer operando. */
+                util::InternedName closure_target;
+                if (ins.op == IrOp::CALLCLOSURE)
+                    closure_target = known_closure_target(ins, labels);
+                const bool is_closure = !closure_target.empty();
+                if (ins.op != IrOp::CALL && !is_closure) {
                     new_instrs.push_back(std::move(ins));
                     continue;
                 }
+                const std::string &callee_name =
+                    is_closure ? closure_target.str() : ins.func_name;
+                const size_t nargs = inline_arg_count(ins);
                 /* CALL a function user.  Verificar si el callee esta
                  * en el modulo y es inlineable. */
-                auto it = name_to_idx.find(ins.func_name);
+                auto it = name_to_idx.find(callee_name);
                 if (it == name_to_idx.end() || it->second == fi ||
-                    !can_inline[it->second]) {
+                    !(is_closure ? can_inline_closure[it->second]
+                                 : can_inline[it->second])) {
                     new_instrs.push_back(std::move(ins));
                     continue;
                 }
@@ -10955,15 +11055,17 @@ static bool inline_impl(IrModule &mod, size_t threshold) {
                  * -> el asm inlinado emite SOLO los movs de los args que si
                  * llegaron.  Mas args que params (variadico) no se inlina aqui.
                  */
-                if (callee.params.size() < ins.operands.size()) {
+                /* Una closure no tiene casts de aridad: sus argumentos son
+                 * exactamente los parametros. */
+                if (callee.params.size() < nargs ||
+                    (is_closure && callee.params.size() != nargs)) {
                     new_instrs.push_back(std::move(ins));
                     continue;
                 }
 
                 /* Params NO pasados por el cast: indices [operands, params). */
                 std::unordered_set<IrValueId> dropped_params;
-                for (size_t pi = ins.operands.size(); pi < callee.params.size();
-                     ++pi)
+                for (size_t pi = nargs; pi < callee.params.size(); ++pi)
                     dropped_params.insert(callee.params[pi]);
                 /* Variables register() de esos params (su ALLOCA): el desugar
                  * emite `STORE(param, addr)` (operands[0]=param,
@@ -10979,13 +11081,11 @@ static bool inline_impl(IrModule &mod, size_t threshold) {
                             dropped_params.count(c_ins.operands[0]))
                             dropped_vars.insert(c_ins.operands[1]);
 
-                /* Mapeo callee_vid -> caller_vid. */
-                std::unordered_map<IrValueId, IrValueId> vmap;
-                /* Params del callee se mapean a operandos del CALL (solo los
-                 * pasados; los dropped quedan sin mapeo -> se eliminan). */
-                for (size_t pi = 0; pi < ins.operands.size(); ++pi) {
-                    vmap[callee.params[pi]] = ins.operands[pi];
-                }
+                /* Mapeo callee_vid -> caller_vid.  Los params pasados y, en una
+                 * closure, el entorno; los dropped quedan sin mapeo -> se
+                 * eliminan.  Ver ir/passes/inline_bind.h. */
+                InlineValueMap vmap;
+                bind_call_inputs(caller, callee, ins, vmap);
 
                 /* Helper: para cada SSA value que el callee DEFINE,
                  * allocar fresh en el caller. */
@@ -11039,6 +11139,9 @@ static bool inline_impl(IrModule &mod, size_t threshold) {
                 /// asm que se traen del callee (ver mas abajo).
                 int ph_desplazamiento = 0;
                 for (const auto &c_ins : cbody.instrs) {
+                    /* La lectura del entorno ya es el operando de entorno de la
+                     * closure (bind_call_inputs). */
+                    if (is_bound_env_read(ins, c_ins)) continue;
                     if (c_ins.op == IrOp::RET) {
                         if (!c_ins.operands.empty()) {
                             ret_value = remap_op(c_ins.operands[0]);
@@ -11568,122 +11671,6 @@ static bool module_has_unattributed_aop(const IrModule &mod) {
 }
 
 // =========================================================================
-//  Pase ir_pass_devirt_cfn
-// =========================================================================
-//
-// Devirtualizacion de llamadas a PUNTERO A FUNCION crudo (cfn) constante.
-// Si un CALLIND tiene su @c func_ptr definido por un LABEL_ADDR (la direccion
-// cruda de una funcion conocida en compile-time), lo reescribimos a un CALL
-// directo a esa funcion.  Beneficios:
-//   - elimina la rama indirecta (callvmr -> callvm): mejor branch prediction.
-//   - habilita el INLINER (ir_pass_inline solo procesa CALL directos), asi el
-//     callback conocido se puede inlinar.
-// La direccion fluye al call site tras mem2reg + copy_prop (el caso comun es
-// `cfn c = &add1; c(x)` -> el func_ptr ES el LABEL_ADDR).  Propagamos tambien
-// a traves de MOV por robustez.  La firma del cfn es solo compile-time; la
-// convencion de llamada de CALL y CALLIND es identica (args en R1.., ret R0),
-// asi que el rewrite preserva la semantica.
-/* Cuerpo interno; la puerta publica lo envuelve.  @see PassResult */
-static bool devirt_cfn_impl(IrFunction &fn, const NakedFnAddrIndex &index,
-                            analysis::asa::FactBase &base) {
-    if (fn.is_native || fn.blocks.empty()) return false;
-    // vid -> label de funcion (desde LABEL_ADDR, propagado por MOV).
-    std::unordered_map<IrValueId, std::string> label_of;
-    /* Y de que direccion lee cada LOAD, para el camino por memoria: un
-     * puntero a funcion guardado una sola vez y leido de vuelta tiene destino
-     * conocido, pero la propagacion por SSA no lo alcanza. */
-    std::unordered_map<IrValueId, IrValueId> load_addr_of;
-    /* Y las constantes, que hacen falta para el OTRO camino: la direccion
-     * nativa de una funcion plana se toma con `vrt:naked_fnaddr(proc, hash)`,
-     * y ese hash es una constante de compilacion. */
-    std::unordered_map<IrValueId, uint64_t> const_of;
-    // Primero recolectar LABEL_ADDR; luego propagar por MOV en orden lineal.
-    for (auto &bb : fn.blocks) {
-        for (auto &ins : bb.instrs) {
-            if (ins.dst == IR_NO_VALUE) continue;
-            if (ins.op == IrOp::CONST) {
-                const_of[ins.dst] = static_cast<uint64_t>(ins.imm);
-            } else if (ins.op == IrOp::LABEL_ADDR && !ins.func_name.empty()) {
-                label_of[ins.dst] = ins.func_name;
-            } else if (ins.op == IrOp::CALLN && !index.empty() &&
-                       ins.func_name == "vrt:naked_fnaddr" &&
-                       ins.operands.size() >= 2) {
-                /* La direccion NATIVA de una funcion conocida.  El hash se
-                 * deshace con el indice del modulo; si el nombre no esta (una
-                 * @Naked, que se deja fuera a proposito) no se toca nada. */
-                const auto ic = const_of.find(ins.operands[1]);
-                if (ic == const_of.end()) continue;
-                if (const std::string *nm = index.find(ic->second))
-                    label_of[ins.dst] = *nm;
-            } else if (ins.op == IrOp::MOV && !ins.operands.empty()) {
-                auto it = label_of.find(ins.operands[0]);
-                if (it != label_of.end()) label_of[ins.dst] = it->second;
-            } else if (ins.op == IrOp::LOAD && !ins.operands.empty()) {
-                load_addr_of[ins.dst] = ins.operands[0];
-            }
-        }
-    }
-    if (label_of.empty()) return false;
-
-    /* EL CAMINO POR MEMORIA.  Un `cfn` guardado una sola vez y leido de vuelta
-     * -- un `unique<cfn>`, un campo, una tabla con indice constante -- tiene
-     * destino conocido, pero el valor que llega al `load` no es el mismo SSA
-     * que el del `store`, asi que la propagacion de arriba no lo alcanza.  A
-     * quien hay que preguntarle es a points-to: dos direcciones son el mismo
-     * hueco cuando resuelven al mismo sitio.
-     *
-     * Se pregunta SOLO por los destinos que quedaron sin resolver y que salen
-     * de un `load`; si no hay ninguno no se pide la tabla. */
-    ir::IrOperands pending_addrs;
-    std::vector<IrInstr *> pending_calls;
-    if (!util::flag_on(util::FlagId::NoDevirtThroughMemory)) {
-        for (auto &bb : fn.blocks) {
-            for (auto &ins : bb.instrs) {
-                if (ins.op != IrOp::CALLIND || ins.func_ptr == IR_NO_VALUE)
-                    continue;
-                if (label_of.count(ins.func_ptr) != 0) continue;
-                const auto la = load_addr_of.find(ins.func_ptr);
-                if (la == load_addr_of.end()) continue;
-                pending_addrs.push_back(la->second);
-                pending_calls.push_back(&ins);
-            }
-        }
-    }
-    if (!pending_addrs.empty()) {
-        const analysis::PointsTo &pt = base.memory(fn);
-        const std::vector<IrValueId> stored = analysis::single_values_at(
-            fn, pt, pending_addrs, static_cast<int32_t>(sizeof(uint64_t)));
-        for (size_t i = 0; i < pending_calls.size(); ++i) {
-            if (stored[i] == IR_NO_VALUE) continue;
-            auto it = label_of.find(stored[i]);
-            if (it == label_of.end()) continue;
-            label_of[pending_calls[i]->func_ptr] = it->second;
-        }
-    }
-
-    bool changed = false;
-    for (auto &bb : fn.blocks) {
-        for (auto &ins : bb.instrs) {
-            if (ins.op != IrOp::CALLIND) continue;
-            if (ins.func_ptr == IR_NO_VALUE) continue;
-            auto it = label_of.find(ins.func_ptr);
-            if (it == label_of.end()) continue;
-            // Reescribir a CALL directo: func_name = label, sin func_ptr.
-            ins.op = IrOp::CALL;
-            ins.func_name = it->second;
-            ins.func_ptr = IR_NO_VALUE;
-            changed = true;
-        }
-    }
-    return changed;
-}
-
-PassResult ir_pass_devirt_cfn(IrFunction &fn, const NakedFnAddrIndex &index,
-                              analysis::asa::FactBase &base) {
-    return PassResult::of(fn, devirt_cfn_impl(fn, index, base));
-}
-
-// =========================================================================
 //  Pase ir_pass_callind_native
 // =========================================================================
 //
@@ -11703,7 +11690,7 @@ PassResult ir_pass_devirt_cfn(IrFunction &fn, const NakedFnAddrIndex &index,
 // seguido de llamar a `t.addr`, el operando del CALLIND llega aqui YA marcado
 // `@host` -- el valor es correcto y la instruccion es la equivocada.
 //
-// Es el mismo trabajo que @ref ir_pass_devirt_cfn -- hacer directa una
+// Es el mismo trabajo que @ref ir_pass_devirt_known_target -- hacer directa una
 // llamada indirecta donde de verdad se puede -- pero con otro hecho y otra
 // conclusion: aquel sabe QUE FUNCION es, este de QUE MEMORIA es.  Por eso va
 // aparte y no como un caso mas de aquel.
@@ -12211,34 +12198,15 @@ static bool speculative_devirt_impl(IrFunction &fn,
         }
         if (bidx == IR_NO_BLOCK) continue; /* no encontrado: skip */
 
-        /* Capturar datos del CALLVIRT (copia) antes de la cirugia. */
-        const IrInstr cv = fn.blocks[bidx].instrs[i];
-        const IrType rtype = cv.type;
-        const IrValueId orig_dst = cv.dst;
-        const IrOperands ops = cv.operands; /* [obj, args...] */
-        const uint32_t srcline = cv.source_line;
+        const IrOperands ops = fn.blocks[bidx].instrs[i].operands;
+        const uint32_t srcline = fn.blocks[bidx].instrs[i].source_line;
         if (ops.empty()) continue; /* sin receptor: no especulable */
 
-        /* Capturar los sucesores ORIGINALES de B (los del terminador que va
-         * en el tail) antes de sobreescribir B.succs. */
-        const std::vector<IrBlockId> orig_succs = fn.blocks[bidx].succs;
-
-        /* Crear los 3 bloques (append; los indices existentes no se mueven). */
-        const IrBlockId fastb = fn.new_block("spec_fast");
-        const IrBlockId slowb = fn.new_block("spec_slow");
-        const IrBlockId mergeb = fn.new_block("spec_merge");
-
-        /* Mover el tail [i+1 ..] al merge; truncar B a [0 .. i-1]. */
-        {
-            auto &Binstrs = fn.blocks[bidx].instrs;
-            std::vector<IrInstr> tail(
-                Binstrs.begin() + static_cast<long>(i) + 1, Binstrs.end());
-            fn.blocks[mergeb].instrs = std::move(tail);
-            Binstrs.resize(i); /* descarta el CALLVIRT en i + el tail */
-        }
-
-        /* --- Guard en B: cls = load[obj]; cmp cls, T; br_cond fast/slow --- */
+        /* Guarda, calculada en B delante de la llamada:
+         *   cls = load[obj]; g = (cls == T) */
         const IrValueId vcls = fn.new_value(IrType::I64, "spec_cls");
+        const IrValueId vt = fn.new_value(IrType::I64, "spec_T");
+        const IrValueId vg = fn.new_value(IrType::BOOL, "spec_g");
         {
             IrInstr ld;
             ld.op = IrOp::LOAD;
@@ -12246,104 +12214,27 @@ static bool speculative_devirt_impl(IrFunction &fn,
             ld.dst = vcls;
             ld.operands = {ops[0]};
             ld.source_line = srcline;
-            fn.blocks[bidx].instrs.push_back(ld);
-        }
-        const IrValueId vt = fn.new_value(IrType::I64, "spec_T");
-        {
             IrInstr c;
             c.op = IrOp::CONST;
             c.type = IrType::I64;
             c.dst = vt;
             c.imm = site.class_ptr;
             c.source_line = srcline;
-            fn.blocks[bidx].instrs.push_back(c);
-        }
-        const IrValueId vg = fn.new_value(IrType::BOOL, "spec_g");
-        {
             IrInstr cm;
             cm.op = IrOp::CMP_EQ;
             cm.type = IrType::BOOL;
             cm.dst = vg;
             cm.operands = {vcls, vt};
             cm.source_line = srcline;
-            fn.blocks[bidx].instrs.push_back(cm);
+            auto &b = fn.blocks[bidx].instrs;
+            const auto at = b.begin() + static_cast<long>(i);
+            b.insert(at, {std::move(ld), std::move(c), std::move(cm)});
+            i += 3;
         }
-        {
-            IrInstr br;
-            br.op = IrOp::BR_COND;
-            br.operands = {vg};
-            br.target_block = fastb;
-            br.false_block = slowb;
-            br.source_line = srcline;
-            fn.blocks[bidx].instrs.push_back(br);
-        }
-        fn.blocks[bidx].succs = {fastb, slowb};
-
-        /* --- Fast: CALL directo al callee (ir_pass_inline lo inlinea). --- */
-        const IrValueId rfast = fn.new_value(rtype, "spec_rfast");
-        {
-            IrInstr call;
-            call.op = IrOp::CALL;
-            call.type = rtype;
-            call.dst = rfast;
-            call.func_name = site.callee_ir_name;
-            call.operands = ops;
-            call.source_line = srcline;
-            fn.blocks[fastb].instrs.push_back(call);
-        }
-        {
-            IrInstr br;
-            br.op = IrOp::BR;
-            br.target_block = mergeb;
-            fn.blocks[fastb].instrs.push_back(br);
-        }
-        fn.blocks[fastb].preds = {bidx};
-        fn.blocks[fastb].succs = {mergeb};
-
-        /* --- Slow: CALLVIRT original (copia) -> r_slow. --- */
-        const IrValueId rslow = fn.new_value(rtype, "spec_rslow");
-        {
-            IrInstr cv2 = cv;
-            cv2.dst = rslow;
-            fn.blocks[slowb].instrs.push_back(cv2);
-        }
-        {
-            IrInstr br;
-            br.op = IrOp::BR;
-            br.target_block = mergeb;
-            fn.blocks[slowb].instrs.push_back(br);
-        }
-        fn.blocks[slowb].preds = {bidx};
-        fn.blocks[slowb].succs = {mergeb};
-
-        /* --- Merge: PHI(orig_dst) = [r_fast@fast, r_slow@slow] + tail. --- */
-        {
-            IrInstr phi;
-            phi.op = IrOp::PHI;
-            phi.type = rtype;
-            phi.dst = orig_dst;
-            phi.phi_args = {IrPhiArg{rfast, fastb}, IrPhiArg{rslow, slowb}};
-            phi.source_line = srcline;
-            fn.blocks[mergeb].instrs.insert(fn.blocks[mergeb].instrs.begin(),
-                                            phi);
-        }
-        fn.blocks[mergeb].preds = {fastb, slowb};
-        fn.blocks[mergeb].succs = orig_succs;
-
-        /* Repuntar los sucesores originales de B: ahora su predecesor es
-         * merge (el terminador del tail vive ahi).  Tambien sus PHIs. */
-        for (IrBlockId s : orig_succs) {
-            if (s == IR_NO_BLOCK || s >= fn.blocks.size()) continue;
-            auto &sb = fn.blocks[s];
-            for (auto &p : sb.preds)
-                if (p == bidx) p = mergeb;
-            for (auto &ins : sb.instrs) {
-                if (ins.op != IrOp::PHI) continue;
-                for (auto &pa : ins.phi_args)
-                    if (pa.block == bidx) pa.block = mergeb;
-            }
-        }
-
+        /* Directo al callee si acierta (ir_pass_inline lo inlinea); si no,
+         * el CALLVIRT original.  La cirugia es comun: ver guarded_call.h. */
+        const GuardedArm arm{vg, util::InternedName::intern(site.callee_ir_name)};
+        split_guarded_call(fn, bidx, i, ops, &arm, 1);
         changed = true;
     }
 
@@ -12355,80 +12246,7 @@ static bool speculative_devirt_impl(IrFunction &fn,
 //  via guard-chain de K candidatos + fallback al dispatch original.
 // =========================================================================
 
-// Reordena los bloques de la funcion a Reverse Post-Order (RPO) desde el
-// entry (bloque 0), siguiendo los sucesores derivados de los terminadores.
-// Necesario tras la cirugia de spec_devirt: esta crea bloques (guards/fast/
-// fallback/merge) en orden de procesamiento de los sites (un unordered_map,
-// no determinista), dejando el array de bloques en orden NO topologico.  El
-// emisor de bytecode + su regalloc/liveness asumen orden ~control-flow (p.ej.
-// el fall-through a `bid+1` y la liveness lineal), por lo que un orden mezclado
-// producia codigo incorrecto (resultados que aliasaban entre sites) y no
-// determinista.  RPO da el orden canonico y deterministico (independiente del
-// orden de iteracion del map).  El path JIT/vreg ya lo toleraba; esto arregla
-// el interprete.
-static void reorder_blocks_rpo(IrFunction &fn) {
-    const size_t N = fn.blocks.size();
-    if (N <= 1) return;
-    /* El RPO es el de los dominadores, sobre el grafo COMPLETO: incluye la
-     * arista de cada `tryenter` a su handler.  Sin ella el handler queda
-     * inalcanzable en el recorrido y, si se colocara delante, desplazaria al
-     * bloque de entrada de la posicion 0 -- se empezaria a ejecutar por el
-     * bloque equivocado. */
-    const analysis::DomFacts dom = analysis::compute_dom_facts(fn);
-    // Nuevo orden fisico: RPO de los ALCANZABLES (deja el entry SIEMPRE en la
-    // posicion 0) seguido de los bloques no alcanzables al FINAL.  Ponerlos
-    // delante desplazaba el entry y el interprete/emisor arrancaban por el
-    // bloque equivocado.
-    std::vector<IrBlockId> order;
-    order.reserve(N);
-    for (IrBlockId b : dom.rpo)
-        order.push_back(b);
-    size_t unreachable = 0;
-    for (size_t b = 0; b < N; ++b)
-        if (!dom.reachable(IrBlockId(b))) {
-            order.push_back(static_cast<IrBlockId>(b));
-            ++unreachable;
-        }
-    std::vector<IrBlockId> remap(N, IR_NO_BLOCK);
-    for (size_t i = 0; i < order.size(); ++i)
-        remap[order[i]] = static_cast<IrBlockId>(i);
-    static const bool rpo_dump = util::flag_on(util::FlagId::RpoDump);
-    if (rpo_dump)
-        std::fprintf(stderr, "[rpo] %s: N=%zu inalcanzables=%zu entry->%u\n",
-                     fn.name.c_str(), N, unreachable,
-                     static_cast<unsigned>(remap[0]));
-    bool identity = true;
-    for (size_t b = 0; b < N; ++b)
-        if (remap[b] != static_cast<IrBlockId>(b)) {
-            identity = false;
-            break;
-        }
-    if (identity) return; // ya esta en RPO
-    std::vector<IrBlock> nb(N);
-    for (size_t b = 0; b < N; ++b) {
-        IrBlock bb = std::move(fn.blocks[b]);
-        bb.id = remap[b];
-        for (auto &p : bb.preds)
-            if (p < N) p = remap[p];
-        for (auto &s : bb.succs)
-            if (s < N) s = remap[s];
-        for (auto &ins : bb.instrs) {
-            if (ins.target_block != IR_NO_BLOCK && ins.target_block < N)
-                ins.target_block = remap[ins.target_block];
-            if (ins.false_block != IR_NO_BLOCK && ins.false_block < N)
-                ins.false_block = remap[ins.false_block];
-            /* Remapear tambien los destinos del SWITCH_DENSE: sin esto, aun
-             * con el DFS corregido, los jump_targets[] apuntaban a indices de
-             * bloque VIEJOS tras el reorden -> saltos a bloques equivocados. */
-            for (auto &jt : ins.jump_targets)
-                if (jt != IR_NO_BLOCK && jt < N) jt = remap[jt];
-            for (auto &pa : ins.phi_args)
-                if (pa.block < N) pa.block = remap[pa.block];
-        }
-        nb[remap[b]] = std::move(bb);
-    }
-    fn.blocks = std::move(nb);
-}
+/* El reordenado a RPO tras la cirugia vive en ir/passes/block_order.h. */
 
 // =========================================================================
 //  Pase ir_pass_inline_multiblock: inline de callees MULTI-bloque (con `if`,
@@ -12454,13 +12272,11 @@ static void inline_one_multiblock(IrFunction &caller, size_t bi, size_t ii,
     /* Constancia de la llamada que se aplana (ver inline_note_site). */
     uint32_t sitio_base = 0;
     const uint32_t sitio = inline_note_site(caller, callee, call, sitio_base);
-
-    // --- remap de valores: params -> args; resto -> fresh (copia atributos)
+    // --- remap de valores: params (y entorno de closure) -> lo que da la
+    // llamada (ver ir/passes/inline_bind.h); resto -> fresh (copia atributos)
     // ---
-    std::unordered_map<IrValueId, IrValueId> vmap;
-    for (size_t p = 0; p < callee.params.size() && p < call.operands.size();
-         ++p)
-        vmap[callee.params[p]] = call.operands[p];
+    InlineValueMap vmap;
+    bind_call_inputs(caller, callee, call, vmap);
     for (size_t v = 0; v < callee.values.size(); ++v) {
         if (vmap.count(static_cast<IrValueId>(v))) continue;
         const IrValue &cv = callee.values[v];
@@ -12534,6 +12350,8 @@ static void inline_one_multiblock(IrFunction &caller, size_t bi, size_t ii,
         const IrBlockId nbid = copy_ids[k];
         for (IrInstr in : cb.instrs) {
             // copia por valor
+            if (is_bound_env_read(call, in))
+                continue; // su valor ya es el entorno de la llamada
             in.inline_site = inline_map_site(in.inline_site, sitio, sitio_base);
             if (in.op == IrOp::RET) {
                 if (call_dst != IR_NO_VALUE && !in.operands.empty())
@@ -12659,6 +12477,39 @@ static void inline_one_multiblock(IrFunction &caller, size_t bi, size_t ii,
  * ser la fuente de verdad en cuanto alguien tenga prisa, y ese fallo no da un
  * error: da otra decision. */
 
+/// Sin destino copiable: ver @ref mb_inline_callee.
+static constexpr size_t kMbNoCallee = static_cast<size_t>(-1);
+
+/**
+ * @brief A que funcion del modulo llama @p in, si es una llamada directa: un
+ *        @c CALL o una @c CALLCLOSURE con el destino escrito.
+ *
+ * Una sola respuesta para el grafo de llamadas y para elegir los sitios: si
+ * las dos se hicieran por separado, una lambda recursiva se inlinaria sin que
+ * el grafo la viera ciclica, y sin tope.
+ *
+ * @param in          Instruccion.
+ * @param labels      Los @c LABEL_ADDR de su funcion.
+ * @param name_to_idx Las funciones del modulo por nombre.
+ * @return El indice del llamado, o @ref kMbNoCallee.
+ */
+static size_t
+mb_inline_callee(const IrInstr &in, const LabelAddrIndex &labels,
+                 const std::unordered_map<std::string, size_t> &name_to_idx) {
+    const std::string *name = nullptr;
+    if (in.op == IrOp::CALL) {
+        name = &in.func_name;
+    } else if (in.op == IrOp::CALLCLOSURE) {
+        const util::InternedName t = known_closure_target(in, labels);
+        if (t.empty()) return kMbNoCallee;
+        name = &t.str(); // internado: vive lo que el proceso
+    } else {
+        return kMbNoCallee;
+    }
+    const auto it = name_to_idx.find(*name);
+    return it == name_to_idx.end() ? kMbNoCallee : it->second;
+}
+
 /* Cuerpo interno; la puerta publica lo envuelve.  @see ModulePassResult */
 static bool inline_multiblock_impl(IrModule &mod, size_t threshold) {
     // Activo por defecto.  Desactivable con VESTA_NO_MB_INLINE=1 (A/B).
@@ -12686,12 +12537,19 @@ static bool inline_multiblock_impl(IrModule &mod, size_t threshold) {
     /* La clasificacion sale del HECHO, no de recorrer el cuerpo: ver
      * `analysis/facts/inline_facts.h`.  Esto era un recorrido del programa
      * entero por pasada, y ademas obligaba a tener todos los cuerpos a mano. */
+    /* Por funcion, si se puede copiar en un CALL y si en una CALLCLOSURE (ver
+     * analysis::InlineCallKind). */
     std::vector<bool> ok(mod.functions.size(), false);
+    std::vector<bool> ok_closure(mod.functions.size(), false);
     for (size_t i = 0; i < mod.functions.size(); ++i) {
         const analysis::InlineFacts f =
             analysis::compute_inline_facts(mod.functions[i]);
-        ok[i] = analysis::inlineable_multi_block(f, threshold) &&
-                !tiene_variante_por_motor(mod.functions[i].name);
+        const bool variant = tiene_variante_por_motor(mod.functions[i].name);
+        ok[i] = !variant && analysis::inlineable_multi_block(
+                                f, threshold, analysis::InlineCallKind::Plain);
+        ok_closure[i] =
+            !variant && analysis::inlineable_multi_block(
+                            f, threshold, analysis::InlineCallKind::Closure);
     }
 
     /* Que llamados pueden DESBOCARSE: los que estan en un ciclo de llamadas.
@@ -12712,12 +12570,11 @@ static bool inline_multiblock_impl(IrModule &mod, size_t threshold) {
     util::NamedVector<util::SccNode, scratch::InlineCallTargets> call_to;
     for (size_t i = 0; i < nfn; ++i) {
         call_off[i] = util::SccEdge(call_to.size());
+        const LabelAddrIndex labels(mod.functions[i]);
         for (const IrBlock &b : mod.functions[i].blocks)
             for (const IrInstr &in : b.instrs) {
-                if (in.op != IrOp::CALL) continue;
-                auto it = name_to_idx.find(in.func_name);
-                if (it != name_to_idx.end())
-                    call_to.push_back(util::SccNode(it->second));
+                const size_t ci = mb_inline_callee(in, labels, name_to_idx);
+                if (ci != kMbNoCallee) call_to.push_back(util::SccNode(ci));
             }
     }
     call_off[nfn] = util::SccEdge(call_to.size());
@@ -12767,27 +12624,26 @@ static bool inline_multiblock_impl(IrModule &mod, size_t threshold) {
          * `main` con sus llamadas en linea recta era cuadratico solo con eso.
          * De detras hacia delante cada instruccion se mueve una vez, y las
          * posiciones de las anteriores no cambian. */
+        /* Los destinos escritos de sus closures, antes de copiar nada: lo que
+         * se inline trae los suyos, y los ve la siguiente pasada. */
+        const LabelAddrIndex labels(caller);
         for (size_t bi = 0; bi < caller.blocks.size(); ++bi) {
             positions.clear();
             const std::vector<IrInstr> &instrs = caller.blocks[bi].instrs;
             for (size_t ii = 0; ii < instrs.size(); ++ii) {
                 const IrInstr &in = instrs[ii];
-                if (in.op != IrOp::CALL) continue;
-                auto it = name_to_idx.find(in.func_name);
-                if (it == name_to_idx.end() || it->second == fi ||
-                    !ok[it->second])
-                    continue;
-                if (mod.functions[it->second].params.size() !=
-                    in.operands.size())
+                const size_t ci = mb_inline_callee(in, labels, name_to_idx);
+                if (ci == kMbNoCallee || ci == fi) continue;
+                const bool is_closure = in.op == IrOp::CALLCLOSURE;
+                if (!(is_closure ? ok_closure[ci] : ok[ci])) continue;
+                if (mod.functions[ci].params.size() != inline_arg_count(in))
                     continue;
                 positions.push_back(InlineCallPos(ii));
             }
             for (size_t k = positions.size(); k-- > 0;) {
                 const size_t ii = positions[k];
-                const size_t ci =
-                    name_to_idx
-                        .find(caller.blocks[bi].instrs[ii].func_name)
-                        ->second;
+                const size_t ci = mb_inline_callee(
+                    caller.blocks[bi].instrs[ii], labels, name_to_idx);
                 if (recursion[ci] == INLINE_RECURSIVE) {
                     if (times_inlined[ci] >= kRecursiveInlineCap) continue;
                     if (times_inlined[ci]++ == 0)
@@ -12865,12 +12721,10 @@ static bool spec_devirt_impl(IrFunction &fn) {
         }
         if (bidx == IR_NO_BLOCK) continue; /* no encontrado: skip */
 
-        /* Capturar datos del call (copia) antes de la cirugia. */
-        const IrInstr callins = fn.blocks[bidx].instrs[i];
-        const IrType rtype = callins.type;
-        const IrValueId orig_dst = callins.dst;
-        const IrOperands ops = callins.operands; /* [obj, (meta), args...] */
-        const uint32_t srcline = callins.source_line;
+        /* Capturar datos del call (copia) antes de tocar el bloque. */
+        const IrOperands ops =
+            fn.blocks[bidx].instrs[i].operands; /* [obj, (meta), args...] */
+        const uint32_t srcline = fn.blocks[bidx].instrs[i].source_line;
         if (ops.empty()) continue; /* sin receptor: no especulable */
 
         /* Operands del CALL directo del fast path: receptor + args, sin el
@@ -12887,34 +12741,12 @@ static bool spec_devirt_impl(IrFunction &fn) {
                 call_ops.push_back(ops[a]);
         }
 
-        /* Capturar los sucesores ORIGINALES de B antes de sobreescribirlos. */
-        const std::vector<IrBlockId> orig_succs = fn.blocks[bidx].succs;
-
         const size_t K = cands.size();
 
-        /* Crear los bloques nuevos (append; los indices existentes no se
-         * mueven gracias al reserve previo). */
-        std::vector<IrBlockId> fastb(K);
-        std::vector<IrBlockId> gblk(
-            K, IR_NO_BLOCK); /* gblk[0]=B; gblk[n>=1] nuevos */
-        for (size_t n = 0; n < K; ++n)
-            fastb[n] = fn.new_block("spec_fast");
-        for (size_t n = 1; n < K; ++n)
-            gblk[n] = fn.new_block("spec_guard");
-        const IrBlockId fbackb = fn.new_block("spec_fallback");
-        const IrBlockId mergeb = fn.new_block("spec_merge");
-        gblk[0] = bidx; /* el primer guard va en B (in-place) */
-
-        /* Mover el tail [i+1 ..] al merge; truncar B a [0 .. i-1]. */
-        {
-            auto &Binstrs = fn.blocks[bidx].instrs;
-            std::vector<IrInstr> tail(
-                Binstrs.begin() + static_cast<long>(i) + 1, Binstrs.end());
-            fn.blocks[mergeb].instrs = std::move(tail);
-            Binstrs.resize(i); /* descarta el call en i + el tail */
-        }
-
-        /* cls = load[obj], computado UNA vez en B (domina toda la cadena). */
+        /* Las guardas, calculadas en B delante de la llamada (dominan toda la
+         * cadena): cls = load[obj] una vez, y una comparacion por candidato. */
+        std::vector<IrInstr> guards;
+        guards.reserve(K + 1);
         const IrValueId vcls = fn.new_value(IrType::I64, "spec_cls");
         {
             IrInstr ld;
@@ -12923,118 +12755,31 @@ static bool spec_devirt_impl(IrFunction &fn) {
             ld.dst = vcls;
             ld.operands = {ops[0]};
             ld.source_line = srcline;
-            fn.blocks[bidx].instrs.push_back(ld);
+            guards.push_back(std::move(ld));
         }
-
-        /* Cadena de guardas: por candidato n en gblk[n]:
-         *   g = (cls == cls_value_n);  br_cond fast_n / next
-         * donde next = gblk[n+1] (si lo hay) o el fallback. */
-        std::vector<IrValueId> rfast(K);
+        std::vector<GuardedArm> arms(K);
         for (size_t n = 0; n < K; ++n) {
-            const IrBlockId gb = gblk[n];
-            const IrBlockId next = (n + 1 < K) ? gblk[n + 1] : fbackb;
-
-            const IrValueId vg = fn.new_value(IrType::BOOL, "spec_g");
-            {
-                IrInstr cm;
-                cm.op = IrOp::CMP_EQ;
-                cm.type = IrType::BOOL;
-                cm.dst = vg;
-                cm.operands = {vcls, cands[n].cls_value};
-                cm.source_line = srcline;
-                fn.blocks[gb].instrs.push_back(cm);
-            }
-            {
-                IrInstr br;
-                br.op = IrOp::BR_COND;
-                br.operands = {vg};
-                br.target_block = fastb[n];
-                br.false_block = next;
-                br.source_line = srcline;
-                fn.blocks[gb].instrs.push_back(br);
-            }
-            fn.blocks[gb].succs = {fastb[n], next};
-            if (n > 0)
-                fn.blocks[gb].preds = {
-                    gblk[n - 1]}; /* gblk[0]=B: preds intactos */
-
-            /* fast_n: CALL directo al callee (ir_pass_inline lo inlinea) + br
-             * merge. */
-            rfast[n] = fn.new_value(rtype, "spec_rfast");
-            {
-                IrInstr call;
-                call.op = IrOp::CALL;
-                call.type = rtype;
-                call.dst = rfast[n];
-                call.func_name = cands[n].callee_ir_name;
-                call.operands = call_ops;
-                call.source_line = srcline;
-                fn.blocks[fastb[n]].instrs.push_back(call);
-            }
-            {
-                IrInstr br;
-                br.op = IrOp::BR;
-                br.target_block = mergeb;
-                fn.blocks[fastb[n]].instrs.push_back(br);
-            }
-            fn.blocks[fastb[n]].preds = {gb};
-            fn.blocks[fastb[n]].succs = {mergeb};
-        }
-
-        /* Fallback: el call dinamico ORIGINAL (copia) -> r_slow + br merge. */
-        const IrValueId rslow = fn.new_value(rtype, "spec_rslow");
-        {
-            IrInstr cv2 = callins;
-            cv2.dst = rslow;
-            fn.blocks[fbackb].instrs.push_back(cv2);
+            IrInstr cm;
+            cm.op = IrOp::CMP_EQ;
+            cm.type = IrType::BOOL;
+            cm.dst = fn.new_value(IrType::BOOL, "spec_g");
+            cm.operands = {vcls, cands[n].cls_value};
+            cm.source_line = srcline;
+            arms[n].cond = cm.dst;
+            arms[n].callee = util::InternedName::intern(cands[n].callee_ir_name);
+            guards.push_back(std::move(cm));
         }
         {
-            IrInstr br;
-            br.op = IrOp::BR;
-            br.target_block = mergeb;
-            fn.blocks[fbackb].instrs.push_back(br);
+            auto &b = fn.blocks[bidx].instrs;
+            b.insert(b.begin() + static_cast<long>(i),
+                     std::make_move_iterator(guards.begin()),
+                     std::make_move_iterator(guards.end()));
+            i += guards.size();
         }
-        fn.blocks[fbackb].preds = {gblk[K - 1]};
-        fn.blocks[fbackb].succs = {mergeb};
-
-        /* Merge: PHI(orig_dst) = [rfast_n@fast_n..., rslow@fallback] + tail. */
-        {
-            IrInstr phi;
-            phi.op = IrOp::PHI;
-            phi.type = rtype;
-            phi.dst = orig_dst;
-            phi.phi_args.reserve(K + 1);
-            for (size_t n = 0; n < K; ++n)
-                phi.phi_args.push_back(IrPhiArg{rfast[n], fastb[n]});
-            phi.phi_args.push_back(IrPhiArg{rslow, fbackb});
-            phi.source_line = srcline;
-            fn.blocks[mergeb].instrs.insert(fn.blocks[mergeb].instrs.begin(),
-                                            phi);
-        }
-        {
-            std::vector<IrBlockId> mpreds;
-            mpreds.reserve(K + 1);
-            for (size_t n = 0; n < K; ++n)
-                mpreds.push_back(fastb[n]);
-            mpreds.push_back(fbackb);
-            fn.blocks[mergeb].preds = std::move(mpreds);
-        }
-        fn.blocks[mergeb].succs = orig_succs;
-
-        /* Repuntar los sucesores originales de B: ahora su predecesor es merge
-         * (el terminador del tail vive ahi).  Tambien sus PHIs. */
-        for (IrBlockId s : orig_succs) {
-            if (s == IR_NO_BLOCK || s >= fn.blocks.size()) continue;
-            auto &sb = fn.blocks[s];
-            for (auto &p : sb.preds)
-                if (p == bidx) p = mergeb;
-            for (auto &ins : sb.instrs) {
-                if (ins.op != IrOp::PHI) continue;
-                for (auto &pa : ins.phi_args)
-                    if (pa.block == bidx) pa.block = mergeb;
-            }
-        }
-
+        /* Directo al callee del candidato que acierte (ir_pass_inline lo
+         * inlinea); si ninguno, el despacho ORIGINAL.  La cirugia es comun:
+         * ver guarded_call.h. */
+        split_guarded_call(fn, bidx, i, call_ops, arms.data(), K);
         changed = true;
     }
 
@@ -14309,269 +14054,6 @@ static bool loop_memcpy_idiom_impl(IrFunction &fn) {
 }
 
 // =========================================================================
-//  Pase ir_pass_inline_closures
-// =========================================================================
-//
-// Inline del CUERPO de la lambda en el CALLCLOSURE.  Ver doc en el header.
-// Estrategia conservadora: 1 MAKE_CLOSURE + 1 CALLCLOSURE en el MISMO
-// bloque, capturas by-value, helper single-block terminado en RET.  El
-// emparejamiento es trivial (solo hay una closure) -> sin alias analysis.
-
-static bool inline_closures_impl(IrModule &mod) {
-    bool changed = false;
-
-    std::unordered_map<std::string, size_t> name_to_idx;
-    for (size_t i = 0; i < mod.functions.size(); ++i)
-        name_to_idx[mod.functions[i].name] = i;
-
-    for (size_t fi = 0; fi < mod.functions.size(); ++fi) {
-        IrFunction &caller = mod.functions[fi];
-        if (caller.is_native) continue;
-
-        /* 1. Localizar el unico MAKE_CLOSURE y el unico CALLCLOSURE. */
-        int mc_b = -1, mc_i = -1, cc_b = -1, cc_i = -1, n_mc = 0, n_cc = 0;
-        for (size_t b = 0; b < caller.blocks.size(); ++b) {
-            const auto &ins = caller.blocks[b].instrs;
-            for (size_t k = 0; k < ins.size(); ++k) {
-                if (ins[k].op == IrOp::MAKE_CLOSURE) {
-                    ++n_mc;
-                    mc_b = static_cast<int>(b);
-                    mc_i = static_cast<int>(k);
-                } else if (ins[k].op == IrOp::CALLCLOSURE) {
-                    ++n_cc;
-                    cc_b = static_cast<int>(b);
-                    cc_i = static_cast<int>(k);
-                }
-            }
-        }
-        if (n_mc != 1 || n_cc != 1) continue;
-        if (mc_b != cc_b || mc_i >= cc_i) continue; /* mc antes del cc */
-
-        IrBlock &bb = caller.blocks[cc_b];
-        const IrInstr mc = bb.instrs[mc_i]; /* copia: vamos a reescribir bb */
-        const IrInstr cc = bb.instrs[cc_i];
-
-        /* by-value only: bits 1.. de imm = mutable_mask. */
-        if ((mc.imm >> 1) != 0ULL) continue;
-
-        auto it = name_to_idx.find(mc.func_name);
-        if (it == name_to_idx.end() || it->second == fi) continue;
-        const IrFunction &h = mod.functions[it->second];
-        if (h.is_native || h.blocks.size() != 1) continue;
-        const IrBlock &hb = h.blocks[0];
-        if (hb.instrs.empty() || hb.instrs.back().op != IrOp::RET) continue;
-
-        const size_t n_args = cc.operands.empty() ? 0 : cc.operands.size() - 1;
-        const size_t n_caps = mc.operands.size();
-
-        /* params del helper = [declarados...] (+ [env] en native_poo). */
-        IrValueId env_param = IR_NO_VALUE;
-        std::vector<IrValueId> decl_params;
-        if (h.params.size() == n_args) {
-            decl_params = h.params;
-        } else if (h.params.size() == n_args + 1) {
-            decl_params.assign(h.params.begin(), h.params.end() - 1);
-            env_param = h.params.back();
-        } else {
-            continue; /* aridad no encaja */
-        }
-
-        /* env_ptr: param oculto (native_poo) o READ_VM_REG 14 (VM/JIT). */
-        IrValueId env_ptr = env_param;
-        std::unordered_set<size_t> skip; /* instrs del prologo a omitir */
-        if (env_ptr == IR_NO_VALUE && n_caps > 0) {
-            for (size_t k = 0; k < hb.instrs.size(); ++k) {
-                if (hb.instrs[k].op == IrOp::READ_VM_REG &&
-                    hb.instrs[k].imm == 14) {
-                    env_ptr = hb.instrs[k].dst;
-                    skip.insert(k);
-                    break;
-                }
-            }
-            if (env_ptr == IR_NO_VALUE) continue; /* capturas sin env -> bail */
-        }
-
-        /* Direcciones de captura: env_ptr (offset 0) + ADD(env_ptr,const). */
-        std::unordered_set<IrValueId> cap_addr;
-        if (env_ptr != IR_NO_VALUE) cap_addr.insert(env_ptr);
-        for (size_t k = 0; k < hb.instrs.size(); ++k) {
-            const auto &in = hb.instrs[k];
-            if (in.op == IrOp::ADD && in.operands.size() == 2 &&
-                in.operands[0] == env_ptr) {
-                cap_addr.insert(in.dst);
-                skip.insert(k);
-            }
-        }
-
-        /* LOADs de captura en orden de fuente -> raw_v_i. */
-        std::vector<IrValueId> cap_loads;
-        for (size_t k = 0; k < hb.instrs.size(); ++k) {
-            const auto &in = hb.instrs[k];
-            if (in.op == IrOp::LOAD && in.operands.size() == 1 &&
-                cap_addr.count(in.operands[0])) {
-                cap_loads.push_back(in.dst);
-                skip.insert(k);
-            }
-        }
-        if (cap_loads.size() != n_caps) continue;
-
-        /* vmap: params -> args; capturas -> valores del MAKE_CLOSURE. */
-        std::unordered_map<IrValueId, IrValueId> vmap;
-        for (size_t k = 0; k < decl_params.size(); ++k)
-            vmap[decl_params[k]] = cc.operands[k + 1];
-        for (size_t i = 0; i < n_caps; ++i) {
-            vmap[cap_loads[i]] = mc.operands[i];
-            /* TRUNC que estrecha la captura (by-value narrow): mapear su
-             * dst tambien al valor original y omitir el TRUNC. */
-            for (size_t k = 0; k < hb.instrs.size(); ++k) {
-                const auto &in = hb.instrs[k];
-                if (in.op == IrOp::TRUNC && in.operands.size() == 1 &&
-                    in.operands[0] == cap_loads[i]) {
-                    vmap[in.dst] = mc.operands[i];
-                    skip.insert(k);
-                    break;
-                }
-            }
-        }
-
-        /* Seguridad: env_ptr SOLO usado por ADD(env_ptr,..) / LOAD(env_ptr);
-         * ningun READ_VM_REG fuera del prologo. */
-        bool ok = true;
-        for (size_t k = 0; k < hb.instrs.size() && ok; ++k) {
-            const auto &in = hb.instrs[k];
-            auto used = [&](IrValueId u) {
-                if (u != env_ptr || env_ptr == IR_NO_VALUE) return;
-                const bool as_add =
-                    (in.op == IrOp::ADD && in.operands.size() == 2 &&
-                     in.operands[0] == env_ptr);
-                const bool as_ld =
-                    (in.op == IrOp::LOAD && in.operands.size() == 1 &&
-                     in.operands[0] == env_ptr);
-                if (!as_add && !as_ld) ok = false;
-            };
-            for (auto u : in.operands)
-                used(u);
-            if (in.func_ptr != IR_NO_VALUE) used(in.func_ptr);
-            if (in.op == IrOp::READ_VM_REG && !skip.count(k)) ok = false;
-        }
-        if (!ok) continue;
-
-        /* Construir el cuerpo inlineado (sin commit hasta saber que es OK). */
-        std::vector<IrInstr> body;
-        auto remap_dst = [&](IrValueId cvid, IrType type) -> IrValueId {
-            if (cvid == IR_NO_VALUE) return IR_NO_VALUE;
-            auto vit = vmap.find(cvid);
-            if (vit != vmap.end()) return vit->second;
-            const IrValueId nid = static_cast<IrValueId>(caller.values.size());
-            IrValue nv{};
-            nv.id = nid;
-            nv.type = type;
-            nv.name = "%clo_" + std::to_string(nid);
-            if (cvid < h.values.size()) {
-                const auto &cv = h.values[cvid];
-                nv.is_const = cv.is_const;
-                nv.const_val = cv.const_val;
-                nv.memory = cv.memory;
-                nv.pointee_is_host_ptr = cv.pointee_is_host_ptr;
-                nv.is_gc_object = cv.is_gc_object;
-                nv.narrow_only = cv.narrow_only;
-            }
-            caller.values.push_back(nv);
-            vmap[cvid] = nid;
-            return nid;
-        };
-        auto remap_op = [&](IrValueId cvid) -> IrValueId {
-            if (cvid == IR_NO_VALUE) return IR_NO_VALUE;
-            auto vit = vmap.find(cvid);
-            return (vit != vmap.end()) ? vit->second : IR_NO_VALUE;
-        };
-
-        /* Constancia de la llamada que se aplana (ver inline_note_site).  El
-         * cuerpo de la lambda es codigo de otro sitio igual que cualquier otro
-         * inlinado; sin esto su linea se atribuye a quien la invoca. */
-        uint32_t sitio_base = 0;
-        const uint32_t sitio = inline_note_site(caller, h, cc, sitio_base);
-
-        IrValueId ret_value = IR_NO_VALUE;
-        for (size_t k = 0; k < hb.instrs.size() && ok; ++k) {
-            if (skip.count(k)) continue;
-            const IrInstr &ci = hb.instrs[k];
-            if (ci.op == IrOp::RET) {
-                if (!ci.operands.empty()) {
-                    ret_value = remap_op(ci.operands[0]);
-                    if (ret_value == IR_NO_VALUE) ok = false;
-                }
-                continue;
-            }
-            if (!ci.phi_args.empty()) {
-                ok = false;
-                break;
-            }
-            IrInstr ni = ci;
-            ni.inline_site = inline_map_site(ci.inline_site, sitio, sitio_base);
-            if (ni.dst != IR_NO_VALUE) {
-                const IrType dt = (ni.dst < h.values.size())
-                                      ? h.values[ni.dst].type
-                                      : ni.type;
-                ni.dst = remap_dst(ni.dst, dt);
-            }
-            bool op_ok = true;
-            for (auto &op : ni.operands) {
-                const IrValueId before = op;
-                op = remap_op(op);
-                if (before != IR_NO_VALUE && op == IR_NO_VALUE) op_ok = false;
-            }
-            if (ni.func_ptr != IR_NO_VALUE) {
-                const IrValueId before = ni.func_ptr;
-                ni.func_ptr = remap_op(ni.func_ptr);
-                if (before != IR_NO_VALUE && ni.func_ptr == IR_NO_VALUE)
-                    op_ok = false;
-            }
-            if (!op_ok) {
-                ok = false;
-                break;
-            }
-            body.push_back(std::move(ni));
-        }
-        if (!ok) continue; /* anomalia -> no transformar (bb intacto) */
-
-        /* Commit: reescribir bb = [0..cc) sin el marcador, + body con MOV
-         * del retorno al dst, + (cc_i, fin) sin el CALLCLOSURE. */
-        std::vector<IrInstr> rebuilt;
-        rebuilt.reserve(bb.instrs.size() + body.size());
-        for (int k = 0; k < cc_i; ++k) {
-            if (k == mc_i) continue; /* drop marker */
-            rebuilt.push_back(bb.instrs[k]);
-        }
-        for (auto &bi : body)
-            rebuilt.push_back(std::move(bi));
-        if (cc.dst != IR_NO_VALUE && ret_value != IR_NO_VALUE) {
-            IrInstr mv{};
-            mv.op = IrOp::MOV;
-            mv.type = cc.type;
-            mv.dst = cc.dst;
-            mv.operands = {ret_value};
-            mv.source_line = cc.source_line;
-            rebuilt.push_back(std::move(mv));
-        } else if (cc.dst != IR_NO_VALUE) {
-            IrInstr cz{};
-            cz.op = IrOp::CONST;
-            cz.type = cc.type;
-            cz.dst = cc.dst;
-            cz.imm = 0;
-            cz.source_line = cc.source_line;
-            rebuilt.push_back(std::move(cz));
-        }
-        for (size_t k = cc_i + 1; k < bb.instrs.size(); ++k)
-            rebuilt.push_back(bb.instrs[k]);
-        bb.instrs = std::move(rebuilt);
-        changed = true;
-    }
-
-    return changed;
-}
-
-// =========================================================================
 //  Punto de entrada principal
 // =========================================================================
 
@@ -15103,9 +14585,6 @@ PassResult ir_pass_loop_memcpy_idiom(IrFunction &fn) {
     return PassResult::of(fn, loop_memcpy_idiom_impl(fn));
 }
 
-ModulePassResult ir_pass_inline_closures(IrModule &mod) {
-    return ModulePassResult::of(mod, inline_closures_impl(mod));
-}
 
 /* Este no sale de la cabecera -- solo lo usa el propio orquestador --, pero
  * pasa por la misma puerta: la garantia no depende de quien pueda llamarlo. */
@@ -15247,11 +14726,10 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline,
     if (level >= OptLevel::O1 && allow_inline) {
         PassTimer crono__("opt:inline prologue (wall)");
         (void)applied(ir_pass_inline(mod));
-        /* Tras inlinar las factorias, la closure se construye y se invoca
-         * en el mismo bloque -> inlinar tambien el CUERPO de la lambda en
-         * el CALLCLOSURE (elimina el call indirecto + el env; el DCE limpia
-         * las stores/allocs muertas).  Cross-backend: interp, JIT y AOT. */
-        (void)applied(ir_pass_inline_closures(mod));
+        /* Tras inlinar las factorias, el destino de la closure se ve: se hace
+         * directa la llamada -- por memoria si hace falta, que aqui aun no
+         * se han promovido las ranuras -- y se inlina en otra pasada. */
+        if (ir_devirt_known_targets(mod)) (void)applied(ir_pass_inline(mod));
     }
 
     /*  D.jit-mem-model AUTO-PROMOTE: marca ALLOCAs que fluyen a
@@ -15819,8 +15297,8 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline,
          * la inline pass vea las callees OPTIMIZADAS (e.g. Counter.inc
          * con 6 instrs en vez de 12), aprobando inline bajo el threshold. */
         if (level >= OptLevel::O2) {
-            // Devirt de cfn constante (CALLIND a LABEL_ADDR -> CALL directo),
-            // antes del inline para que el callback conocido se pueda inlinar.
+            // Toda llamada indirecta de destino conocido -> directa, antes del
+            // inline para que el destino se pueda inlinar.
             /* Un cronometro por pase de MODULO, y no solo el de la etapa.
              * Con la etapa entera medida de una pieza se ve que crece, pero no
              * QUIEN: aqui dentro conviven pases por funcion y pases que
@@ -15828,19 +15306,8 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline,
              * veces que se llaman, o con el tamano de lo que miran -- que se
              * arreglan de manera opuesta. */
             {
-                PassTimer c__("  x-mod:devirt_cfn (per fn)");
-                /* El indice de nombres por hash se construye UNA vez: el pase
-                 * corre por funcion, y rehacerlo dentro seria recorrer el
-                 * modulo entero tantas veces como funciones tenga. */
-                const NakedFnAddrIndex index = ir_naked_fnaddr_index(mod);
-                /* Y UNA base para todo el modulo, por lo mismo: su
-                 * memoizacion vale mientras viva, asi que una por funcion no
-                 * cachearia nada. */
-                analysis::asa::FactBase base(analysis::asa::kStageDuringOpt);
-                for (auto &fn : mod.functions) {
-                    if (applied(ir_pass_devirt_cfn(fn, index, base)))
-                        any = true;
-                }
+                PassTimer c__("  x-mod:devirt_known_target (per fn)");
+                if (ir_devirt_known_targets(mod)) any = true;
             }
             {
                 /* Y detras, la otra forma de hacer directa una indirecta: la

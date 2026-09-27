@@ -2773,6 +2773,8 @@ Lowering::lower_super_method_call_expr(ast::SuperMethodCallExpr *e) {
     for (auto av : arg_vals)
         cs.operands.push_back(av);
     cs.imm = static_cast<uint64_t>(found->vtable_index);
+    /* `super.m()` no tiene nada de dinamico: el metodo es este. */
+    cs.proven_callee = proven_exact_callee(method_symbol_of(*found));
     cs.source_line = e->loc.line;
     emit(current_block_, std::move(cs));
     return dst;

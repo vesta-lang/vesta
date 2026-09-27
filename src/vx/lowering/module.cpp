@@ -1603,6 +1603,7 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
     // con un param de esta (b = %1 en total) -> devirt al tipo equivocado.
     // (Bug AOT-especifico: solo native_poo devirta clases via este mapa.)
     ssa_concrete_class_.clear();
+    reflect_origin_.clear(); // tambien por valor SSA de la funcion
 
     // limpiar el stack de cleanups (synchronized activos) al
     // entrar a una nueva funcion.  Cada funcion arranca sin cleanups;

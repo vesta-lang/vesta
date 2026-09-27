@@ -397,6 +397,9 @@ void write_instr(util::ByteBuffer &o, const IrInstr &i) {
     write_u32(o, static_cast<uint32_t>(abc));
     for (size_t k = 0; k < abc; ++k)
         write_str(o, i.call_abi_regs[k]);
+    // proven_callee: destino DEMOSTRADO de un despacho dinamico; vacio = no se
+    // sabe.  (Formato v20.)
+    write_str(o, i.proven_callee.str());
 }
 
 /**
@@ -499,6 +502,11 @@ bool read_instr(util::ByteCursor &c, IrInstr &i) {
         if (!read_str(c,r)) return false;
         i.call_abi_regs.push_back(std::move(r));
     }
+    /* proven_callee -- formato v20. */
+    std::string proven;
+    if (!read_str(c, proven)) return false;
+    i.proven_callee = proven.empty() ? util::InternedName()
+                                     : util::InternedName::intern(proven);
     return true;
 }
 

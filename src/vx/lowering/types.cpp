@@ -152,9 +152,7 @@ ir::IrValueId Lowering::enforce_nonnull(ir::IrValueId v, int line) {
     uw.source_line = line;
     emit(current_block_, std::move(uw));
     // Lo que sale es el mismo puntero: conserva de que memoria es.
-    fn_->values[v_new].memory = fn_->values[v].memory;
-    fn_->values[v_new].pointee_is_host_ptr = fn_->values[v].pointee_is_host_ptr;
-    fn_->values[v_new].is_gc_object = fn_->values[v].is_gc_object;
+    fn_->values[v_new].same_pointer_as(fn_->values[v]);
     return v_new;
 }
 
@@ -498,6 +496,8 @@ ir::IrValueId Lowering::cast_if_needed(ir::IrValueId v, ir::IrType from,
     ins.operands = {v};
     ins.source_line = loc.line;
     emit(current_block_, std::move(ins));
+    // Los mismos bits con otro tipo: lo que se sabe del valor le sigue.
+    if (op == ir::IrOp::BITCAST) note_same_value(dst, v);
     return dst;
 }
 

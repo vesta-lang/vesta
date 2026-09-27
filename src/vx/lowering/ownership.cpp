@@ -94,6 +94,7 @@ void Lowering::emit_cleanups_range(size_t start, size_t end) {
             cv.dst = ir::IR_NO_VALUE;
             cv.operands = std::move(opnds);
             cv.imm = static_cast<uint64_t>(it->dtor_vtable_index);
+            cv.proven_callee = it->dtor_proven;
             cv.source_line = it->source_line;
             emit(current_block_, std::move(cv));
             break;
@@ -144,6 +145,7 @@ void Lowering::emit_cleanups_range(size_t start, size_t end) {
                 ci.type = ir::IrType::VOID;
                 ci.dst = ir::IR_NO_VALUE;
                 ci.func_ptr = v_fn;
+                ci.proven_callee = it->dtor_proven;
                 ci.operands = {obj};
                 ci.source_line = it->source_line;
                 emit(current_block_, std::move(ci));
@@ -289,6 +291,7 @@ void Lowering::emit_cleanups_range(size_t start, size_t end) {
                     cv.dst = ir::IR_NO_VALUE;
                     cv.operands = {v_ptr};
                     cv.imm = static_cast<uint64_t>(it->inner_dtor_vtable_index);
+                    cv.proven_callee = it->inner_dtor_proven;
                     cv.source_line = it->source_line;
                     emit(current_block_, std::move(cv));
                 }

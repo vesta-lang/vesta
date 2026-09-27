@@ -682,6 +682,8 @@ ir::IrValueId Lowering::lower_class_field_load(ast::FieldAccessExpr *e) {
         ins.dst = dst;
         ins.operands.push_back(obj);
         ins.imm = static_cast<uint64_t>(mtd->vtable_index);
+        ins.proven_callee = proven_dispatch_callee(bt.struct_name, *mtd,
+                                                   lay.is_interface);
         ins.source_line = e->loc.line;
         emit(current_block_, std::move(ins));
         return dst;
@@ -943,6 +945,8 @@ ir::IrValueId Lowering::lower_class_field_store(ast::FieldAccessExpr *target,
         ins.operands.push_back(obj);
         ins.operands.push_back(rhs_cast);
         ins.imm = static_cast<uint64_t>(mtd->vtable_index);
+        ins.proven_callee = proven_dispatch_callee(bt.struct_name, *mtd,
+                                                   lay.is_interface);
         ins.source_line = loc.line;
         emit(current_block_, std::move(ins));
         return rhs_cast;

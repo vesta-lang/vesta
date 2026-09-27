@@ -6836,6 +6836,42 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     }
                     break;
                 }
+                /* Destino ESCRITO (LABEL_ADDR): llamada DIRECTA, como un
+                 * CALL, que ademas deja el entorno donde el cuerpo lo lee
+                 * (regs[kClosureEnvVmReg]).  Sin pasar por el despachador
+                 * del runtime.  Si el destino aun no tiene direccion, se
+                 * queda el camino general de abajo. */
+                if (vm && resolve_call && !in.operands.empty() &&
+                    in.operands.size() - 1 <= 12) {
+                    const auto lf = label_fn.find(in.func_ptr);
+                    const uint64_t addr =
+                        (lf != label_fn.end() && lf->second != fn.name)
+                            ? resolve_call(lf->second)
+                            : 0;
+                    if (addr != 0) {
+                        const size_t nargs = in.operands.size() - 1;
+                        for (size_t i = 0; i < nargs; ++i)
+                            store_vm_arg(O, static_cast<int>(i) + 1,
+                                         in.operands[i + 1]);
+                        store_vm_arg(
+                            O, static_cast<int>(ir::kClosureEnvVmReg),
+                            in.operands[0]);
+#if defined(_WIN32)
+                        const MReg proc_reg = MReg::RCX;
+#else
+                        const MReg proc_reg = MReg::RDI;
+#endif
+                        O.push_back(MInstr::make_unary(
+                            MOp::MOV, MOperand::make_reg(proc_reg, 8),
+                            MOperand::make_reg(MReg::RBX, 8)));
+                        O.push_back(
+                            MInstr::make_call_abs(out.intern_imm64(addr)));
+                        if (in.dst != ir::IR_NO_VALUE)
+                            O.push_back(MInstr::make_unary(
+                                MOp::MOV, vr(in.dst), vm_reg_mem(0)));
+                        break;
+                    }
+                }
                 if (!vm || ent.callclosure == 0) {
                     vreg_dbg(fn.name.c_str(), "callclosure(no-vm/no-addr)");
                     return false;

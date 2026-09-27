@@ -95,6 +95,9 @@ bool Lowering::try_lower_reflect_builtins(ast::CallExpr *e, Builtin b,
         // Sprint 5: emit_findclass_by_name reemplaza emit_findclass_inline
         // (textual) por secuencia IR pura.
         out_value = emit_findclass_by_name(name_idx, name_len, e->loc.line);
+        if (out_value != ir::IR_NO_VALUE)
+            reflect_origin_[out_value].cls =
+                util::InternedName::intern(slit->value);
         return true;
     }
 
@@ -270,6 +273,13 @@ bool Lowering::try_lower_reflect_builtins(ast::CallExpr *e, Builtin b,
             ir::IrType::I64, static_cast<uint64_t>(name_len), e->loc.line);
         emit_store_typed(v_buf16, v_len, ir::IrType::I64, e->loc.line);
         out_value = emit_findmethod(v_buf, e->loc.line);
+        /* Clase conocida y un nombre que resuelve a UNO: el metodo esta
+         * demostrado (ver reflect_proven_method). */
+        const auto it_cls = reflect_origin_.find(v_cls);
+        if (out_value != ir::IR_NO_VALUE && it_cls != reflect_origin_.end() &&
+            !it_cls->second.cls.empty())
+            reflect_origin_[out_value].method =
+                reflect_proven_method(it_cls->second.cls.str(), slit->value);
         return true;
     }
 
@@ -385,6 +395,11 @@ bool Lowering::try_lower_reflect_builtins(ast::CallExpr *e, Builtin b,
         cm.op = ir::IrOp::CALLM;
         cm.type = ir::IrType::I64;
         cm.dst = v_dst;
+        {
+            const auto it_m = reflect_origin_.find(v_method);
+            if (it_m != reflect_origin_.end())
+                cm.proven_callee = it_m->second.method;
+        }
         cm.operands.push_back(v_this);   // [0] = obj
         cm.operands.push_back(v_method); // [1] = method
         for (auto av : v_args)
