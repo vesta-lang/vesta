@@ -434,6 +434,9 @@ add_library(vx_lib STATIC
     # Y leer del AST lo que el programa DECLARA, que es otra responsabilidad:
     # estaba escrito en uno de los dos caminos y el otro no lo hacia.
     contracts_collect.cpp
+    # La huella de cada tipo, de los layouts del comprobador: por modulo, en
+    # los dos caminos.
+    type_fingerprints.cpp
     # Que ayudantes admiten `@HelperOverride` y con que firma: lo usan los
     # dos caminos de compilacion.
     helper_override.cpp

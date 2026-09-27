@@ -154,112 +154,8 @@ class PhaseChain {
 // copia, y el otro camino de compilacion no tenia ninguna: declararlos no
 // comprobaba nada, que es peor que no tenerlos.
 
-// Computa la huella de cada TIPO agregado (struct/clase/enum) a partir de los
-// layouts ya resueltos del type checker.  @pod/@no_heap se componen sobre los
-// tipos de campo via los clasificadores del type checker (type_is_managed /
-// type_is_c_representable), que son la verdad de la frontera C.
-static std::vector<analyze::TypeFingerprint>
-compute_type_fingerprints_(const TypeChecker &tc) {
-    std::vector<analyze::TypeFingerprint> out;
-    using TF = analyze::TypeFingerprint;
-
-    // Structs: value-types.  @pod = C-representable por valor + sin dtor.
-    for (const auto &kv : tc.struct_layouts()) {
-        const StructLayout &lay = kv.second;
-        TF tf;
-        tf.type_name = lay.name;
-        tf.kind = TF::STRUCT;
-        tf.size_bytes = lay.size_bytes;
-        tf.align_bytes = lay.align_bytes;
-        tf.field_count = static_cast<uint32_t>(lay.fields.size());
-        bool has_dtor = lay.has_destructible_field;
-        for (const auto &m : lay.methods)
-            if (m.is_destructor) has_dtor = true;
-        tf.has_destructor = has_dtor;
-        bool no_heap = true, all_c_repr = true;
-        for (const auto &f : lay.fields) {
-            if (tc.type_is_managed(f.type)) no_heap = false;
-            if (!tc.type_is_c_representable(f.type)) all_c_repr = false;
-        }
-        tf.no_heap = no_heap;
-        tf.is_pod = all_c_repr && !has_dtor && no_heap;
-        tf.is_reference = false;
-        tf.is_union = lay.is_union;
-        tf.is_overlay = lay.is_overlay;
-        tf.is_polymorphic = lay.is_polymorphic;
-        for (const auto &f : lay.fields) {
-            analyze::FieldPlacement fp;
-            fp.name = f.name;
-            fp.type_name = type_to_string(f.type);
-            fp.offset = f.offset;
-            fp.size = f.size;
-            fp.bit_offset = f.bit_offset;
-            fp.bit_width = f.bit_width;
-            tf.fields.push_back(std::move(fp));
-        }
-        out.push_back(std::move(tf));
-    }
-
-    // Clases: tipos por REFERENCIA (viven en el heap gestionado) -> nunca @pod
-    // ni @no_heap; @size verifica el tamano de la instancia.
-    for (const auto &kv : tc.class_layouts()) {
-        const ClassLayout &lay = kv.second;
-        if (lay.is_interface) continue; // sin instancias.
-        TF tf;
-        tf.type_name = lay.name;
-        tf.kind = TF::CLASS;
-        tf.size_bytes = lay.size_bytes;
-        tf.field_count = static_cast<uint32_t>(lay.fields.size());
-        bool has_dtor = false;
-        for (const auto &m : lay.methods)
-            if (m.is_destructor) has_dtor = true;
-        tf.has_destructor = has_dtor;
-        tf.is_reference = true;
-        tf.is_pod = false;
-        tf.no_heap = false;
-        for (const auto &f : lay.fields) {
-            analyze::FieldPlacement fp;
-            fp.name = f.name;
-            fp.type_name = type_to_string(f.type);
-            fp.offset = f.offset;
-            fp.size = f.size;
-            fp.bit_offset = f.bit_offset;
-            fp.bit_width = f.bit_width;
-            tf.fields.push_back(std::move(fp));
-        }
-        out.push_back(std::move(tf));
-    }
-
-    // Enums: tagged unions inline (value-types).  @pod si ningun payload es
-    // gestionado y todos son C-representables; un enum sin payload es @pod.
-    for (const auto &kv : tc.enum_layouts()) {
-        const EnumLayout &lay = kv.second;
-        TF tf;
-        tf.type_name = lay.name;
-        tf.kind = TF::ENUM;
-        tf.size_bytes = lay.size_bytes;
-        tf.field_count = lay.max_payload_fields;
-        bool no_heap = true, all_c_repr = true;
-        for (const auto &v : lay.variants)
-            for (const auto &ft : v.field_types) {
-                if (tc.type_is_managed(ft)) no_heap = false;
-                if (!tc.type_is_c_representable(ft)) all_c_repr = false;
-            }
-        tf.no_heap = no_heap;
-        tf.is_pod = all_c_repr && no_heap;
-        tf.is_reference = false;
-        for (const auto &v : lay.variants) {
-            analyze::VariantPlacement vp;
-            vp.name = v.name;
-            vp.tag = v.tag;
-            vp.int_value = v.int_value;
-            vp.payload_fields = static_cast<uint32_t>(v.field_types.size());
-            tf.variants.push_back(std::move(vp));
-        }
-        out.push_back(std::move(tf));
-    }
-    return out;
-}
+// La huella de cada TIPO la calcula cada modulo al compilarse: ver
+// `vx/type_fingerprints.h`.
 
 /**
  * @brief Dice si @p name acaba en @p suffix como nombre COMPLETO de funcion.
@@ -852,12 +748,9 @@ CompileResult compile_vx_source(const std::string &source,
         // contra la huella del IR PRE-opt (@c irmod, donde TODAS las funciones
         // existen -> enforcement completo; semantica source-level: source<=N =>
         // efectivo<=N, sound).  Sound/asimetrico: solo error si es demostrable.
-        collect_function_contracts(mod->decls, tc, res.contracts);
-        /* Los contratos de TIPO y la huella de cada tipo.  La huella se calcula
-         * SIEMPRE (el informe de `--analyze` la ensena); comprobarla es lo que
-         * depende de que haya contratos. */
-        collect_type_contracts(mod->decls, res.type_contracts);
-        res.type_fingerprints = compute_type_fingerprints_(tc);
+        /* Los contratos de funcion y de TIPO, y la huella de cada tipo, ya los
+         * recogio el modulo al compilarse y los junto `gather_unit_results`:
+         * aqui habia una segunda recogida de lo mismo. */
         /* Y TODAS las comprobaciones previas a optimizar, por la puerta unica.
          * Estaban escritas aqui dentro, y por eso el camino de proyecto -- que
          * es el que toma todo programa real -- se quedo sin tres de ellas sin

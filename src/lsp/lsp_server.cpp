@@ -50,6 +50,7 @@
 #include "lsp/symbol_index.h"
 #include "vx/ast.h"
 #include "vx/diagnostic.h"
+#include "vx/module/namespace_names.h" // el separador de la ruta de un nombre
 #include "vx/token.h" // is_ident_char: que es un identificador, lo dice el lexico
 #include "vx/source_text.h" // un solo fin de linea para todo el pipeline
 
@@ -1849,8 +1850,12 @@ void LspServer::handle_hover(const nlohmann::json &msg) {
     if ((kind == SymbolKind::Field || kind == SymbolKind::EnumVariant) &&
         !container.empty()) {
         const analyze::TypeFingerprint *tf = nullptr;
+        /* Por IDENTIDAD del nombre internado: una comparacion de puntero por
+         * huella en vez de comparar bytes. */
+        const util::InternedName container_key =
+            util::InternedName::intern(container);
         for (const auto &f : def_an.result.type_fingerprints) {
-            if (f.type_name == container) {
+            if (f.type_name == container_key) {
                 tf = &f;
                 break;
             }
@@ -1858,17 +1863,21 @@ void LspServer::handle_hover(const nlohmann::json &msg) {
         if (tf == nullptr) {
             // Dentro de un namespace el tipo lleva su path por delante
             // (`std__syscall__windows__Ctx`), mientras que el contenedor que
-            // ve el hover es el nombre a secas.  Se busca por el final.
-            const std::string sufijo = "__" + container;
+            // ve el hover es el nombre a secas.  Se busca por el final, con
+            // el separador de su dueno y no escrito a mano.
+            const std::string sufijo =
+                std::string(vx::kSymbolPathSeparator) + container;
             for (const auto &f : def_an.result.type_fingerprints) {
-                if (f.type_name.size() >= sufijo.size() &&
-                    f.type_name.compare(f.type_name.size() - sufijo.size(),
-                                        sufijo.size(), sufijo) == 0) {
+                const std::string &name = f.type_name.str();
+                if (name.size() >= sufijo.size() &&
+                    name.compare(name.size() - sufijo.size(), sufijo.size(),
+                                 sufijo) == 0) {
                     tf = &f;
                     break;
                 }
             }
         }
+        const util::InternedName word_key = util::InternedName::intern(word);
         /* Y si no hay huella, se dice por que.  Callarse deja "de este tipo no
          * se sabe la disposicion" indistinguible de "este tipo no tiene
          * ninguna", y lo normal es lo primero: el modulo no compilo para el
@@ -1884,7 +1893,7 @@ void LspServer::handle_hover(const nlohmann::json &msg) {
         if (tf != nullptr && kind == SymbolKind::EnumVariant) {
             for (size_t i = 0; i < tf->variants.size(); ++i) {
                 const analyze::VariantPlacement &v = tf->variants[i];
-                if (v.name != word) continue;
+                if (v.name != word_key) continue;
                 md += "\n";
                 md += vx::diag::format("VX9115", {std::to_string(v.int_value)});
                 // La etiqueta es lo que se guarda en memoria; solo se ensena
@@ -1916,7 +1925,7 @@ void LspServer::handle_hover(const nlohmann::json &msg) {
         } else if (tf != nullptr) {
             for (size_t i = 0; i < tf->fields.size(); ++i) {
                 const analyze::FieldPlacement &f = tf->fields[i];
-                if (f.name != word) continue;
+                if (f.name != word_key) continue;
                 char hex[32];
                 std::snprintf(hex, sizeof(hex), "0x%X", f.offset);
                 md += "\n";

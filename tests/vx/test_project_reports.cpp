@@ -97,6 +97,68 @@ vx::CompileOptions report_options() {
     return opts;
 }
 
+/// Un contrato de tipo INCUMPLIDO: el struct mide 16 bytes y declara 8.
+const char *const kBrokenTypeContract = "@size(8)\n"
+                                        "struct Wide {\n"
+                                        "\tf64 x;\n"
+                                        "\tf64 y;\n"
+                                        "}\n"
+                                        "i32 main() { return 0; }\n";
+
+/**
+ * @brief Si @p res tiene un error con el codigo @p code.
+ * @param res  El resultado de compilar.
+ * @param code El codigo del catalogo.
+ * @return Si esta.
+ */
+bool has_error(const vx::CompileResult &res, const char *code) {
+    for (const auto &d : res.diagnostics.all())
+        if (d.level == vx::DiagLevel::ERR && d.code == code) return true;
+    return false;
+}
+
+/**
+ * @brief Si la huella de @p type_name esta en el resultado, con @p size bytes.
+ * @param res       El resultado de compilar.
+ * @param type_name Parte del nombre del tipo (con `namespace` va aplanado).
+ * @param size      Su tamano esperado.
+ * @return Si esta.
+ */
+bool has_fingerprint(const vx::CompileResult &res, const std::string &type_name,
+                     uint64_t size) {
+    for (const auto &tf : res.type_fingerprints)
+        if (tf.type_name.str().find(type_name) != std::string::npos &&
+            tf.size_bytes == size)
+            return true;
+    return false;
+}
+
+/**
+ * @brief Los contratos de TIPO se comprueban por los DOS caminos.  El de
+ *        proyecto no los comprobaba: un `@size` incumplido compilaba.
+ * @param dir Directorio temporal para el fichero del proyecto.
+ */
+void check_type_contracts(const std::filesystem::path &dir) {
+    const vx::CompileResult single = vx::compile_vx_source(
+        kBrokenTypeContract, "broken_single.vx", report_options());
+    check(!single.ok, "el fichero suelto rechaza el @size incumplido");
+    check(has_error(single, "VXT004"), "el fichero suelto lo dice (VXT004)");
+    check(has_fingerprint(single, "Wide", 16),
+          "el fichero suelto publica la huella del tipo");
+
+    const std::filesystem::path root = dir / "broken_project.vx";
+    {
+        std::ofstream f(root, std::ios::binary);
+        f << "namespace reports.broken;\n" << kBrokenTypeContract;
+    }
+    const vx::CompileResult project =
+        vx::compile_vx_project(root.string(), report_options());
+    check(!project.ok, "el proyecto rechaza el @size incumplido");
+    check(has_error(project, "VXT004"), "el proyecto lo dice (VXT004)");
+    check(has_fingerprint(project, "Wide", 16),
+          "el proyecto publica la huella del tipo");
+}
+
 } // namespace
 
 /**
@@ -136,6 +198,7 @@ int main() {
           "el proyecto registra la llamada al @Macro");
     check(has_comptime_value(project, "REPORT_SIZE", "42"),
           "el proyecto publica el valor comptime");
+    check_type_contracts(dir);
     fs::remove_all(dir, ec);
 
     if (g_failures == 0) std::printf("test_project_reports: OK\n");

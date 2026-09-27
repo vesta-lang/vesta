@@ -723,29 +723,22 @@ std::vector<ContractCheck> verify_contracts(
     return out;
 }
 
-std::vector<ContractCheck> verify_type_contracts(
-    const std::vector<TypeFingerprint> &fps,
-    const std::unordered_map<std::string, TypeContracts> &contracts) {
+std::vector<ContractCheck> verify_type_contracts(const TypeFingerprints &fps,
+                                                 const TypeContractMap &contracts) {
     std::vector<ContractCheck> out;
     if (contracts.empty()) return out;
-    // Indice por nombre de tipo (el nombre del contrato es el nombre
-    // declarado).
-    std::unordered_map<std::string, const TypeFingerprint *> byname;
-    byname.reserve(fps.size() * 2 + 1);
-    for (const auto &f : fps)
-        byname.emplace(f.type_name, &f);
 
     using St = ContractCheck::Status;
-    for (const auto &kv : contracts) {
-        const std::string &name = kv.first;
-        const TypeContracts &c = kv.second;
+    /* Por las huellas, buscando el contrato de cada una: las dos claves son el
+     * mismo nombre internado, asi que no hace falta ningun indice aparte.  Un
+     * contrato sobre un tipo que no llego al layout no tiene huella y no se
+     * mira. */
+    for (const TypeFingerprint &fp : fps) {
+        const auto it = contracts.find(fp.type_name);
+        if (it == contracts.end()) continue;
+        const TypeContracts &c = it->second;
         if (!c.any()) continue;
-        auto it = byname.find(name);
-        if (it == byname.end()) continue; // el tipo no llego al layout.
-        const TypeFingerprint &fp = *it->second;
-        // Una vez por tipo con contratos: los veredictos llevan el nombre
-        // internado, no una copia por veredicto.
-        const util::InternedName type_key = util::InternedName::intern(name);
+        const util::InternedName type_key = fp.type_name;
 
         // @pod: tipo por valor trivialmente copiable (sin destructor ni campos
         // gestionados).  Decidible del layout -> OK / VIOLATED (nunca

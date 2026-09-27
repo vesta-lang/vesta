@@ -98,6 +98,12 @@ struct ProjectModuleWork {
     /// Los contratos de huella declarados en su fuente, ya con la clave con la
     /// que el analizador vera la funcion.
     analyze::FunctionContractMap contracts;
+    /// Los contratos de TIPO declarados en su fuente, y la huella de cada tipo
+    /// que DECLARA (no de los que importa: esos los calcula su modulo).  Se
+    /// MUEVEN al resultado al acabar; sin esto el camino de proyecto no
+    /// comprobaba ningun contrato de tipo.
+    analyze::TypeContractMap type_contracts;
+    analyze::TypeFingerprints type_fingerprints;
     /// Las llamadas a `@Macro` que su comprobador resolvio, y los `@Macro`
     /// que su bajado no llevo a la maquina de compilacion.  Se juntan al
     /// final en el resultado del proyecto, como en el camino de fichero

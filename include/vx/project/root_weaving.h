@@ -33,8 +33,8 @@ struct ProjectModuleWork;
  * mientras se compilen los modulos.
  */
 struct RootWeaving {
-    /// `@HelperOverride` ya resueltos por precedencia: destino -> simbolo.
-    std::unordered_map<std::string, std::string> helper_overrides;
+    /// `@HelperOverride` ya resueltos por precedencia, por ayudante.
+    HelperOverrides helper_overrides;
     /// Los `@Hook` del raiz, con el nombre aplanado por el que se les llama.
     std::vector<RootHook> hooks;
     /// Las funciones del raiz marcadas `@NoInstrument`, por su nombre aplanado.

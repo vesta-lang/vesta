@@ -120,7 +120,7 @@ void collect_function_contracts(
 
 void collect_type_contracts(
     const std::vector<std::unique_ptr<ast::Node>> &decls,
-    std::unordered_map<std::string, analyze::TypeContracts> &out) {
+    analyze::TypeContractMap &out) {
     for (const auto &d : decls) {
         if (!d) continue;
         if (d->kind == ast::NodeKind::NamespaceDecl) {
@@ -151,7 +151,10 @@ void collect_type_contracts(
             c.no_heap = ed->contract_no_heap;
             c.size = ed->contract_size;
         }
-        if (name != nullptr && c.any()) out[*name] = c;
+        /* Por el nombre internado: la misma clave que lleva la huella del
+         * tipo, asi que casarlos es comparar punteros. */
+        if (name != nullptr && c.any())
+            out[util::InternedName::intern(*name)] = c;
     }
 }
 

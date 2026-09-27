@@ -339,8 +339,8 @@ size_t report_native_effect_conflicts(const ir::IrModule &mod,
  * respuestas distintas a la misma pregunta.
  */
 struct FieldPlacement {
-    std::string name;
-    std::string type_name; ///< tipo legible, ya resuelto.
+    util::InternedName name;      ///< el campo, internado
+    util::InternedName type_name; ///< su tipo legible, ya resuelto, internado
     uint32_t offset = 0;   ///< desplazamiento en bytes desde el inicio.
     uint32_t size = 0;     ///< tamano del campo en bytes.
     /// Campo de bits: @c bit_width > 0 indica que el campo ocupa @c bit_width
@@ -359,14 +359,23 @@ struct FieldPlacement {
  * puede no coincidir con el tag cuando el autor lo fija a mano.
  */
 struct VariantPlacement {
-    std::string name;
+    util::InternedName name; ///< la variante, internada
     uint32_t tag = 0;
     int64_t int_value = 0;
     uint32_t payload_fields = 0; ///< numero de campos de carga util.
 };
 
+namespace scratch {
+struct TypeFieldPlacements;   ///< Los campos de un tipo, en orden.
+struct TypeVariantPlacements; ///< Las variantes de un enum, en orden.
+struct TypeFingerprints;      ///< Las huellas de los tipos de un programa.
+struct TypeContractMap;       ///< Los contratos de tipo, por nombre.
+} // namespace scratch
+
 struct TypeFingerprint {
-    std::string type_name;
+    /// El tipo, por su nombre INTERNADO: es su identidad, se compara por
+    /// puntero y se busca sin hashear bytes.
+    util::InternedName type_name;
     enum Kind { STRUCT, CLASS, ENUM } kind = STRUCT;
     uint64_t size_bytes = 0;  ///< tamano total del tipo (con padding).
     uint32_t align_bytes = 1; ///< alineamiento requerido.
@@ -386,10 +395,15 @@ struct TypeFingerprint {
         false; ///< lleva puntero a tabla de metodos al principio.
 
     /// Disposicion de cada campo de instancia, en orden de declaracion.
-    std::vector<FieldPlacement> fields;
+    util::NamedVector<FieldPlacement, scratch::TypeFieldPlacements> fields;
     /// Variantes, solo para @c ENUM.
-    std::vector<VariantPlacement> variants;
+    util::NamedVector<VariantPlacement, scratch::TypeVariantPlacements>
+        variants;
 };
+
+/// Las huellas de los tipos de un programa, una por tipo.
+using TypeFingerprints =
+    util::NamedVector<TypeFingerprint, scratch::TypeFingerprints>;
 
 /**
  * @struct TypeContracts
@@ -404,14 +418,22 @@ struct TypeContracts {
     bool any() const { return pod || no_heap || size >= 0; }
 };
 
+/// Los contratos de tipo de un programa, por el nombre INTERNADO del tipo: la
+/// misma clave que lleva su huella, asi que casarlos es comparar punteros.
+using TypeContractMap =
+    util::NamedMap<util::InternedName, TypeContracts, scratch::TypeContractMap,
+                   util::InternedNameHash>;
+
 /**
  * @brief Verifica los contratos de TIPO @p contracts contra las huellas de tipo
  *        @p fps.  Todas las propiedades son decidibles del layout -> solo
  *        produce @c OK o @c VIOLATED (nunca @c UNVERIFIABLE).
+ *
+ * Recorre las huellas y busca el contrato de cada una por su nombre internado:
+ * una busqueda por tipo, sin indice auxiliar.
  */
-std::vector<ContractCheck> verify_type_contracts(
-    const std::vector<TypeFingerprint> &fps,
-    const std::unordered_map<std::string, TypeContracts> &contracts);
+std::vector<ContractCheck> verify_type_contracts(const TypeFingerprints &fps,
+                                                 const TypeContractMap &contracts);
 
 } // namespace analyze
 

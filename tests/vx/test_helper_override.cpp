@@ -79,9 +79,16 @@ bool has_code(const vx::Diagnostics &diags, const char *code) {
  * @return 0 si todo paso, 1 si hubo algun fallo.
  */
 int main() {
-    check(vx::is_multiversioned_helper("memcpy"), "memcpy admite sustituto");
-    check(vx::is_multiversioned_helper("strlen"), "strlen admite sustituto");
-    check(!vx::is_multiversioned_helper("printf"), "printf no");
+    vx::Helper helper = vx::Helper::Count;
+    check(vx::helper_from_name("memcpy", helper) &&
+              helper == vx::Helper::Memcpy,
+          "memcpy admite sustituto");
+    check(vx::helper_from_name("strlen", helper) &&
+              helper == vx::Helper::Strlen,
+          "strlen admite sustituto");
+    check(!vx::helper_from_name("printf", helper), "printf no");
+    check(std::string(vx::helper_name(vx::Helper::Strcmp)) == "strcmp",
+          "el nombre sale de la tabla");
 
     {
         vx::Diagnostics diags;

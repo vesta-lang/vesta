@@ -11,6 +11,11 @@
 #ifndef VX_HELPER_OVERRIDE_H
 #define VX_HELPER_OVERRIDE_H
 
+#include "util/name_pool.h"
+
+#include <array>
+#include <cstddef>
+#include <cstdint>
 #include <string>
 
 namespace vx {
@@ -21,11 +26,36 @@ struct FunctionDecl;
 } // namespace ast
 
 /**
- * @brief Si un ayudante tiene varias versiones y admite sustituto.
- * @param helper Nombre del ayudante (`memcpy`, `strcmp`, `strlen`).
- * @return @c true si lo admite.
+ * @brief Los ayudantes con varias versiones que admiten sustituto.  Es un
+ *        vocabulario CERRADO: se indexa, no se busca por nombre.
  */
-bool is_multiversioned_helper(const std::string &helper);
+enum class Helper : uint8_t {
+    Memcpy, ///< `memcpy`
+    Strcmp, ///< `strcmp`
+    Strlen, ///< `strlen`
+    Count   ///< cuantos hay (no es un ayudante)
+};
+
+/// Cuantos ayudantes admiten sustituto.
+constexpr size_t kHelperCount = static_cast<size_t>(Helper::Count);
+
+/// El sustituto de cada ayudante, por su simbolo internado; vacio = ninguno.
+using HelperOverrides = std::array<util::InternedName, kHelperCount>;
+
+/**
+ * @brief El ayudante que nombra @p name.
+ * @param name Nombre escrito en `@HelperOverride(<name>)`.
+ * @param out  El ayudante, si lo es.
+ * @return @c false si ese nombre no es un ayudante con sustituto.
+ */
+bool helper_from_name(const std::string &name, Helper &out);
+
+/**
+ * @brief El nombre de un ayudante, para los mensajes.
+ * @param h El ayudante.
+ * @return Su nombre.
+ */
+const char *helper_name(Helper h);
 
 /**
  * @brief Comprueba un `@HelperOverride` y dice lo que no cuadra.

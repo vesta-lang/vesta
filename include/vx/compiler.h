@@ -652,12 +652,12 @@ struct CompileResult {
 
     /// Contratos de TIPO (@pod/@no_heap/@size) declarados sobre struct/clase/
     /// enum, por nombre de tipo.  Verificados contra @c type_fingerprints.
-    std::unordered_map<std::string, analyze::TypeContracts> type_contracts;
+    analyze::TypeContractMap type_contracts;
 
     /// Huella de cada TIPO agregado (layout + propiedades de recurso) inferida
     /// de los layouts del type checker.  La consume --analyze (reporte +
     /// checks).
-    std::vector<analyze::TypeFingerprint> type_fingerprints;
+    analyze::TypeFingerprints type_fingerprints;
 
     /**
      * @brief Modo --analisis: IR del modulo completo serializado ANTES de

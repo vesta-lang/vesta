@@ -34,16 +34,7 @@ namespace {
 bool apply_root_overrides(const UnitEnv &env, ProjectModuleWork &pm,
                           Lowering &lo) {
     CompileResult &res = *env.res;
-    const auto &aot_helper_override_syms = *env.root.helper_overrides;
-    auto itmc = aot_helper_override_syms.find("memcpy");
-    if (itmc != aot_helper_override_syms.end())
-        lo.set_memcpy_override(itmc->second);
-    auto itsc = aot_helper_override_syms.find("strcmp");
-    if (itsc != aot_helper_override_syms.end())
-        lo.set_strcmp_override(itsc->second);
-    auto itsl = aot_helper_override_syms.find("strlen");
-    if (itsl != aot_helper_override_syms.end())
-        lo.set_strlen_override(itsl->second);
+    lo.set_helper_overrides(*env.root.helper_overrides);
     /* Y los sustitutos del `string` built-in y del monitor, por el
      * MISMO barrido que usa el camino de fichero suelto.
      *

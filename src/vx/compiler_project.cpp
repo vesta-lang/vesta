@@ -2564,16 +2564,11 @@ CompileResult compile_vx_project(
     // Solo ERROR cuando la violacion es DEMOSTRABLE.  Parte del sistema de
     // tipos.
     {
-        /* Los contratos ya estan recogidos: cada modulo los apunto al
-         * compilarse, en `collect_contracts`, que es donde su AST existia.
-         * Aqui solo se juntan, en el mismo orden en que se recorrian los
-         * modulos -- que es lo que decide quien gana si dos declaran el mismo
-         * nombre. */
-        for (const auto &pm : work)
-            for (const auto &kv : pm.contracts)
-                res.contracts[kv.first] = kv.second;
-
-        /* Y TODAS las comprobaciones previas a optimizar, por la puerta unica.
+        /* Los contratos -- de funcion y de TIPO, con la huella de cada tipo --
+         * ya estan juntos: cada modulo los apunto al compilarse y los reunio
+         * `gather_unit_results`.
+         *
+         * Y TODAS las comprobaciones previas a optimizar, por la puerta unica.
          *
          * Se miran sobre `merged`, que es la fusion de los modulos: ahi la misma
          * nativa declarada en dos de ellos llega junta por primera vez.
@@ -2583,16 +2578,13 @@ CompileResult compile_vx_project(
          * hacia -- entre ellas el error del desbordamiento entero --.  Como este
          * es el camino que toma todo programa real, esas reglas no corrian para
          * nadie y nada fallaba.  Lo que se comprueba y en que orden lo dice
-         * `vx/module_checks.h`.
-         *
-         * Los contratos de TIPO no se aportan todavia: su huella sale de los
-         * layouts del comprobador de tipos y aqui hay UNO POR MODULO.  De donde
-         * salen al fusionar es una decision pendiente, y se ve que faltan en
-         * esta llamada en vez de estar escondido en otro fichero. */
+         * `vx/module_checks.h`. */
         PreOptInput pre;
         pre.module = &merged;
         pre.file = &root_path;
         pre.contracts = &res.contracts;
+        pre.type_contracts = &res.type_contracts;
+        pre.type_fingerprints = &res.type_fingerprints;
         pre.measure_only = opts.emit_ir_preopt;
         if (!run_pre_opt_checks(pre, res.diagnostics)) {
             res.ok = false;

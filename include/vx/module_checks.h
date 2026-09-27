@@ -53,17 +53,10 @@ struct PreOptInput {
     /// acumulando los de cada modulo.
     const analyze::FunctionContractMap *contracts = nullptr;
     /// Los contratos de TIPO (`@pod`/`@no_heap`/`@size`) y la huella de cada
-    /// tipo.  Los trae quien llama, y no todos pueden: salen de los layouts del
-    /// comprobador de tipos, y en una compilacion de proyecto hay UNO POR
-    /// MODULO.  Nulos = no se comprueba ninguno.
-    ///
-    /// Estan aqui aunque hoy solo los aporte un camino porque lo que NO puede
-    /// vivir en dos sitios es la REGLA: el dia que se decida de donde salen los
-    /// layouts al fusionar, basta rellenar esto en la otra llamada.  Que falten
-    /// se ve en el sitio de la llamada, no escondido en otro fichero.
-    const std::unordered_map<std::string, analyze::TypeContracts>
-        *type_contracts = nullptr;
-    const std::vector<analyze::TypeFingerprint> *type_fingerprints = nullptr;
+    /// tipo.  Cada modulo los calcula al compilarse, con su comprobador, y se
+    /// unen (`gather_unit_results`).  Nulos = no se comprueba ninguno.
+    const analyze::TypeContractMap *type_contracts = nullptr;
+    const analyze::TypeFingerprints *type_fingerprints = nullptr;
     /// Cierto en `--analyze`: ahi se MIDE y se ensena, no se rechaza.  Un
     /// incumplimiento se muestra aparte; emitir el error marcaria fallo justo
     /// en el objetivo que hay que ensenar para corregirlo.

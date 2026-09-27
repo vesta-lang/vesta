@@ -16,6 +16,7 @@
 #define VX_UNIT_UNIT_ENV_H
 
 #include "util/name_pool.h"
+#include "vx/helper_override.h" // HelperOverrides
 
 #include <atomic>
 #include <cstddef>
@@ -62,9 +63,8 @@ using HookCounters =
 
 /// Lo que el modulo RAIZ decide para todo el programa.
 struct RootWeavingEnv {
-    /// `@HelperOverride` ya resueltos por precedencia: destino -> simbolo.
-    const std::unordered_map<std::string, std::string> *helper_overrides =
-        nullptr;
+    /// `@HelperOverride` ya resueltos por precedencia, por ayudante.
+    const HelperOverrides *helper_overrides = nullptr;
     /// Los `@Hook` del raiz, que se tejen en todos los demas modulos.
     const std::vector<RootHook> *hooks = nullptr;
     /// Las funciones del raiz marcadas para no instrumentarse.

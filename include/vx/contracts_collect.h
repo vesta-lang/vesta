@@ -62,7 +62,7 @@ void collect_function_contracts(
  */
 void collect_type_contracts(
     const std::vector<std::unique_ptr<ast::Node>> &decls,
-    std::unordered_map<std::string, analyze::TypeContracts> &out);
+    analyze::TypeContractMap &out);
 
 } // namespace vx
 

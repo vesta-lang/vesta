@@ -15,7 +15,6 @@
 
 #include <atomic>
 #include <memory>
-#include <unordered_set>
 
 namespace vx {
 
@@ -32,14 +31,14 @@ namespace {
  *
  * @param work Los modulos; el raiz el ultimo.
  * @param res  Recibe el error de un choque.
- * @param out  destino -> simbolo.
+ * @param out  El simbolo sustituto de cada ayudante.
  * @return false si dos del mismo nivel sustituyen el mismo ayudante.
  */
 bool collect_helper_overrides(std::vector<ProjectModuleWork> &work,
-                              CompileResult &res,
-                              std::unordered_map<std::string, std::string> &out) {
-    // Los destinos cuyo sustituto vino del raiz, para la precedencia.
-    std::unordered_set<std::string> from_root;
+                              CompileResult &res, HelperOverrides &out) {
+    static_assert(kHelperCount <= 8, "la mascara del raiz es de un byte");
+    // Un bit por ayudante cuyo sustituto vino del raiz, para la precedencia.
+    uint8_t from_root = 0;
     for (size_t mi = 0; mi < work.size(); ++mi) {
         ProjectModuleWork &pm = work[mi];
         if (!pm.ast) continue; // un acierto de cache con el AST conservado sirve
@@ -48,32 +47,36 @@ bool collect_helper_overrides(std::vector<ProjectModuleWork> &work,
             if (!decl || decl->kind != ast::NodeKind::FunctionDecl) continue;
             auto *fd = static_cast<ast::FunctionDecl *>(decl.get());
             if (fd->helper_override_target.empty()) continue;
-            const std::string &tgt = fd->helper_override_target;
             if (!check_helper_override(*fd, pm.diags)) continue;
+            Helper helper;
+            if (!helper_from_name(fd->helper_override_target, helper)) continue;
+            const size_t slot = static_cast<size_t>(helper);
+            const uint8_t bit = static_cast<uint8_t>(1u << slot);
             /* El simbolo como quedara: fuera del raiz, las funciones de nivel
              * superior se renombran con el prefijo del modulo DENTRO de
              * `compile_unit`, que todavia no ha corrido. */
-            const std::string sym_name =
+            const util::InternedName sym = util::InternedName::intern(
                 is_root ? fd->name
-                        : module_member_symbol(pm.module_name.str(), fd->name);
-            auto existing = out.find(tgt);
-            if (existing == out.end()) {
-                out[tgt] = sym_name;
-                if (is_root) from_root.insert(tgt);
+                        : module_member_symbol(pm.module_name.str(), fd->name));
+            util::InternedName &existing = out[slot];
+            if (existing.empty()) {
+                existing = sym;
+                if (is_root) from_root |= bit;
                 continue;
             }
-            const bool prev_from_root = from_root.count(tgt) != 0;
+            const bool prev_from_root = (from_root & bit) != 0;
             if (is_root && !prev_from_root) {
                 // El raiz pisa al import: es codigo directo del programa.
-                existing->second = sym_name;
-                from_root.insert(tgt);
+                existing = sym;
+                from_root |= bit;
             } else if (!is_root && prev_from_root) {
                 // Ya estaba el del raiz: el del import no cuenta.
             } else {
                 // Dos del mismo nivel: no hay a quien dar la razon.
                 res.ok = false;
                 res.diagnostics.diag(fd->loc, DiagLevel::ERR, "VX4016",
-                                     {tgt, existing->second, sym_name});
+                                     {helper_name(helper), existing.str(),
+                                      sym.str()});
                 return false;
             }
         }

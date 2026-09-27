@@ -65,6 +65,7 @@
 #include "vx/ast.h"
 #include "vx/comptime/macro_report.h" // por que un @Macro no se bajo
 #include "vx/diagnostic.h"
+#include "vx/helper_override.h" // HelperOverrides: el sustituto de cada ayudante
 #include "vx/hook_points.h"  // vocabulario de @Hook: puntos y campos
 #include "vx/module_index.h" // que declara el modulo, indexado una vez
 #include "vx/type_checker.h"
@@ -168,29 +169,15 @@ class Lowering {
         sync_exit_override_ = exit;
     }
 
-    /// CPU dispatch Inc 4: registra el nombre de la fn libre marcada con
-    /// @HelperOverride(memcpy).  Cuando NO esta vacio, __vx_memcpy_init
-    /// apunta el fp directamente a esta fn (INCONDICIONAL, sin leer el
-    /// bitmask de cpuid).  Solo aplica en native_poo_ (AOT).
-    void set_memcpy_override(const std::string &fn_name) {
-        memcpy_override_ = fn_name;
-    }
-
-    /// CPU dispatch Inc 5a: registra el nombre de la fn libre marcada con
-    /// @HelperOverride(strcmp).  Cuando NO esta vacio, __vx_strdisp_init
-    /// apunta el fp __vx_strcmp_fp a esta fn (INCONDICIONAL).  El default es
-    /// __vx_strcmp_base (la impl escalar del compilador).  Solo native_poo_.
-    /// Firma esperada: i64(u8*, i64, u8*, i64).
-    void set_strcmp_override(const std::string &fn_name) {
-        strcmp_override_ = fn_name;
-    }
-
-    /// CPU dispatch Inc 5a: registra el nombre de la fn libre marcada con
-    /// @HelperOverride(strlen).  Cuando NO esta vacio, __vx_strdisp_init
-    /// apunta el fp __vx_strlen_fp a esta fn (INCONDICIONAL).  El default es
-    /// __vx_strlen_base.  Solo native_poo_.  Firma esperada: i64(u8*).
-    void set_strlen_override(const std::string &fn_name) {
-        strlen_override_ = fn_name;
+    /**
+     * @brief Registra los `@HelperOverride` ya resueltos.  El de un ayudante
+     *        que no este vacio hace que su inicializador (`__vx_memcpy_init`,
+     *        `__vx_strdisp_init`) apunte el fp a esa funcion de forma
+     *        INCONDICIONAL, sin leer cpuid.  Solo aplica en native_poo_ (AOT).
+     * @param overrides El sustituto de cada ayudante; vacio = ninguno.
+     */
+    void set_helper_overrides(const HelperOverrides &overrides) {
+        helper_overrides_ = overrides;
     }
 
     /// Wrapper publico para que helpers estaticos del modulo (e.g.
@@ -4783,13 +4770,18 @@ class Lowering {
     /// => default por tier).  Ver @c set_sync_impl_overrides.
     std::string sync_enter_override_;
     std::string sync_exit_override_;
-    /// CPU dispatch Inc 4: fn libre @HelperOverride(memcpy) (vacio => sin
-    /// override; el fp se elige por cpuid en __vx_memcpy_init).
-    std::string memcpy_override_;
-    /// CPU dispatch Inc 5a: fn libre @HelperOverride(strcmp) / (strlen)
-    /// (vacio => sin override; el fp apunta al baseline en __vx_strdisp_init).
-    std::string strcmp_override_;
-    std::string strlen_override_;
+    /// El `@HelperOverride` de cada ayudante, por `Helper` (vacio => sin
+    /// sustituto: el fp se elige por cpuid o apunta al baseline).
+    HelperOverrides helper_overrides_;
+
+    /**
+     * @brief El sustituto de un ayudante.
+     * @param h El ayudante.
+     * @return Su simbolo; vacio si no lo hay.
+     */
+    util::InternedName helper_override(Helper h) const {
+        return helper_overrides_[static_cast<size_t>(h)];
+    }
 
     /// C-3: emite una CALL a una funcion libre override del string
     /// built-in (@StringConcat / @StringEq).  @p lhs / @p rhs son las

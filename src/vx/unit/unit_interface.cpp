@@ -13,6 +13,7 @@
 #include "vx/project/module_imports.h"
 #include "vx/project/module_names.h" // module_symbol_prefix
 #include "vx/project/module_work.h"
+#include "vx/type_fingerprints.h"
 
 #include <string>
 #include <utility>
@@ -138,6 +139,11 @@ void build_unit_interface(const UnitEnv &env, size_t i,
          * ocasion de averiguarlo.  Ver `VxiHeader::module_flags`. */
         pm.vxi.declares_classes = pm.has_classes;
         collect_function_contracts(pm.ast->decls, *pm.tc, pm.contracts);
+        /* Y los de TIPO, con la huella de cada tipo que este comprobador
+         * conoce: la forma solo la sabe el comprobador de ESTE modulo, que no
+         * sobrevive a la fusion. */
+        collect_type_contracts(pm.ast->decls, pm.type_contracts);
+        pm.type_fingerprints = compute_type_fingerprints(*pm.tc);
     }
 }
 

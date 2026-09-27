@@ -7,9 +7,16 @@
 
 #include "util/fnv.h" // util::hash_combine
 #include "vx/compiler.h"
+#include "util/named_alloc.h" // util::NamedSet
 #include "vx/project/module_work.h"
 
+#include <utility>
+
 namespace vx {
+
+namespace scratch {
+struct FingerprintedTypes; ///< Los tipos que ya tienen huella en el resultado.
+} // namespace scratch
 
 bool gather_unit_results(std::vector<ProjectModuleWork> &work,
                          CompileResult &res) {
@@ -17,9 +24,29 @@ bool gather_unit_results(std::vector<ProjectModuleWork> &work,
      * el resultado es uno solo.  En orden de indice, que ademas hace que dos
      * compilaciones del mismo fuente den el mismo texto y la misma clave. */
     bool any_failed = false;
+    /* Los tipos que ya tienen huella, por IDENTIDAD de su nombre internado.
+     * Cada modulo calcula solo los que declara, asi que un tipo repetido solo
+     * puede ser una instancia generica que dos modulos produjeron a la vez;
+     * gana la primera en orden topologico. */
+    util::NamedSet<util::InternedName, scratch::FingerprintedTypes,
+                   util::InternedNameHash>
+        fingerprinted;
     for (ProjectModuleWork &pm : work) {
         for (const auto &d : pm.diags.all())
             res.diagnostics.emit(d);
+        /* Los contratos: de funcion por simbolo -- en el orden de los modulos,
+         * que es lo que decide quien gana si dos declaran el mismo -- y de
+         * TIPO, con sus huellas.  Se MUEVEN: el modulo ya no los necesita. */
+        for (auto &kv : pm.contracts)
+            res.contracts[kv.first] = std::move(kv.second);
+        for (auto &kv : pm.type_contracts)
+            res.type_contracts[kv.first] = kv.second;
+        for (analyze::TypeFingerprint &tf : pm.type_fingerprints)
+            if (fingerprinted.insert(tf.type_name).second)
+                res.type_fingerprints.push_back(std::move(tf));
+        pm.contracts.clear();
+        pm.type_contracts.clear();
+        pm.type_fingerprints.clear();
         /* "Aporto algo" se mide por el TEXTO o por los NOMBRES: un modulo cuyo
          * conjunto son solo constantes comptime trae nombres con el texto
          * vacio, y mirando solo el texto se perdian -- y con ellos el criterio

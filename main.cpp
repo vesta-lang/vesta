@@ -3214,6 +3214,10 @@ int main(int argc, char *argv[]) {
             auto type_checks = analyze::verify_type_contracts(
                 cr.type_fingerprints, cr.type_contracts);
             std::cout << "\n" << vx::diag::format("VX9275", {}) << "\n";
+            /* Los veredictos salen en el orden de las huellas (ver
+             * `verify_type_contracts`), asi que basta un cursor: los de cada
+             * tipo son los siguientes con su mismo nombre internado. */
+            size_t next_check = 0;
             for (const auto &tf : cr.type_fingerprints) {
                 const char *kind =
                     tf.kind == analyze::TypeFingerprint::STRUCT  ? "struct"
@@ -3222,7 +3226,7 @@ int main(int argc, char *argv[]) {
                 std::cout << "  "
                           << vx::diag::format(
                                  "VX9276",
-                                 {kind, tf.type_name,
+                                 {kind, tf.type_name.str(),
                                   std::to_string(tf.size_bytes),
                                   std::to_string(tf.align_bytes),
                                   std::to_string(tf.field_count)})
@@ -3230,8 +3234,10 @@ int main(int argc, char *argv[]) {
                           << (tf.no_heap ? " [no_heap]" : "")
                           << (tf.has_destructor ? " [~dtor]" : "")
                           << (tf.is_reference ? " [ref]" : "") << "\n";
-                for (const auto &ck : type_checks) {
-                    if (ck.function.str() != tf.type_name) continue;
+                for (; next_check < type_checks.size() &&
+                       type_checks[next_check].function == tf.type_name;
+                     ++next_check) {
+                    const analyze::ContractCheck &ck = type_checks[next_check];
                     const std::string &st =
                         ck.status == analyze::ContractCheck::OK ? verdict_ok
                         : ck.status == analyze::ContractCheck::VIOLATED

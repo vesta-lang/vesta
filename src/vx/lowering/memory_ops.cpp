@@ -462,8 +462,10 @@ uint64_t Lowering::ensure_memcpy_dispatch() {
         // CPU dispatch Inc 4: si el usuario declaro @HelperOverride(memcpy),
         // el fp apunta a SU funcion de forma INCONDICIONAL (sin leer cpuid).
         // Esto reemplaza el memcpy del build entero por el del usuario.
-        if (!memcpy_override_.empty()) {
-            emit_store_fp(memcpy_override_);
+        const util::InternedName memcpy_override =
+            helper_override(Helper::Memcpy);
+        if (!memcpy_override.empty()) {
+            emit_store_fp(memcpy_override.str());
             emit_ret_void(ln);
             out_mod_->add_function(std::move(hf));
             /* Salida temprana: el guarda devuelve el contexto al salir del
@@ -894,12 +896,14 @@ void Lowering::ensure_strdisp() {
     };
 
     // fp = override del usuario si lo hay; si no, el baseline.
-    emit_store_fp(strcmp_fp_slot_, strcmp_override_.empty()
+    const util::InternedName strcmp_override = helper_override(Helper::Strcmp);
+    const util::InternedName strlen_override = helper_override(Helper::Strlen);
+    emit_store_fp(strcmp_fp_slot_, strcmp_override.empty()
                                        ? std::string(ir::rt::kStrcmpBase)
-                                       : strcmp_override_);
-    emit_store_fp(strlen_fp_slot_, strlen_override_.empty()
+                                       : strcmp_override.str());
+    emit_store_fp(strlen_fp_slot_, strlen_override.empty()
                                        ? std::string(ir::rt::kStrlenBase)
-                                       : strlen_override_);
+                                       : strlen_override.str());
     {
         emit_ret_void(ln);
     }
