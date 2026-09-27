@@ -4051,6 +4051,13 @@ modes3_case("overlay_parent_walk", "una vista que sube a la que la contiene", "2
 modes3_case("overlay_element_tlv", "elementos tipo-longitud-valor sobre una vista", "277_overlay_element_tlv.vx", 170)
 modes3_case("overlay_extent", "extension de una vista calculada de sus propios campos", "278_overlay_extent.vx", 40)
 modes3_case("overlay_campos_anchos", "campos contiguos de una vista tratados de una vez", "543_overlay_campos_anchos.vx", 136)
+modes3_case("hook_instrumentacion", "`@Hook` del raiz: entrada, salida y aterrizaje de una excepcion, con `@NoInstrument` excluida; los ganchos se recogen ANTES de bajar ningun modulo, con la misma pieza en los dos caminos (40 + 5)", "543_hook_instrumentacion.vx", 45)
+# Sin -m aot a proposito, y no por olvido: un `@Hook` sin selector se teje
+# tambien en `std.atomic`, cuyos contratos (`@alloc(0)`, `@stack(0)`) se
+# comprueban sobre el codigo YA tejido y se dan por incumplidos.  Lo arregla
+# el mecanismo de puntos de union (doc/PLAN_PUNTOS_DE_UNION.md, 1.1), y
+# entonces este caso pasa a los tres modos.
+vm_jit_r0_case("hook_nombres", "`@Hook` que pide el NOMBRE de la funcion: sale el aplanado, que es el del simbolo, porque el gancho se recoge con el arbol sin aplanar y el nombre se calcula como quedara", "544_hook_nombres.vx", 12)
 modes3_case("params_alias", "dos punteros parametro pueden ser la misma memoria", "544_params_alias.vx", 111)
 modes3_case("sobrecarga545", "sobrecarga por aridad y por tipo en los SEIS caminos de llamada (funcion libre, constructor de struct, metodo de struct, metodo de clase, static, super) mas la interfaz: gana la exacta, el retorno sale de la elegida en los dos ordenes de declaracion, y un override sigue siendo un override", "545_sobrecarga_funciones.vx", 42)
 modes3_case("ufcs549", "llamada uniforme: `x.f(a)` y `f(x, a)` son la misma llamada -- receptor struct, primitivo, puntero y clase, con sobrecarga entre las libres candidatas, encadenado, y el mismo nombre para receptores de tipo distinto; y una generica de OTRO modulo (`std.func.apply`/`tap`) con la funcion elegida por un ternario, sobre un literal de cadena como receptor", "549_ufcs_llamada_uniforme.vx", 42)

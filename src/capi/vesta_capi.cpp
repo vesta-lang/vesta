@@ -62,6 +62,7 @@ VESTA_ALLOC_MODULE_HERE("capi");
 #include "util/assembler_multiprocess.h"
 #include "util/cache_paths.h" // el reparto de la cache por tipo y alcance
 #include "vx/compiler.h"
+#include "vx/diag/diag_format.h" // el texto de un diagnostico
 #include "vx/diagnostic.h"
 #include "vx/incremental.h"    // CAS + claves Merkle + BuildConfig
 #include "vx/lexer.h"          // parse para el indice semantico
@@ -128,7 +129,7 @@ std::string format_diags(const vx::Diagnostics &diags) {
         else if (d.level == vx::DiagLevel::NOTE)
             lvl = "note";
         os << d.loc.file() << ":" << d.loc.line << ":" << d.loc.column << ": "
-           << lvl << ": " << d.message << "\n";
+           << lvl << ": " << vx::formatted_message(d) << "\n";
     }
     return os.str();
 }

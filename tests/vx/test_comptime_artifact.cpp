@@ -91,7 +91,12 @@ static std::vector<uint8_t> compilar(const std::string &fuente,
     req.input = prefijo + ".vx"; // nombre logico: no se abre, solo se cita
     req.source_overlay = fuente;
     req.output = prefijo;
-    req.is_project = false;
+    /* Como PROYECTO, que es como lo compila el compilador de verdad
+     * (`compile_vx_project` con el fuente en memoria): el conjunto arrastra
+     * sus `import` y tienen que resolverse.  Por el camino de fichero suelto
+     * un `import` se ignoraba en silencio, y este test pasaba solo porque el
+     * caso no usaba nada del modulo importado. */
+    req.is_project = true;
     req.quiet = true;
     resp = vesta::tc::compile(req);
     if (!resp.ok) return {};
@@ -317,14 +322,17 @@ i32 main() { return 0; }
      * Ojo al caso obvio que esto destapa: si dos modulos importan lo mismo, el
      * `import` sale DUPLICADO en la suma. */
     {
+        /* Un modulo que EXISTE: aqui iba `std.io`, que no existe, y el caso
+         * pasaba solo porque el camino de fichero suelto se tragaba el
+         * `import` sin decir nada. */
         const std::string mod_a = R"VX(
-import std.io;
+import std.math;
 i64 ayudante_a(i64 n) { return n * 3; }
 comptime i64 usa_a(i64 n) { return ayudante_a(n) + 1; }
 i32 main() { return 0; }
 )VX";
         const std::string mod_b = R"VX(
-import std.io;
+import std.math;
 comptime i64 usa_b(i64 n) { return n * 7; }
 )VX";
         bool oa = false, ob = false;

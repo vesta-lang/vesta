@@ -61,6 +61,9 @@ int run_worker_from_source(std::string code, const std::string &file_name,
 #include "vx/project/module_imports.h" // que importa cada modulo, y a quien
 #include "vx/project/module_artifact.h" // el artefacto en cache y su adopcion
 #include "vx/project/module_names.h" // los simbolos derivados del modulo
+#include "vx/project/root_weaving.h" // lo que el raiz teje en todos
+#include "vx/project/vxdbg_artifact.h" // el mapa del artefacto en el grafo
+#include "vx/unit/unit_results.h" // lo de cada modulo, al resultado
 #include "vx/unit/compile_unit.h" // compilar UN modulo del proyecto
 #include "ir/synthetic_symbols.h" // la familia de `__module_init`
 #include "ir/runtime_symbols.h"   // lo que aporta el runtime, y su orden
@@ -1460,7 +1463,7 @@ CompileResult compile_vx_project(
                     if (dg.level != DiagLevel::ERR) continue;
                     if (++n > 3) break;
                     std::fprintf(stderr, "[conjunto] %u: %s%c", dg.loc.line,
-                                 dg.message.c_str(), 10);
+                                 formatted_message(dg).c_str(), 10);
                 }
             }
             if (cr_ct.ok && !cr_ct.vel_text.empty()) {
@@ -1650,171 +1653,14 @@ CompileResult compile_vx_project(
                   << (max_level + 1) << " niveles, " << parallel_opportunities
                   << " modulos paralelizables\n";
     }
-    // CPU dispatch Inc 5b: pre-pase de escaneo de @HelperOverride
-    // CROSS-MODULE.  A diferencia del path single-file (compiler.cpp), aqui
-    // un modulo IMPORTADO puede declarar el override (la "lib" hereda su
-    // implementacion al consumidor via import).  El override debe resolverse
-    // ANTES de lowerear el ROOT, porque es el root quien genera los inits
-    // (__vx_memcpy_init / __vx_strdisp_init) que apuntan el fp a la fn del
-    // override.  Estrategia: recorrer el AST de TODOS los modulos (root +
-    // imports) recolectando un map agregado target->fn_name; luego, cuando se
-    // lowerea el root, aplicarlo via lo.set_*_override.  El fn_name resuelve
-    // contra el simbolo del IR mergeado (las fns top-level conservan su
-    // nombre; los imports mantienen su nombre LOCAL via el mangle, pero el
-    // override referencia el nombre tal cual aparece en su modulo -> hay que
-    // capturar el nombre ya manglado para que el reloc fnsym lo resuelva).
-    //
-    // Precedencia: si el ROOT y un import overriden el MISMO target, gana el
-    // ROOT (es codigo directo del usuario; el import es la lib heredada).
-    std::unordered_map<std::string, std::string> aot_helper_override_syms;
-    {
-        // Set de targets cuyo override provino del ROOT (para precedencia).
-        std::unordered_set<std::string> from_root;
-        for (size_t mi = 0; mi < work.size(); ++mi) {
-            auto &pm = work[mi];
-            if (!pm.ast) continue; // cache hit con AST conservado igual sirve
-            const bool is_root = (mi + 1 == work.size());
-            for (auto &decl : pm.ast->decls) {
-                if (!decl || decl->kind != ast::NodeKind::FunctionDecl)
-                    continue;
-                auto *fd = static_cast<ast::FunctionDecl *>(decl.get());
-                if (fd->helper_override_target.empty()) continue;
-                const std::string &tgt = fd->helper_override_target;
-                if (!check_helper_override(*fd, pm.diags)) continue;
-                // El nombre del simbolo: en modulos NO-root las fns top-level
-                // se manglan con prefijo `<module>__` (ver mangle_top_level_
-                // mas abajo).  Aqui aun no se ha manglado el AST (eso ocurre
-                // dentro de compile_unit), asi que construimos el nombre
-                // manglado a mano para que coincida con el simbolo del IR
-                // mergeado.  El root conserva su nombre tal cual.
-                const std::string sym_name =
-                    is_root ? fd->name
-                            : module_member_symbol(pm.module_name.str(), fd->name);
-                // Precedencia + deteccion de conflicto.
-                auto existing = aot_helper_override_syms.find(tgt);
-                if (existing != aot_helper_override_syms.end()) {
-                    const bool prev_from_root = from_root.count(tgt) != 0;
-                    if (is_root && !prev_from_root) {
-                        // El root pisa al import: gana el root.
-                        existing->second = sym_name;
-                        from_root.insert(tgt);
-                    } else if (!is_root && prev_from_root) {
-                        // Ya teniamos el del root: el import se ignora.
-                    } else {
-                        // Conflicto real: dos modulos del MISMO nivel de
-                        // precedencia (ambos imports, o el caso imposible de
-                        // dos roots) overriden el mismo target -> error.
-                        res.ok = false;
-                        res.diagnostics.diag(fd->loc, DiagLevel::ERR, "VX4016",
-                                             {tgt, existing->second, sym_name});
-                        return res;
-                    }
-                } else {
-                    aot_helper_override_syms[tgt] = sym_name;
-                    if (is_root) from_root.insert(tgt);
-                }
-            }
-        }
-    }
-
-    /* Los `@Hook` del modulo RAIZ, para tejerlos en TODOS los modulos.
-     *
-     * Se toman solo del raiz -- la misma regla que ya siguen
-     * @AllocatorOverride y @PanicHandler -- y no de cualquiera que se importe.
-     * No es una restriccion, es la propiedad util: una libreria que use un
-     * perfilador NO instrumenta a quien la usa; instrumentar el programa
-     * entero es una decision del programa entero, y quien la toma es su raiz.
-     *
-     * Se recoge AQUI, antes de bajar nada, porque los modulos importados se
-     * bajan primero: un gancho recogido durante el lowering del raiz llegaria
-     * tarde a todo lo demas, y la stdlib -- que es justo lo que se quiere
-     * medir -- se quedaria sin instrumentar sin que nadie lo notara. */
-    /* La declaracion y el nombre por el que se le llamara desde fuera.  Van
-     * juntos porque el segundo no se puede sacar del primero mas tarde: el
-     * aplanado del raiz ocurre despues de esto. */
-    std::vector<std::pair<ast::FunctionDecl *, std::string>> root_hooks;
-    std::vector<std::string> root_no_instrument;
-    if (!work.empty() && work.back().ast) {
-        /* Hay que ENTRAR en los namespaces.  Aqui todavia no se ha aplanado el
-         * arbol -- eso pasa mas adelante --, asi que un fichero que empiece por
-         * `namespace app.principal;` tiene UNA sola declaracion arriba, la del
-         * namespace, y sus funciones cuelgan de ella.  Mirando solo el nivel
-         * superior no se encontraba ni un gancho, y como la lista quedaba
-         * vacia no se propagaba nada: el programa compilaba igual y no media
-         * nada.  Y los namespaces se anidan, de ahi la recursion. */
-        std::function<void(const std::vector<std::unique_ptr<ast::Node>> &,
-                           const std::string &)>
-            collect = [&](const std::vector<std::unique_ptr<ast::Node>> &ds,
-                          const std::string &ns) {
-                for (const auto &decl : ds) {
-                    if (!decl) continue;
-                    if (decl->kind == ast::NodeKind::NamespaceDecl) {
-                        auto *nd =
-                            static_cast<ast::NamespaceDecl *>(decl.get());
-                        collect(nd->decls,
-                                ns.empty() ? nd->name : ns + "." + nd->name);
-                        continue;
-                    }
-                    if (decl->kind != ast::NodeKind::FunctionDecl) continue;
-                    auto *fd = static_cast<ast::FunctionDecl *>(decl.get());
-                    /* El nombre por el que se le llama desde OTRO modulo es el
-                     * aplanado -- `app__principal__al_entrar` --, no el que
-                     * tiene aqui: el aplanado ocurre despues, por modulo, y el
-                     * raiz es el ultimo.  Tejer con el nombre corto compilaba
-                     * y moria al enlazar con "simbolo no resuelto".
-                     *
-                     * Se calcula APARTE y no se le escribe al nodo: el aplanado
-                     * de verdad pasara luego por aqui, y encontrarse el nombre
-                     * ya aplanado lo aplanaria DOS veces.
-                     *
-                     * Con el MISMO helper que el mangling de namespaces: la
-                     * regla vive en un sitio, no en dos que puedan divergir. */
-                    const std::string flat =
-                        ns.empty() ? fd->name
-                                   : namespace_member_symbol(ns, fd->name);
-                    if (!fd->hook_point.empty())
-                        root_hooks.push_back({fd, flat});
-                    if (fd->is_no_instrument)
-                        root_no_instrument.push_back(flat);
-                }
-            };
-        collect(work.back().ast->decls, std::string());
-    }
-    /* Un contador por gancho, compartido por todos los modulos: cada uno teje
-     * por su cuenta y solo la SUMA dice si el gancho llego a alguna parte. */
-    std::unordered_map<std::string, std::shared_ptr<std::atomic<size_t>>>
-        root_hook_counters;
-    for (const auto &rh : root_hooks)
-        root_hook_counters[rh.second] =
-            std::make_shared<std::atomic<size_t>>(0);
-
-    /* Huella de lo que el tejido cambia: el punto, el selector, los campos
-     * pedidos y el nombre por el que se llama.  Se calcula UNA vez y la usan
-     * los dos caminos de cache -- la clave del CAS y el hash de los artefactos
-     * que viven junto al fuente --, que si no acabarian con criterios
-     * distintos: uno invalidaria y el otro no.
-     *
-     * El CUERPO del gancho no entra: cambiarlo cambia SU modulo, y de eso ya
-     * se encarga el hash del fuente. */
-    uint64_t hooks_source_fp = 0;
-    if (!root_hooks.empty()) {
-        uint64_t h = util::kFnvOffset;
-        const auto mix_str = [&h](const std::string &s) {
-            for (unsigned char c : s) {
-                h ^= c;
-                h *= util::kFnvPrime;
-            }
-        };
-        for (const auto &rh : root_hooks) {
-            if (!rh.first) continue;
-            mix_str(rh.first->hook_point);
-            mix_str(rh.first->hook_selector);
-            mix_str(rh.second);
-            for (const auto &pd : rh.first->params)
-                if (pd) mix_str(pd->name);
-        }
-        hooks_source_fp = h;
-    }
+    /* Lo que el raiz teje en todos -- `@HelperOverride` de cualquier modulo
+     * con precedencia del raiz, `@Hook` y `@NoInstrument` del raiz, y la
+     * huella de ese tejido --, recogido antes de compilar ningun modulo: los
+     * demas se bajan antes que el raiz.  La misma pieza que usa el camino de
+     * fichero suelto. */
+    RootWeaving root_weaving;
+    if (!collect_root_weaving(work, res, root_weaving)) return res;
+    const uint64_t hooks_source_fp = root_weaving.hooks_source_fp;
 
     //  M8: refactor del loop body a lambda para enable dispatch paralelo
     // por nivel topo.  La lambda captura todo el entorno por referencia.
@@ -1904,10 +1750,7 @@ CompileResult compile_vx_project(
     env.cache.hooks_source_fp = hooks_source_fp;
     env.cache.target_os = &cc_tgt_os;
     env.cache.target_arch = &cc_tgt_arch;
-    env.root.helper_overrides = &aot_helper_override_syms;
-    env.root.hooks = &root_hooks;
-    env.root.no_instrument = &root_no_instrument;
-    env.root.hook_counters = &root_hook_counters;
+    env.root = root_weaving.view();
     env.generic_instances = share_instances ? &generic_instances : nullptr;
     env.target_skipped = &target_skipped_proyecto;
     env.project_package_id = &project_package_id;
@@ -2113,47 +1956,12 @@ CompileResult compile_vx_project(
         }
     }
 
-    //  M.L20-full: mergear @c pm.diags al res.diagnostics + abortar
-    // si algun modulo fallo.  Hacemos esto post-loop para que las
-    // versiones paralelas no compitan por el @c res.diagnostics global.
-    // NOTA: @c res.ok default es @c false ; setear early-abort solo si
-    // hubo un @c pm.ok==false real, no por inicializacion.
-    bool any_pm_failed = false;
-    for (auto &pm : work) {
-        for (const auto &d : pm.diags.all()) {
-            res.diagnostics.emit(d);
-        }
-        /* El conjunto comptime del proyecto se suma AQUi, por el mismo motivo
-         * que los diagnosticos: dentro del bucle, hasta ocho hilos escribian
-         * sobre la misma `std::string` y el mismo `std::vector` sin candado, y
-         * eso destroza el bufer -- el compilador moria con 0xC0000374 sin
-         * imprimir nada y con victima distinta cada vuelta.  Sumar despues, en
-         * orden de indice, ademas quita el otro sintoma: la concatenacion ya
-         * no depende de que hilo llegue antes, asi que dos compilaciones del
-         * mismo fuente dan el mismo texto y la misma clave. */
-        /* "Aporto algo" se mide por el TEXTO o por los NOMBRES, no solo por el
-         * texto: un modulo cuyo conjunto son unicamente constantes comptime
-         * trae nombres con el texto vacio, y mirando solo el texto se perdian
-         * -- y con ellos el criterio de pertenencia al emitir el artefacto. */
-        if (!pm.comptime_unit_source.empty() ||
-            !pm.comptime_unit_names.empty()) {
-            res.comptime_unit_source += pm.comptime_unit_source;
-            res.comptime_unit_names.insert(res.comptime_unit_names.end(),
-                                           pm.comptime_unit_names.begin(),
-                                           pm.comptime_unit_names.end());
-            res.comptime_unit_hash =
-                util::hash_combine(res.comptime_unit_hash, pm.comptime_unit_hash);
-        }
-        res.comptime_unit_not_collected.insert(
-            res.comptime_unit_not_collected.end(),
-            pm.comptime_unit_not_collected.begin(),
-            pm.comptime_unit_not_collected.end());
-        if (!pm.ok) any_pm_failed = true;
-    }
-    if (any_pm_failed) {
-        res.ok = false;
-        return res;
-    }
+    /* Lo de cada modulo al resultado -- diagnosticos, conjunto comptime, lo de
+     * cada `@Macro`, las huellas del grafo de depuracion --, DESPUES del bucle
+     * y en orden de indice: dentro, hasta ocho hilos escribian sobre el mismo
+     * resultado sin candado (moria con 0xC0000374).  La misma pieza que el
+     * camino de fichero suelto. */
+    if (!gather_unit_results(work, res)) return res;
 
     /* LAS INTERFACES, QUE YA NO LAS LEE NADIE.
      *
@@ -3377,42 +3185,10 @@ CompileResult compile_vx_project(
     /* Y de donde salio, para quien pueda ensamblar sin releerlo. */
     res.vel_sink = eres.sink;
 
-    // Mapa del artefacto: uno solo con los simbolos de TODOS los modulos.  El
-    // ejecutable los contiene a todos, asi que una direccion suya puede caer en
-    // cualquiera; un mapa por modulo dejaria sin explicar todo lo que no fuera
-    // el modulo raiz.  Sin artefacto no hay nada que mapear.
-    if (!opts.ir_only) {
-        vxdbg::ArtifactMap map;
-        for (const auto &pm : work) {
-            /* Dos cosas distintas, y las dos hacen falta.
-             *
-             * Los SIMBOLOS son para BUSCAR: dada una direccion que resolvio a
-             * un simbolo, dan su entidad.  Solo los tiene el modulo que se bajo
-             * en esta compilacion.
-             *
-             * El mapa del modulo es para SOSTENER: lleva todo lo que ese modulo
-             * emitio -- tipos y miembros incluidos, no solo lo que tiene codigo
-             * --, asi que citarlo es lo que impide que el grafo se quede sin
-             * raiz.  Lo traen los dos casos: el que se acaba de bajar y el que
-             * vino de su cache, porque la huella viaja en el `.vxi`. */
-            for (const vxdbg::SymbolLink &link : pm.vxdbg_symbols)
-                map.add(link.symbol, link.entity);
-            const vxdbg::ContentHash mm{pm.vxi.vxdbg_map_lo,
-                                        pm.vxi.vxdbg_map_hi};
-            if (!mm.empty()) map.modules.push_back(mm);
-        }
-        /* Empaquetado por delante, suelto detras: es como escribe la emision,
-         * y este mapa CITA nodos que ella guardo.  Con el suelto solo, el
-         * `contains` de aqui no veia lo que ya estaba en un paquete. */
-        const std::string vxdbg_dir =
-            opts.vxdbg_dir.empty() ? default_vxdbg_dir() : opts.vxdbg_dir;
-        vxdbg::PackNodeStore store(vxdbg_dir,
-                                   std::unique_ptr<vxdbg::NodeStore>(
-                                       new vxdbg::FileNodeStore(vxdbg_dir)));
-        vxdbg::ContentHash h;
-        if (!map.symbols.empty() && vxdbg::store_node(store, map, h))
-            res.vxdbg_artifact_map = h;
-    }
+    /* Mapa del artefacto en el grafo de depuracion: uno solo con los simbolos
+     * y los mapas de TODOS los modulos.  La misma pieza que el camino de
+     * fichero suelto. */
+    compose_vxdbg_artifact(work, opts, res);
     /* Donde dejo el asignador cada valor, antes de guardar el intermedio: es
      * lo que permite decir que `%8` es el `r1` de la instruccion maquina.  Se
      * estampa aqui, entre emitir y serializar, porque el emisor recibe el
@@ -3532,17 +3308,6 @@ CompileResult compile_vx_project(
     /* Del resumen, no del comprobador de tipos: se le pregunto al acabar cada
      * modulo, que es cuando existia.  Lo que se guardaba para poder hacer esta
      * pregunta era un objeto de decenas de megabytes por modulo. */
-    /* Lo que se informa de cada `@Macro`, de TODOS los modulos y en su orden.
-     * Solo lo recogia el camino de fichero suelto, asi que el servidor de
-     * lenguaje no veia nada en cuanto el documento traia un `import`. */
-    for (const auto &pm : work) {
-        res.macro_expectations.insert(res.macro_expectations.end(),
-                                      pm.macro_expectations.begin(),
-                                      pm.macro_expectations.end());
-        res.macro_skip_reasons.insert(res.macro_skip_reasons.end(),
-                                      pm.macro_skips.begin(),
-                                      pm.macro_skips.end());
-    }
     for (const auto &pm : work) {
         if (pm.inject_pending) {
             res.has_lowerable_macros = true;

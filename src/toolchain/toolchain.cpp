@@ -32,6 +32,7 @@
 #endif
 
 #include "ir/vel_node_stream.h"          // ensamblar sin pasar por texto
+#include "vx/diag/diag_format.h"         // el texto de un diagnostico
 #include "toolchain/aot_build.h"         // vesta::tc::compile_aot
 #include "util/assembler_multiprocess.h" // asm_multi_process::run_worker
 #include "util/phase_memory.h"           // la frontera entre frontend y asm
@@ -70,7 +71,10 @@ bool collect_diags(const vx::CompileResult &res, std::vector<Diag> &out) {
         e.level = map_level(d.level);
         e.line = d.loc.line;
         e.column = d.loc.column;
-        e.message = d.message;
+        /* El texto COMPUESTO, no `message`: en un diagnostico del catalogo ese
+         * campo va vacio -- el texto se escribe al mostrarlo --, y leerlo
+         * directamente entregaba todos los errores catalogados sin texto. */
+        e.message = vx::formatted_message(d);
         e.file = d.loc.file();
         if (e.level == DiagLevel::Error) had_error = true;
         out.push_back(std::move(e));

@@ -58,6 +58,14 @@ struct ProjectModuleWork {
     /// juntan al final: el ejecutable contiene todos los modulos, asi que su
     /// mapa tiene que cubrirlos a todos.
     vxdbg::SymbolLinks vxdbg_symbols;
+    /// Huella del mapa de ESTE modulo en el grafo de depuracion (todo lo que
+    /// emitio, tipos incluidos).  Va aparte del `.vxi`, que se suelta antes
+    /// de componer el mapa del artefacto: leerla de ahi daba siempre cero y
+    /// el mapa del artefacto no citaba ningun modulo.
+    vxdbg::ContentHash vxdbg_module_map;
+    /// Huella de sus tramos de fuente, si se bajo en esta compilacion.  El
+    /// artefacto publica la del raiz: es lo que subraya la traza.
+    vxdbg::ContentHash vxdbg_span_map;
     ///  M.L20-full: Diagnostics local del modulo.  Cuando se
     /// paraleliza el compile (VX_PARALLEL_COMPILE=1), cada thread
     /// usa este diags propio en lugar del res.diagnostics compartido,

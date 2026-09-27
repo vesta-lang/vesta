@@ -5,6 +5,8 @@
  */
 #include "vx/unit/compile_unit.h"
 
+#include "util/crono_tramo.h" // el tramo de la bajada en el informe de tiempos
+#include "util/env_flags.h"
 #include "vx/compiler.h"
 #include "vx/lowering.h"
 #include "vx/project/module_work.h"
@@ -96,6 +98,10 @@ void emit_unit_vxdbg(const UnitEnv &env, ProjectModuleWork &pm, Lowering &lo) {
      * llegaban al mapa y su grafo se quedaba sin sostener. */
     pm.vxi.vxdbg_map_lo = st.module_map.lo;
     pm.vxi.vxdbg_map_hi = st.module_map.hi;
+    /* Y sus tramos de fuente, que no viajan en el `.vxi`: solo los tiene el
+     * modulo que se bajo en esta compilacion.  El artefacto publica los del
+     * raiz, que es lo que subraya la traza. */
+    pm.vxdbg_span_map = st.span_map;
 }
 
 } // namespace
@@ -149,7 +155,12 @@ bool lower_unit(const UnitEnv &env, size_t i) {
     if (!env.root.hook_counters->empty())
         lo.set_hook_counters(*env.root.hook_counters);
     const std::string &mod_name = pm.module_name.str();
-    if (!lo.run(pm.ir, mod_name)) return false;
+    {
+        /* La bajada de verdad, con su propio tramo en el informe de tiempos:
+         * sin el, su coste se leeria dentro de la fase que la contenga. */
+        util::CronoTramo t_("lower:run", util::flag_on(util::FlagId::Times));
+        if (!lo.run(pm.ir, mod_name)) return false;
+    }
     /* Los `@Macro` que no fueron a la maquina de compilacion, y por que.  Se
      * juntan con los de los demas modulos al acabar. */
     pm.macro_skips = lo.macro_skip_reasons();

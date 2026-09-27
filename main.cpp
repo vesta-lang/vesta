@@ -3320,7 +3320,7 @@ int main(int argc, char *argv[]) {
                     pa.fallo = "no compila para esta arquitectura";
                     for (const auto &d : r2.diagnostics.all()) {
                         if (d.level == vx::DiagLevel::ERR) {
-                            pa.fallo = d.message;
+                            pa.fallo = vx::formatted_message(d);
                             break;
                         }
                     }

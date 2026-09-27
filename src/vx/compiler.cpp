@@ -25,8 +25,10 @@
 #include "vx/borrow/borrow_ir_check.h" // la exclusividad cruzando llamadas
 #include "vx/contracts_collect.h"     // lo que el programa DECLARA
 #include "vx/helper_override.h"       // que ayudantes admiten sustituto
-#include "vx/comptime/comptime_blocks.h" // `comptime { }` -> funcion comptime
 #include "vx/module_checks.h"  // lo que se comprueba antes de optimizar
+#include "vx/project/module_work.h"    // el modulo, como en un proyecto
+#include "vx/project/vxdbg_artifact.h" // el mapa del artefacto en el grafo
+#include "vx/unit/single_unit.h"       // comprobar y bajar: las mismas piezas
 #include "vx/vxdbg_emit.h"     // base de conocimiento de depuracion
 
 #include "analyze/bigo.h"
@@ -45,8 +47,6 @@
 #include "vx/diagram/mermaid_diagrams.h"
 #include "vx/diagram/graphviz_diagrams.h"
 #include "vx/diagram/html_diagrams.h"
-#include "vx/diagram/source_diagrams.h" // los del AST y los tipos, en su momento
-#include "vx/comptime/comptime_values.h" // los valores comptime para el editor
 #include "vx/module/namespace_flatten.h"
 #include "vx/parser.h"
 #include <iostream>
@@ -405,54 +405,11 @@ CompileResult compile_vx_source(const std::string &source,
     // generarian falsos positivos.
     Lexer lx(source, filename, res.diagnostics);
     Parser p(lx, res.diagnostics);
-    auto mod = p.parse_program();
-    if (!mod || res.diagnostics.has_errors()) {
+    std::unique_ptr<ast::ModuleNode> parsed = p.parse_program();
+    if (!parsed || res.diagnostics.has_errors()) {
         res.ok = false;
         return res;
     }
-
-    // 1.5.  M.7.c: aplanar namespaces inline (`namespace ui { ... }`).
-    //      Tras este pre-pass, el AST no tiene NamespaceDecl wrappers;
-    //      los simbolos internos llevan prefix `<ns>__` (cero overhead
-    //      runtime; compatible con port-c).  Cada namespace encontrado
-    //      se registra en el TypeChecker como Symbol::Namespace para
-    //      que el resolver de `ns.X` lo encuentre.
-    auto inline_namespaces = flatten_namespaces(*mod);
-
-    // P1 fase 1 (recolector): con los nombres ya mangled, identificar el
-    // conjunto comptime del modulo (comptime fns/@Macro/consts + deps
-    // transitivas).  Es la base del futuro artefacto comptime separado.  Hoy
-    // solo diagnostico opt-in (VESTA_DUMP_COMPTIME_UNIT=1); no cambia codegen.
-    {
-        /* Se recolecta SIEMPRE, no solo al diagnosticar: es lo que permite que
-         * quien orquesta compile el conjunto comptime APARTE en vez de compilar
-         * el proyecto ENTERO para obtener lo mismo (hoy: 704 KB y ~800 ms, el
-         * 43% de una compilacion en frio, para lo que son ocho funciones).  El
-         * coste es un recorrido de las decls y un substr por decl del conjunto.
-         *
-         * Aqui SOLO se recolecta y se devuelve.  Construir el artefacto tiene
-         * que hacerlo quien orquesta, desde FUERA: hacerlo aqui RECURSA --
-         * compilar el conjunto vuelve a entrar por este mismo punto y construye
-         * el artefacto DEL artefacto (observado: tres niveles, con el conjunto
-         * encogiendo en cada uno).  Es la version practica de que el conjunto
-         * comptime SE CONTIENE A SI MISMO: `inject` es un `@Macro`. */
-        /* Si esta compilacion ES la del conjunto, no se recolecta: el
-         * conjunto se contiene a si mismo y saldria el artefacto DEL
-         * artefacto, encogiendo nivel a nivel. */
-        const ComptimeUnit cu = opts.building_comptime_artifact
-                                    ? ComptimeUnit{}
-                                    : collect_comptime_unit(*mod, source);
-        res.comptime_unit_source = cu.unit_source;
-        res.comptime_unit_hash = cu.content_hash;
-        res.comptime_unit_not_collected = cu.not_collected;
-        if (util::flag_on(util::FlagId::DumpComptimeUnit))
-            dump_comptime_unit(cu, std::cerr);
-    }
-
-    // Los `comptime { }` de modulo, a funciones comptime: corren en la
-    // maquina de compilacion (JIT), no en el evaluador de arbol.  Lo mismo
-    // que hace el camino de proyecto, por la misma funcion.
-    comptime_blocks_to_functions(*mod, std::string());
 
     res.times.analysis_us = cerrar_fase();
     phases.close(res.times.analysis_us);
@@ -465,231 +422,48 @@ CompileResult compile_vx_source(const std::string &source,
     res.times.lexing_us_est = static_cast<long>(lx.estimated_micros());
     res.times.tokens = static_cast<long long>(lx.tokens());
     res.times.lexing_samples = static_cast<long long>(lx.samples());
-    res.times.ast_decls = static_cast<long long>(mod->decls.size());
 
-    // 2. TypeChecker: rellena result_type y valida semantica.
-    TypeChecker tc(*mod, res.diagnostics);
-    /* El conjunto comptime ya compilado, si quien orquesta lo trae: asi el
-     * codigo que se ejecuta al compilar tiene bytecode desde el primer call
-     * site, sin releer ningun fichero. */
-    tc.set_comptime_artifact(opts.comptime_artifact);
-    /* Lo que `@Target` descarto en este fichero, para que usarlo diga
-     * "declarado para otro objetivo" y no "no declarado" -- como en el camino
-     * de proyecto --. */
-    tc.register_target_skipped_all(mod->target_skipped);
-    // Registrar namespaces inline en el checker ANTES de run().
-    for (const auto &ins : inline_namespaces) {
-        const uint32_t ns_idx =
-            tc.register_imported_namespace(ins.name, ins.name);
-        for (const auto &sym : ins.symbols) {
-            TypeChecker::ImportedNamespace::Sym ns_sym;
-            ns_sym.kind =
-                (sym.kind == FlattenedNamespace::Sym::Function)
-                    ? 0
-                    : (sym.kind == FlattenedNamespace::Sym::Type ? 2 : 1);
-            ns_sym.mangled_label = sym.mangled_label;
-            // Para funciones, las firmas se rellenaran en check_function
-            // del propio TypeChecker.  Aqui solo registramos la
-            // existencia + mangled_label.  Esto basta porque la
-            // funcion estara TAMBIEN en function_sigs_ (con el nombre
-            // mangled como key), por lo que el lookup puede ir alli.
-            tc.register_namespace_symbol(ns_idx, sym.public_name,
-                                         std::move(ns_sym));
-            // NS.2 round-trip: recordar el namespace declarado para el export.
-            tc.register_declared_ns_symbol(sym.mangled_label, ins.name,
-                                           sym.public_name);
-        }
-    }
-    // Si el LSP pidio volcar valores comptime, activamos la captura
-    // de las variables locales de los bloques `comptime { ... }`
-    // ANTES de run() (para que check_stmt las acumule al evaluarlos).
-    // Gateado: cero coste cuando dump_comptime_values esta off.
-    if (opts.dump_comptime_values) {
-        tc.set_capture_comptime_block_locals(true);
-    }
-    if (!tc.run()) {
+    /* 2-3. Comprobar y bajar, por las MISMAS piezas que un proyecto: un fichero
+     * suelto es un proyecto de un modulo.  Aqui habia una copia de la mitad
+     * delantera -- aplanar namespaces, conjunto comptime, comprobador,
+     * sustitutos, ganchos, bajada, grafo de depuracion -- y cada vez que el
+     * proyecto aprendia algo esta se quedaba atras sin que nada fallara. */
+    const std::string mod_name =
+        opts.module_name.empty() ? std::string("main") : opts.module_name;
+    std::vector<ProjectModuleWork> work(1);
+    ProjectModuleWork &unit = work.back();
+    unit.canonical_path = util::InternedName::intern(filename);
+    unit.module_name = util::InternedName::intern(mod_name);
+    unit.source = source;
+    unit.ast = std::move(parsed);
+    const bool unit_ok = compile_single_unit(work, opts, res);
+    res.times.types_us = unit.types_us;
+    phases.close(res.times.types_us);
+    phases.open("frontend:lowering");
+    /* La bajada la midio la pieza; desde aqui corre lo que sigue a ella, que
+     * se suma a su tiempo al cerrar la fase. */
+    (void)cerrar_fase();
+    if (!unit_ok) {
         res.ok = false;
         return res;
     }
-
-    // : copiar las "expectaciones" de @Macro capturadas
-    // por el TypeChecker (al evaluar via AST) hacia la CompileResult.
-    // El caller (main.cpp probe / shadow-eval mode) las reaplica
-    // sobre una nueva ComptimeRuntime tras cargar el bytecode y
-    // ejecuta shadow_validate.  Cero coste si no hay @Macros.  Por la misma
-    // funcion que el camino de proyecto.
-    collect_macro_expectations(tc, res.macro_expectations);
-
-    // 2.4. (opcional) Volcar los valores comptime computados.  Estrictamente
-    // gateado por @c dump_comptime_values (default false): si esta apagado,
-    // NADA cambia respecto al flujo historico.  Solo LEEMOS las constantes
-    // comptime top-level que el TypeChecker ya resolvio (sin tocar lowering
-    // ni la logica de macros).  Lo consume el metodo LSP vesta/comptimeValues.
-    // Por la misma funcion que el camino de proyecto.
-    if (opts.dump_comptime_values)
-        collect_comptime_values(tc, res.comptime_values);
-
-    // 2.5. (opcional) Diagramas del AST y de los tipos: ahora, con los tipos
-    // resueltos y antes de que el lowering altere el arbol.  Por la misma
-    // funcion que el camino de proyecto.
-    fill_source_diagrams(*mod, opts, res);
-
-    res.times.types_us = cerrar_fase();
-    phases.close(res.times.types_us);
-    phases.open("frontend:lowering");
-
-    // 3. Lowering: AST -> ir::IrModule.  Pasamos el TypeChecker para
-    // que el lowering pueda consultar StructLayout (offsets/tamanos)
-    // sin recalcularlos.
-    ir::IrModule irmod;
-    Lowering lo(*mod, tc, res.diagnostics);
-    lo.avisar_asm_opaco_ = opts.emit_ir_preopt;
-    if (!opts.instrument_mode.empty() && opts.instrument_mode != "none") {
-        lo.set_instrument_mode(opts.instrument_mode);
+    /* Si esta compilacion ES la del conjunto comptime, no se devuelve el
+     * conjunto: se contiene a si mismo y quien orquesta construiria el
+     * artefacto DEL artefacto, encogiendo nivel a nivel (observado: tres). */
+    if (opts.building_comptime_artifact) {
+        res.comptime_unit_source.clear();
+        res.comptime_unit_names.clear();
+        res.comptime_unit_hash = 0;
+        res.comptime_unit_not_collected.clear();
     }
-    lo.set_native_poo(opts.native_poo); //  AOT.2.b: POO nativa (-m aot)
-    lo.set_asm_target_bits(opts.asm_target_bits); // arch del inline-asm @Naked
-    lo.set_aot_vec_width(
-        opts.aot_vec_width); // ancho SIMD del target (--float-isa)
-    lo.set_aot_auto_vec(opts.aot_auto_vec); // --float-isa auto: chunk dual
-    lo.set_emit_comptime_fns(opts.emit_comptime_fns); // solo-LSP: inspeccion
-    /* Los overrides del `string` built-in y de la primitiva de monitor se
-     * resuelven ANTES del lowering, porque afectan al lowering MISMO del
-     * operador `+`/`==` y del bloque `synchronized`.
-     *
-     * El barrido vive en UN solo sitio a proposito: lo necesitan los DOS
-     * caminos, el de fichero suelto y el de proyecto, y mientras estuvo
-     * copiado aqui el de proyecto se quedo sin el.  Eso no daba un error --
-     * daba un `@StringConcat` que compilaba y no ruteaba nada --, y saltaba
-     * en cuanto un fichero cambiaba de camino por cualquier otro motivo. */
-    if (!collect_string_sync_overrides(*mod, tc, res)) return res;
-    for (auto &decl : mod->decls) {
-        if (!decl || decl->kind != ast::NodeKind::FunctionDecl) continue;
-        auto *fd = static_cast<ast::FunctionDecl *>(decl.get());
-        // CPU dispatch Inc 4: @HelperOverride(<helper>).  Debe resolverse
-        // ANTES del lowering porque afecta a la construccion de
-        // __vx_memcpy_init (apunta el fp a la fn del usuario, saltando el
-        // dispatch por cpuid).  El map escala a futuros helpers sin tocar el
-        // schema; hoy solo "memcpy" es multi-versionado.
-        if (!fd->helper_override_target.empty()) {
-            const std::string &tgt = fd->helper_override_target;
-            /* Si el ayudante admite sustituto y si la firma cuadra lo dice
-             * `check_helper_override`, el mismo que usa el camino de
-             * proyecto. */
-            if (check_helper_override(*fd, res.diagnostics)) {
-                if (res.aot_helper_override_syms.count(tgt)) {
-                    res.ok = false;
-                    res.diagnostics.diag(
-                        fd->loc, DiagLevel::ERR, "VX4016",
-                        {tgt, res.aot_helper_override_syms[tgt], fd->name});
-                    return res;
-                }
-                res.aot_helper_override_syms[tgt] = fd->name;
-            }
-        }
-    }
-    lo.set_string_op_overrides(res.string_concat_override,
-                               res.string_eq_override);
-    lo.set_sync_impl_overrides(res.sync_enter_override, res.sync_exit_override);
-    // CPU dispatch Inc 4: pasar el override de "memcpy" (si lo hay) al
-    // lowering para que __vx_memcpy_init apunte el fp a la fn del usuario.
-    {
-        auto it = res.aot_helper_override_syms.find("memcpy");
-        if (it != res.aot_helper_override_syms.end())
-            lo.set_memcpy_override(it->second);
-    }
-    // CPU dispatch Inc 5a: idem para strcmp / strlen (el __vx_strdisp_init
-    // apunta cada fp a la fn del usuario en lugar del baseline).
-    {
-        auto it = res.aot_helper_override_syms.find("strcmp");
-        if (it != res.aot_helper_override_syms.end())
-            lo.set_strcmp_override(it->second);
-    }
-    {
-        auto it = res.aot_helper_override_syms.find("strlen");
-        if (it != res.aot_helper_override_syms.end())
-            lo.set_strlen_override(it->second);
-    }
-    const std::string mod_name =
-        opts.module_name.empty() ? std::string("main") : opts.module_name;
-    {
-        /* La bajada DE VERDAD, con su propio cronometro.  La fase `bajada` se
-         * cierra trescientas lineas mas abajo, asi que se traga tambien la
-         * emision de la informacion de depuracion y los volcados de diagramas.
-         * Es el mismo vicio que tenia `emitir` -- una fase medida como "lo que
-         * queda hasta aqui" acusa de su coste a lo primero que lleve dentro --,
-         * y sin separarlo quien quisiera optimizar la bajada miraria donde no
-         * esta. */
-        util::CronoTramo t_("lower:run", util::flag_on(util::FlagId::Times));
-        if (!lo.run(irmod, mod_name)) {
-            res.ok = false;
-            return res;
-        }
-    }
-
-    /* De que fichero salio cada funcion.
-     *
-     * Se sella AQUI porque este es el ultimo sitio donde el modulo y el
-     * fichero se ven a la vez: en cuanto el modulo se fusiona con sus
-     * dependencias, dentro conviven funciones de muchos ficheros y ya no hay
-     * forma de saber cual es cual.
-     *
-     * Todas las de este modulo vienen del mismo fichero -- las sinteticas que
-     * genera la bajada tambien, porque las genera a partir de algo escrito
-     * aqui --, asi que la tabla estrena una sola entrada. */
-    irmod.assign_source_file(filename);
-
-    /* Comprobar que el IR recien construido cumple sus propias reglas: cada
-     * valor definido una vez, los operandos existen, y todo bloque acaba -- y
-     * acaba de verdad, con el terminador el ULTIMO -- porque quien recalcula
-     * el grafo lee esa instruccion para saber a donde salta.
-     *
-     * Bajo bandera y no siempre: es un recorrido completo del modulo, y no se
-     * hace pagar a quien solo quiere compilar.  El verificador existia desde
-     * hace tiempo y NADIE lo llamaba; solo lo usaba un test sobre un modulo
-     * escrito a mano, que es justo el codigo que no tiene los fallos. */
-    ir::ir_verify_if_asked(irmod, "lowered", mod_name);
-
-    // Grafo de conocimiento del programa: los tipos, sus miembros y como se
-    // relacionan, mas el mapa que liga los simbolos del artefacto con ellos.
-    // Se emite AQUI y no antes porque los SIMBOLOS solo existen tras el
-    // lowering, y sin ellos el grafo se queda sin puerta de entrada: una
-    // direccion de ejecucion no podria llegar hasta el.
-    //
-    // No participa en la generacion de codigo: si falla, se avisa y la
-    // compilacion sigue -- perder informacion de depuracion no es motivo para
-    // no producir el programa.
-    {
-        VxdbgEmitStats st;
-        std::string dbg_err;
-        /* Los tramos se LLEVAN, no se copian.  Cada uno guarda el nombre de su
-         * funcion y hay uno por sentencia, asi que copiarlos era reservar una
-         * cadena por sentencia del fichero para tirar la del bajado justo
-         * despues.  Aqui se acaba de bajar y nadie mas los va a mirar. */
-        std::vector<vxdbg::SourceExtent> spans;
-        auto emitted = lo.take_emitted_spans();
-        spans.reserve(emitted.size());
-        for (auto &e : emitted)
-            spans.push_back({std::move(e.symbol), e.line, e.column, e.length});
-        if (!emit_vxdbg_source(tc, lo.emitted_symbols(), std::move(spans),
-                               filename, source, opts.vxdbg_dir, st, dbg_err)) {
-            std::cerr << "[vxdbg] no se pudo emitir: " << dbg_err << "\n";
-        }
-        res.vxdbg_artifact_map = st.artifact_map;
-        res.vxdbg_span_map = st.span_map;
-    }
-
-    // -ffp-contract=off (CLI, per-modulo): fuerza IEEE estricto (sin
-    // contraccion FMA) AND-eando la politica del modulo con el fp_contract
-    // por-funcion que ya puso el lowering (@fp(strict) -> false).  Se aplica
-    // aqui, en la misma unidad de traduccion que el optimizer/emitter que
-    // consumen irmod, para no depender del global mutable
-    // ir_set_fma_contract_allowed (se duplica entre vm.exe, el DLL y vmcore ->
-    // el setter de main.cpp puede tocar una copia distinta).
-    if (!opts.fp_contract) {
-        for (auto &fn : irmod.functions)
-            fn.fp_contract = false;
-    }
+    // Lo que la mitad de abajo sigue usando, con los nombres de siempre.
+    ast::ModuleNode *mod = unit.ast.get();
+    TypeChecker &tc = *unit.tc;
+    ir::IrModule &irmod = unit.ir;
+    res.times.ast_decls = static_cast<long long>(mod->decls.size());
+    /* Y el mapa del artefacto en el grafo de depuracion, por la misma pieza
+     * que el proyecto. */
+    compose_vxdbg_artifact(work, opts, res);
 
     // FN.3: auto-bundle del context-switch de fibra para el JIT.
     // En el path interp/JIT (native_poo == false), `fiber_swapctx` baja al
@@ -846,10 +620,6 @@ CompileResult compile_vx_source(const std::string &source,
         res.unresolved_inject_code = tc.asm_body_pending_code();
         res.unresolved_inject_arg = tc.asm_body_pending_arg();
     }
-
-    /* Las razones de skip del lowering, para que el servidor de lenguaje
-     * pueda decir por que un @Macro no fue a la maquina de compilacion. */
-    res.macro_skip_reasons = lo.macro_skip_reasons();
 
     // 3.5. (opcional) Volcar el IR pre-optimizacion al campo
     // @c res.ir_text para que el caller pueda inspeccionarlo con la
@@ -1016,7 +786,8 @@ CompileResult compile_vx_source(const std::string &source,
     // vectorial recibe registro igual que uno entero.  Aqui hubo un rechazo
     // mientras el asignador solo sabia del banco entero.
 
-    res.times.lowering_us = cerrar_fase();
+    // La bajada que midio la pieza, mas lo que la siguio hasta aqui.
+    res.times.lowering_us = unit.lowering_us + cerrar_fase();
     phases.close(res.times.lowering_us);
     /* De aqui al final conviven optimizar y emitir, y sus tiempos se reparten
      * por resta al cerrar.  El tramo se llama por lo que de verdad envuelve --

@@ -508,11 +508,6 @@ struct CompileResult {
     /// baja a un CALL a estas funciones en LOS 3 MODOS.
     std::string sync_enter_override;
     std::string sync_exit_override;
-    /// CPU dispatch Inc 4: @HelperOverride(<helper>) -- mapea el nombre del
-    /// helper objetivo (hoy solo "memcpy") al nombre de la fn libre del
-    /// usuario que lo reemplaza.  Vacio => sin override (dispatch por cpuid).
-    /// Disenado para escalar a strcmp/strlen/itoa sin tocar el schema.
-    std::map<std::string, std::string> aot_helper_override_syms;
     /// Diagrama Mermaid del AST post type-check.  Llenado solo si
     /// @c CompileOptions::dump_mermaid_ast == true.  Vacio en caso
     /// contrario para no pagar el coste de generacion en builds prod.

@@ -451,6 +451,11 @@ add_library(vx_lib STATIC
     # Que importa cada modulo y a que modulo se refiere cada import: UNA forma
     # de resolverlo, porque el nombre de fichero no es unico.
     project/module_imports.cpp
+    # Lo que el raiz teje en todos (@HelperOverride, @Hook), recogido antes de
+    # compilar ningun modulo: los dos caminos.
+    project/root_weaving.cpp
+    # El mapa del artefacto en el grafo de depuracion: los dos caminos.
+    project/vxdbg_artifact.cpp
     # Compilar UN modulo del proyecto: el orden de los pasos y sus cortes.
     unit/compile_unit.cpp
     # Sus claves de cache, servirlo de la cache y guardarlo en ella.
@@ -465,6 +470,10 @@ add_library(vx_lib STATIC
     unit/unit_lower.cpp
     # La interfaz (`.vxi`) del modulo ya compilado.
     unit/unit_interface.cpp
+    # Juntar en el resultado lo de cada modulo: los dos caminos.
+    unit/unit_results.cpp
+    # Un fichero suelto es un proyecto de un modulo: por las mismas piezas.
+    unit/single_unit.cpp
     # Traductor de los tipos de Vesta a entidades de la base de conocimiento de
     # depuracion (vxdbg).  Vive en el frontend porque la correspondencia entre
     # el vocabulario de Vesta y el modelo generico solo la conoce quien declara
