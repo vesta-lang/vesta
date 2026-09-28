@@ -17,6 +17,21 @@
 
 namespace vx {
 
+/**
+ * @brief La marca de un modulo: la huella de su ruta CANONICA, en 16 cifras
+ *        hexadecimales.
+ *
+ * Distingue a dos modulos con el mismo nombre de fichero (`a/util.vx` y
+ * `b/util.vx` se llaman los dos `util`) y es la misma en todas las
+ * compilaciones, asi que vale para lo que se guarda en la cache y se lee en
+ * otra: el nombre de sus artefactos y los simbolos que el compilador inventa
+ * por modulo.
+ *
+ * @param canonical_path Ruta canonica del modulo.
+ * @return La marca.
+ */
+std::string module_path_tag(const std::string &canonical_path);
+
 /// Las rutas de cache de un modulo.
 struct ModuleCachePaths {
     std::string vxi;   ///< su interfaz binaria.

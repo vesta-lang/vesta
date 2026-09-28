@@ -1715,17 +1715,21 @@ def _(ctx):
     vel = read_text(ctx.path("rs.vel"))
     if "rspawn r" not in vel:
         ctx.fail("rspawn: el .vel no contiene la instruccion 'rspawn r'")
-    if "__rspawn_0:" not in vel:
-        ctx.fail("rspawn: el .vel no contiene el helper '__rspawn_0:'")
-    # awk '/^__rspawn_0:/,/^__rspawn_0_ret:/' -> rango de lineas entre ambos.
+    # El helper lleva la marca de su modulo (`__rspawn_<marca>_0`): los
+    # simbolos numerados por modulo no pueden coincidir entre modulos.
+    m = re.search(r"^(__rspawn_(?:[0-9a-f]{16}_)?0):", vel, re.M)
+    if not m:
+        ctx.fail("rspawn: el .vel no contiene el helper '__rspawn_<marca>_0:'")
+    helper = m.group(1)
+    # awk '/^<helper>:/,/^<helper>_ret:/' -> rango de lineas entre ambos.
     body = []
     inside = False
     for ln in vel.split("\n"):
-        if ln.startswith("__rspawn_0:"):
+        if ln.startswith(helper + ":"):
             inside = True
         if inside:
             body.append(ln)
-        if inside and ln.startswith("__rspawn_0_ret:"):
+        if inside and ln.startswith(helper + "_ret:"):
             break
     body = "\n".join(body)
     if "mov r0," not in body:
@@ -5556,6 +5560,23 @@ def main():
             print(_l)
         if _r.returncode != 0:
             failed.append("cache-puro")
+        else:
+            steps += 1
+
+    # Y en CALIENTE: compilar con la cache que dejo la compilacion anterior
+    # tras cambiar un fuente tiene que dar lo mismo que compilar de cero.  El
+    # de arriba compara frio con frio y no ve una cache que sirve algo que ya
+    # no corresponde al fuente -- que no da error, da otro programa --.
+    _cal = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        "test_cache_caliente.py")
+    if os.path.exists(_cal):
+        print("")
+        _r = _sp.run([sys.executable, _cal, args.build_dir], capture_output=True,
+                     text=True)
+        for _l in _r.stdout.splitlines():
+            print(_l)
+        if _r.returncode != 0:
+            failed.append("cache-caliente")
         else:
             steps += 1
 

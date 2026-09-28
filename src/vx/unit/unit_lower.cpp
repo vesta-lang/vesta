@@ -9,6 +9,7 @@
 #include "util/env_flags.h"
 #include "vx/compiler.h"
 #include "vx/lowering.h"
+#include "vx/project/module_paths.h" // module_path_tag
 #include "vx/project/module_work.h"
 #include "vx/vxdbg_emit.h"
 #include "vxdbg/roots.h" // vxdbg::SourceExtent
@@ -146,6 +147,11 @@ bool lower_unit(const UnitEnv &env, size_t i) {
     if (!env.root.hook_counters->empty())
         lo.set_hook_counters(*env.root.hook_counters);
     const std::string &mod_name = pm.module_name.str();
+    /* Los simbolos que la bajada numera por modulo llevan su marca: el nombre
+     * del modulo no basta (`a/util.vx` y `b/util.vx` son los dos `util`) y la
+     * marca tiene que ser la misma en todas las compilaciones, porque el
+     * intermedio de un modulo se guarda en la cache con esos nombres dentro. */
+    lo.set_module_tag(module_path_tag(pm.canonical_path.str()));
     {
         /* La bajada de verdad, con su propio tramo en el informe de tiempos:
          * sin el, su coste se leeria dentro de la fase que la contenga. */

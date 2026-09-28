@@ -217,6 +217,15 @@ uint64_t used_surface_hash(const VxiModule &dep_vxi, const ImportRequest &req) {
         req.only_symbols.empty()) {
         return dep_vxi.abi_hash;
     }
+    /* Un `only` trae TODAS las plantillas del modulo, no solo las nombradas
+     * (ver `inject_only_import`), y sus cuerpos se compilan DENTRO de quien
+     * importa.  Lo que este ve incluye entonces cada plantilla y lo que sus
+     * cuerpos usan del modulo, que la huella por simbolos no mira.  Sin esto,
+     * cambiar el cuerpo de una plantilla no invalidaba a un modulo intermedio
+     * importado con `only`, y la cache servia su intermedio con la instancia
+     * VIEJA: otro resultado y ningun aviso.  La interfaz entera ya cubre las
+     * plantillas y, si las hay, las dependencias de quien las exporta. */
+    if (!dep_vxi.generic_templates.empty()) return dep_vxi.abi_hash;
     std::vector<std::string> names;
     names.reserve(req.only_symbols.size());
     for (const auto &e : req.only_symbols)

@@ -145,6 +145,10 @@ class Lowering {
     /// poder inspeccionar su codegen.  Ver @c
     /// CompileOptions::emit_comptime_fns.
     void set_emit_comptime_fns(bool on) { emit_comptime_fns_ = on; }
+    /// La marca del modulo (`module_path_tag`) que llevan los simbolos que la
+    /// bajada numera por modulo (`__lambda_`, `__spawn_`, `__rspawn_`), para
+    /// que no se confundan con los de otro modulo al fusionar.
+    void set_module_tag(std::string tag) { module_tag_ = std::move(tag); }
 
     /// C-3: registra los nombres de las funciones libres marcadas con
     /// @StringConcat / @StringEq.  Cuando no estan vacios, el lowering
@@ -5751,6 +5755,9 @@ class Lowering {
     /// diferentes.  Reusa @c pending_spawn_helpers_ para encolar los
     /// helpers; el flush a @c out_mod_ pasa al final de @c run().
     size_t lambda_counter_ = 0;
+
+    /// Marca del modulo en los simbolos numerados (ver @ref set_module_tag).
+    std::string module_tag_;
 
     /// contador per-funcion para nombres unicos de bloques del
     /// operador ternario (@c ter_then_<N> / @c ter_else_<N> /

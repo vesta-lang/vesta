@@ -1158,7 +1158,7 @@ ir::IrValueId Lowering::lower_new_expr(ast::NewExpr *e) {
 
 std::string Lowering::generate_lambda_helper(ast::LambdaExpr *e) {
     const size_t lam_idx = lambda_counter_++;
-    const std::string fn_name = ir::lambda_symbol(lam_idx);
+    const std::string fn_name = ir::lambda_symbol(module_tag_, lam_idx);
 
     // Salvar contexto del padre para poder restaurarlo despues.
     /* El guarda se lleva el contexto del padre y lo devuelve al salir. */

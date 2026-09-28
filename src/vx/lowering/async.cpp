@@ -265,7 +265,7 @@ static void collect_spawn_captures_in_stmt(
 std::string Lowering::generate_spawn_helper(ast::BlockStmt *body,
                                             const SourceLoc &loc) {
     const size_t spawn_idx = spawn_func_counter_++;
-    const std::string fn_name = ir::spawn_symbol(spawn_idx);
+    const std::string fn_name = ir::spawn_symbol(module_tag_, spawn_idx);
 
     // BugFix R3: pre-scan del body para detectar capturas (idents
     // libres que estan en el scope encerrante).  Cada captura se
@@ -454,7 +454,8 @@ std::string Lowering::generate_spawn_helper(ast::BlockStmt *body,
 std::string Lowering::generate_rspawn_helper(ast::BlockStmt *body,
                                              const SourceLoc &loc) {
     const size_t spawn_idx = spawn_func_counter_++;
-    const std::string fn_name = ir::remote_spawn_symbol(spawn_idx);
+    const std::string fn_name =
+        ir::remote_spawn_symbol(module_tag_, spawn_idx);
 
     // Guardar contexto del lowering del padre.
     /* El guarda se lleva el contexto del padre y lo devuelve al salir. */

@@ -188,7 +188,8 @@ std::vector<ImportRequest> collect_imports(
  * Es lo unico que le puede afectar de ella, y por eso es lo que se guarda en
  * su tabla de dependencias y lo que se recomprueba al reusar lo compilado.
  * Con `only` es la de esos simbolos; sin el (llano, `only *`, re-export), la
- * interfaz entera.
+ * interfaz entera.  Si la dependencia exporta plantillas, tambien la interfaz
+ * entera: `only` las trae todas y sus cuerpos se compilan en quien importa.
  *
  * @param dep_vxi Interfaz de la dependencia.
  * @param req     Como se importo.

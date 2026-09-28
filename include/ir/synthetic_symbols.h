@@ -244,21 +244,51 @@ inline constexpr const char kRemoteSpawnPrefix[] = "__rspawn_";
 /// Prefijo del ayudante que envuelve el cuerpo de una funcion `@Async`.
 inline constexpr const char kAsyncPrefix[] = "__async_";
 
-/// @brief El cuerpo de la lambda numero @p index.  @return El simbolo.
-inline std::string lambda_symbol(size_t index) {
-    return kLambdaPrefix + std::to_string(index);
+/**
+ * @brief Un simbolo numerado que el compilador inventa por MODULO.
+ *
+ * El contador es de cada modulo, asi que sin la marca del modulo dos modulos
+ * con una lambda dan los dos `__lambda_0`; la fusion toma dos funciones con el
+ * mismo nombre por la misma instancia y se queda con una, y la otra lambda
+ * pasa a ejecutar el cuerpo ajeno -- otro resultado, ningun aviso --.
+ *
+ * @param prefix      Prefijo de la familia (`__lambda_`, `__spawn_`...).
+ * @param module_tag  Marca del modulo (`module_path_tag`); vacia solo si no hay
+ *                    modulo con el que fusionarse.
+ * @param index       Numero dentro del modulo.
+ * @return El simbolo.
+ */
+inline std::string module_numbered_symbol(const char *prefix,
+                                          const std::string &module_tag,
+                                          size_t index) {
+    std::string out = prefix;
+    if (!module_tag.empty()) {
+        out += module_tag;
+        out += '_';
+    }
+    out += std::to_string(index);
+    return out;
+}
+
+/// @brief El cuerpo de la lambda numero @p index del modulo @p module_tag.
+/// @return El simbolo.
+inline std::string lambda_symbol(const std::string &module_tag, size_t index) {
+    return module_numbered_symbol(kLambdaPrefix, module_tag, index);
 }
 /// @brief Si @p name es el cuerpo de una lambda.  @return true si lo es.
 inline bool is_lambda_symbol(const std::string &name) noexcept {
     return has_synthetic_prefix(name, kLambdaPrefix);
 }
-/// @brief El cuerpo del `spawn` numero @p index.  @return El simbolo.
-inline std::string spawn_symbol(size_t index) {
-    return kSpawnPrefix + std::to_string(index);
+/// @brief El cuerpo del `spawn` numero @p index del modulo @p module_tag.
+/// @return El simbolo.
+inline std::string spawn_symbol(const std::string &module_tag, size_t index) {
+    return module_numbered_symbol(kSpawnPrefix, module_tag, index);
 }
-/// @brief El cuerpo del `spawn` remoto numero @p index.  @return El simbolo.
-inline std::string remote_spawn_symbol(size_t index) {
-    return kRemoteSpawnPrefix + std::to_string(index);
+/// @brief El cuerpo del `spawn` remoto numero @p index del modulo
+///        @p module_tag.  @return El simbolo.
+inline std::string remote_spawn_symbol(const std::string &module_tag,
+                                       size_t index) {
+    return module_numbered_symbol(kRemoteSpawnPrefix, module_tag, index);
 }
 /// @brief El ayudante asincrono de la funcion @p fn.  @return El simbolo.
 inline std::string async_helper_symbol(const std::string &fn) {

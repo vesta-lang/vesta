@@ -7,7 +7,6 @@
 
 #include "util/cache_paths.h" // el reparto de la cache por tipo y alcance
 #include "util/fnv.h"
-#include "vx/module/vxi_format.h" // vxi_fnv1a
 
 #include <cstdio>
 #include <filesystem>
@@ -50,12 +49,7 @@ namespace {
  */
 std::string cache_file_name(const std::string &source_path,
                             const std::string &tail) {
-    const uint64_t h = util::fnv_bytes(util::kFnvOffset, source_path.data(),
-                                       source_path.size());
-    char hex[17];
-    std::snprintf(hex, sizeof(hex), "%016llx",
-                  static_cast<unsigned long long>(h));
-    return std::string(hex) + "_" +
+    return module_path_tag(source_path) + "_" +
            std::filesystem::path(source_path).stem().string() + tail;
 }
 
@@ -94,6 +88,15 @@ struct PathsKeyHash {
 
 } // namespace
 
+std::string module_path_tag(const std::string &canonical_path) {
+    const uint64_t h = util::fnv_bytes(util::kFnvOffset, canonical_path.data(),
+                                       canonical_path.size());
+    char hex[17];
+    std::snprintf(hex, sizeof(hex), "%016llx",
+                  static_cast<unsigned long long>(h));
+    return std::string(hex);
+}
+
 const ModuleCachePaths &module_cache_paths(util::InternedName canonical_path,
                                            util::InternedName target_suffix) {
     /* Compartida entre los hilos que compilan modulos en paralelo, asi que va
@@ -124,12 +127,8 @@ std::string module_dump_path(const std::string &dir, const std::string &prefix,
                              const std::string &module_name,
                              const std::string &canonical_path,
                              const std::string &extension) {
-    const unsigned long long path_tag =
-        static_cast<unsigned long long>(
-            vxi_fnv1a(canonical_path.data(), canonical_path.size())) %
-        100000ULL;
-    return dir + "/" + prefix + module_name + "_" + std::to_string(path_tag) +
-           extension;
+    return dir + "/" + prefix + module_name + "_" +
+           module_path_tag(canonical_path) + extension;
 }
 
 } // namespace vx
