@@ -93,6 +93,27 @@ ast::MemberOrigin concept_origin(const ast::ConceptRef &ref,
 }
 
 /**
+ * @brief El concepto DA este metodo a quien lo declara: trae cuerpo y no lleva
+ *        `@No.Inject`.
+ * @param m El metodo del concepto.
+ * @return Cierto si se inyecta.
+ */
+bool gives_method(const ast::ClassMethodDecl *m) {
+    return m != nullptr && m->body != nullptr &&
+           m->injection == ast::ConceptInjection::Inject;
+}
+
+/**
+ * @brief El concepto DA este campo a quien lo declara (no lleva
+ *        `@No.Inject`; si lo lleva, el tipo tiene que escribirlo).
+ * @param f El campo del concepto.
+ * @return Cierto si se inyecta.
+ */
+bool gives_field(const ast::StructFieldDecl &f) {
+    return f.injection == ast::ConceptInjection::Inject;
+}
+
+/**
  * @brief Hay en @p ms un metodo con ese nombre y esa aridad?
  * @param ms    Los metodos.
  * @param name  El nombre.
@@ -176,14 +197,15 @@ void TypeChecker::inject_concept_defaults_into(ast::StructDecl &s) {
         ConceptSubst cs;
         if (!make_concept_subst(*cd, s.name, *ref, cs)) continue;
         for (const ast::StructFieldDecl &f : cd->fields) {
-            if (has_field(s.fields, f.name)) continue; // lo escrito gana
+            if (!gives_field(f) || has_field(s.fields, f.name))
+                continue; // no lo da, o lo escrito gana
             ast::StructFieldDecl nf =
                 vxgen::clone_struct_field_with_subst(f, cs.g);
             nf.origin = concept_origin(*ref, f.loc);
             s.fields.push_back(std::move(nf));
         }
         for (const auto &m : cd->methods) {
-            if (!m || !m->body) continue; // el exigido no trae nada que dar
+            if (!gives_method(m.get())) continue; // exigido, o `@No.Inject`
             if (has_method(s.methods, m->name, m->params.size())) continue;
             auto nm = vxgen::clone_method_with_subst(
                 *m, cs.g, vxgen::MethodBodyCopy::Clone);
@@ -205,13 +227,13 @@ void TypeChecker::inject_concept_defaults_into(ast::ClassDecl &c,
         ConceptSubst cs;
         if (!make_concept_subst(*cd, c.name, *ref, cs)) continue;
         for (const ast::StructFieldDecl &f : cd->fields) {
-            if (has_field(c.fields, f.name)) continue;
+            if (!gives_field(f) || has_field(c.fields, f.name)) continue;
             ast::ClassFieldDecl nf = class_field_from_concept(f, cs.g);
             nf.origin = concept_origin(*ref, f.loc);
             c.fields.push_back(std::move(nf));
         }
         for (const auto &m : cd->methods) {
-            if (!m || !m->body) continue;
+            if (!gives_method(m.get())) continue;
             /* Lo escrito en la clase o en una base suya gana: si no, el
              * metodo del concepto redefiniria el de la base. */
             if (has_method(c.methods, m->name, m->params.size())) continue;
@@ -249,7 +271,7 @@ void TypeChecker::inject_concept_defaults_into(ast::ImplDecl &im,
     if (it != index.end() && it->second->kind == ast::NodeKind::StructDecl)
         target_struct = static_cast<const ast::StructDecl *>(it->second);
     for (const auto &m : cd->methods) {
-        if (!m || !m->body) continue;
+        if (!gives_method(m.get())) continue;
         const size_t arity = m->params.size();
         if (has_method(im.methods, m->name, arity)) continue;
         if (target_struct != nullptr

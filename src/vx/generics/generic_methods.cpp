@@ -34,6 +34,7 @@
 #include "vx/type_checker.h"
 
 #include "vx/generics/generic_clone.h"
+#include "vx/generics/member_clone.h" // la unica copia de un metodo
 
 namespace vx {
 using namespace vxgen;
@@ -114,50 +115,32 @@ std::string TypeChecker::monomorphize_method(const std::string &container,
 
     GenSubst g{&tmpl->method_type_params, &targs};
 
-    // Clon del ClassMethodDecl con U sustituido por el tipo concreto.
-    auto cloned = std::make_unique<ast::ClassMethodDecl>();
-    cloned->loc = tmpl->loc;
+    // Clon del ClassMethodDecl con U sustituido por el tipo concreto: la
+    // misma copia que cualquier otro metodo.  Ya es concreto, asi que sin
+    // parametros de tipo ni cotas propias (se acaban de comprobar).
+    auto cloned =
+        vxgen::clone_method_with_subst(*tmpl, g, vxgen::MethodBodyCopy::Clone);
     cloned->name = mangled;
-    cloned->access = tmpl->access;
-    cloned->is_static = tmpl->is_static;
-    cloned->is_final = tmpl->is_final;
-    cloned->is_inline = tmpl->is_inline;
-    // is_constructor / is_destructor / advice / property: un metodo
-    // generico siempre es un metodo de instancia/estatico normal.
-    // method_type_params queda VACIO: el clon ya es concreto.
-    if (tmpl->return_type)
-        cloned->return_type = clone_type_with_subst(tmpl->return_type.get(), g);
-    for (const auto &p : tmpl->params) {
-        auto np = std::make_unique<ast::ParamDecl>();
-        np->loc = p->loc;
-        np->name = p->name;
-        np->is_expr_capture = p->is_expr_capture;
-        np->type = clone_type_with_subst(p->type.get(), g);
-        cloned->params.push_back(std::move(np));
-    }
-    if (tmpl->body) {
-        auto cb = clone_stmt(tmpl->body.get(), g);
-        if (cb && cb->kind == ast::NodeKind::BlockStmt)
-            cloned->body.reset(static_cast<ast::BlockStmt *>(cb.release()));
-    }
+    cloned->method_type_params.clear();
+    cloned->type_bounds.clear();
+    // Los @complexity/huella cuyo `when:` habla de U: aqui U ya es concreto.
+    resolve_pending_complexity_(*cloned, *tmpl, g, loc);
 
-    // Construir el ClassMethodInfo concreto y anyadirlo al layout AHORA,
-    // para que la resolucion de la llamada que dispara esta
+    // Al layout AHORA, para que la resolucion de la llamada que dispara esta
     // monomorphizacion lo encuentre (reescribiremos field_name al mangled).
-    ClassMethodInfo mi;
-    mi.name = mangled;
-    mi.is_static = cloned->is_static;
-    mi.is_final = cloned->is_final;
-    mi.is_inline = cloned->is_inline;
-    mi.defining_class = container;
-    mi.source_file = tmpl->loc.file();
-    mi.source_line = tmpl->loc.line;
-    mi.return_type = cloned->return_type
-                         ? type_from_node(cloned->return_type.get())
-                         : Type{PrimitiveKind::VOID};
-    mi.param_types.reserve(cloned->params.size());
-    for (const auto &p : cloned->params)
-        mi.param_types.push_back(type_from_node(p->type.get()));
+    if (add_method_late(container,
+                        is_struct ? PrimitiveKind::STRUCT : PrimitiveKind::CLASS,
+                        std::move(cloned)) == nullptr)
+        return std::string();
+    return mangled;
+}
+
+const ClassMethodInfo *
+TypeChecker::add_method_late(const std::string &container, PrimitiveKind kind,
+                             std::unique_ptr<ast::ClassMethodDecl> method) {
+    const bool is_struct = kind == PrimitiveKind::STRUCT;
+    ClassMethodInfo mi = make_method_info(*method, container);
+    std::vector<ClassMethodInfo> *methods = nullptr;
 
     /* Entra al layout y se CIERRA el recien llegado: aparece DESPUES del cierre
      * del tipo, asi que sin esto se quedaba sin simbolo y quien lo emitia tenia
@@ -167,26 +150,26 @@ std::string TypeChecker::monomorphize_method(const std::string &container,
      *
      * Y se le apunta en QUE hueco cae, como a cualquier otro metodo: es por ahi
      * por donde quien emite el cuerpo llega a su simbolo. */
+    size_t slot = 0;
     if (is_struct) {
         auto it = struct_layouts_.find(container);
-        if (it == struct_layouts_.end()) return std::string();
+        if (it == struct_layouts_.end()) return nullptr;
         // Los structs no usan vtable (dispatch estatico); vtable_index
         // queda en 0 (irrelevante).
-        const size_t slot = it->second.methods.size();
-        cloned->layout_slot = static_cast<uint32_t>(slot);
-        it->second.methods.push_back(std::move(mi));
-        close_method(it->second.methods, slot, container, /*ctor_arity=*/true);
+        methods = &it->second.methods;
+        slot = methods->size();
     } else {
         auto it = class_layouts_.find(container);
-        if (it == class_layouts_.end()) return std::string();
+        if (it == class_layouts_.end()) return nullptr;
         // Metodo PROPIO nuevo al final: vtable_index = tamano actual,
         // identico a como collect asigna un metodo propio recien anyadido.
-        const size_t slot = it->second.methods.size();
+        methods = &it->second.methods;
+        slot = methods->size();
         mi.vtable_index = static_cast<uint32_t>(slot);
-        cloned->layout_slot = mi.vtable_index;
-        it->second.methods.push_back(std::move(mi));
-        close_method(it->second.methods, slot, container, /*ctor_arity=*/false);
     }
+    method->layout_slot = static_cast<uint32_t>(slot);
+    methods->push_back(std::move(mi));
+    close_method(*methods, slot, container, /*ctor_arity=*/is_struct);
 
     // Encolar para anyadir al AST del contenedor + chequear el body en el
     // drenado posterior (no aqui, para no invalidar el iterador del bucle
@@ -194,9 +177,9 @@ std::string TypeChecker::monomorphize_method(const std::string &container,
     PendingMethodMono pm;
     pm.container = container;
     pm.is_struct = is_struct;
-    pm.method = std::move(cloned);
+    pm.method = std::move(method);
     pending_method_monos_.push_back(std::move(pm));
-    return mangled;
+    return &(*methods)[slot];
 }
 
 TypeChecker::GenericMethodCall TypeChecker::try_monomorphize_method_call(
@@ -310,6 +293,18 @@ void TypeChecker::drain_pending_method_monos() {
                     m_raw = cd->methods.back().get();
                     break;
                 }
+            }
+            /* Un tipo IMPORTADO no tiene arbol en este modulo: el metodo se
+             * aloja en un `impl` sintetico sobre el, que es como se emiten los
+             * metodos que este modulo anyade a un tipo de otro.  Antes se
+             * tiraba aqui en silencio, y el simbolo faltaba al enlazar. */
+            if (m_raw == nullptr && pm.method) {
+                auto host = std::make_unique<ast::ImplDecl>();
+                host->loc = pm.method->loc;
+                host->target_type = pm.container;
+                host->methods.push_back(std::move(pm.method));
+                m_raw = host->methods.back().get();
+                mod_.decls.push_back(std::move(host));
             }
             if (!m_raw || !m_raw->body) continue;
 

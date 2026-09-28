@@ -168,19 +168,55 @@ concept Pequeno<T> {
 	i64 tam = type.size<T>();
 	return tam <= 8;
 }
-// Cumplirlo por FORMA, sin declararlo: basta con el campo y el exigido; los
-// metodos por defecto no se exigen (ni se reciben).
+// Cumplirlo por FORMA, sin declararlo: basta con el campo y el exigido.  Los
+// metodos por defecto no se exigen, pero se pueden LLAMAR: se dan para ese
+// tipo en cuanto se usan, con `this` por referencia como cualquier metodo.
 struct Suelto {
 	i64 total;
 
 	i64 cuantos() => this.total;
+	void anyadir(i64 n) { this.total = this.total + n; }
 }
 i64 cuenta<C: Contable>(C c) => c.cuantos();
+// Los argumentos del concepto se DEDUCEN de los miembros del tipo: `base` es
+// i64, asi que `Medida<Regla, i64>`, y `tope()` devuelve i64.
+struct Regla {
+	i64 base;
+}
+concept Acumula<Self> {
+	i64 cuantos();
+	void anyadir(i64 n);
+	void doblar() { this.anyadir(this.cuantos()); } // cambia el receptor
+}
+
+// `@No.Inject`: lo que el concepto NO da a quien lo declara.  Un campo
+// marcado lo tiene que escribir el tipo; un metodo marcado no se copia al
+// tipo, pero sigue estando para quien lo llame (se da entonces).
+concept Medible<Self> {
+	i64 ancho;
+	@No.Inject
+	i64 alto;
+
+	i64 area() => this.ancho * this.alto;
+	@No.Inject
+	i64 perimetro() => 2 * (this.ancho + this.alto);
+}
+struct Lienzo : Medible {
+	i64 alto; // el concepto no lo da: lo escribe el tipo
+}
 
 i64 prueba_defaults() {
+	Lienzo lz = {.ancho = 3, .alto = 4};
+	if (lz.area() != 12 || lz.perimetro() != 14) return 12;
 	if (!Pequeno<i64>() || Pequeno<Plano>()) return 6;
 	Suelto su = {.total = 9};
 	if (cuenta(su) != 9) return 7;
+	if (su.vacio() || su.doble() != 18) return 8; // por forma: de Contable
+	if (vacio(su)) return 11;                     // la misma llamada escrita del otro modo
+	Regla rg = {.base = 21};
+	if (rg.tope() != 42) return 9; // E deducido del campo
+	su.doblar();                   // Acumula: el receptor se modifica de verdad
+	if (su.total != 18) return 10;
 	Saco s = {.total = 3};
 	if (s.cuantos() != 3 || s.vacio() || s.doble() != 100) return 1;
 	Saco otro = s.mismo();

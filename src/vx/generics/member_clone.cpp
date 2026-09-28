@@ -50,6 +50,7 @@ clone_method_with_subst(const ast::ClassMethodDecl &m, const GenSubst &g,
     nm->is_final = m.is_final;
     nm->is_override = m.is_override;
     nm->origin = m.origin;
+    nm->injection = m.injection;
     nm->is_virtual = m.is_virtual;
     // Un constructor `comptime` que se hereda o se instancia sigue siendolo, y
     // sigue siendo un CONSTRUCTOR: sin las dos marcas el clon se trataba como
@@ -119,6 +120,7 @@ ast::StructFieldDecl clone_struct_field_with_subst(const ast::StructFieldDecl &f
     nf.default_init = clone_expr(f.default_init.get(), g);
     nf.is_comptime = f.is_comptime;
     nf.origin = f.origin;
+    nf.injection = f.injection;
     return nf;
 }
 

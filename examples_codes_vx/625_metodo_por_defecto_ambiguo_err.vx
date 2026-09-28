@@ -1,0 +1,23 @@
+namespace ejemplos.metodo_por_defecto_ambiguo_err;
+
+// `Punto` cumple por forma DOS conceptos que dan `hola()` por defecto, cada
+// uno con su cuerpo: elegir uno en silencio seria adivinar (VX2163).
+concept Saluda {
+	i64 x;
+
+	i64 hola() => 1;
+}
+concept Grita {
+	i64 x;
+
+	i64 hola() => 2;
+}
+
+struct Punto {
+	i64 x;
+}
+
+i32 main() {
+	Punto p = {.x = 0};
+	return (i32)p.hola();
+}

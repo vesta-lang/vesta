@@ -1152,6 +1152,21 @@ class Parser {
      */
     [[nodiscard]] size_t peek_skip_concept_member_(size_t at) const;
 
+    /**
+     * @brief Lee el nombre de una anotacion (con @c current_ en el primer
+     *        IDENT tras el `@`): `Virtual`, `No.Inject`.
+     * @return El nombre entero, partes unidas por punto.
+     */
+    std::string read_annotation_name_();
+
+    /**
+     * @brief Salta, sin consumir, el nombre de una anotacion que empieza en
+     *        la posicion de lookahead @p at (su primer IDENT).
+     * @param at Posicion del primer IDENT.
+     * @return La posicion tras el nombre.
+     */
+    [[nodiscard]] size_t peek_skip_annotation_name_(size_t at) const;
+
     std::unique_ptr<ast::StructDecl> parse_inline_anon_aggregate_();
 
     /// Declarador de PUNTERO A FUNCION estilo C: `R (*name)(params)`.  Tras

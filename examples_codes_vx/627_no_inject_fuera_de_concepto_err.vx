@@ -1,0 +1,11 @@
+namespace ejemplos.no_inject_fuera_de_concepto_err;
+
+// `@No.Inject` dice que un miembro de un CONCEPTO no se da a quien lo
+// declara.  En un struct no hay nada que dar: la anotacion existe pero ese
+// sitio no la admite (VXP094).
+struct Punto {
+	@No.Inject
+	i64 x;
+}
+
+i32 main() => 0;

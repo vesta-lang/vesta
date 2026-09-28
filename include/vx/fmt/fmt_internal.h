@@ -113,6 +113,47 @@ inline TokenKind kind_of(const Piece &p) {
     return static_cast<TokenKind>(p.kind);
 }
 
+/**
+ * @brief Donde acaba el NOMBRE de una anotacion que empieza en @p name (la
+ *        pieza que sigue al `@`).
+ *
+ * Un nombre de anotacion puede llevar partes unidas por punto
+ * (`@No.Inject`), igual que cualquier otro nombre del lenguaje.  Cada regla
+ * que miraba "el nombre tras el `@`" daba por hecho que era UNA pieza, y la
+ * que pone la anotacion en su propia linea partia `@No.Inject` en `@No` y
+ * `.Inject`.
+ *
+ * @param pieces Las piezas.
+ * @param name   Indice de la primera pieza del nombre.
+ * @return Indice de la ULTIMA pieza del nombre.
+ */
+inline size_t annotation_name_end(const std::vector<Piece> &pieces,
+                                  size_t name) {
+    size_t k = name;
+    while (k + 2 < pieces.size() && kind_of(pieces[k + 1]) == TokenKind::DOT &&
+           kind_of(pieces[k + 2]) == TokenKind::IDENTIFIER)
+        k += 2;
+    return k;
+}
+
+/**
+ * @brief Es el `(` de @p lparen el que abre los argumentos de una anotacion
+ *        (`@Nombre(`, `@No.Algo(`)?
+ * @param pieces Las piezas.
+ * @param lparen Indice del `(`.
+ * @return Cierto si delante hay `@` y un nombre de anotacion.
+ */
+inline bool opens_annotation_args(const std::vector<Piece> &pieces,
+                                  size_t lparen) {
+    if (lparen < 2 || kind_of(pieces[lparen - 1]) != TokenKind::IDENTIFIER)
+        return false;
+    size_t k = lparen - 1; // la ultima parte del nombre
+    while (k >= 2 && kind_of(pieces[k - 1]) == TokenKind::DOT &&
+           kind_of(pieces[k - 2]) == TokenKind::IDENTIFIER)
+        k -= 2;
+    return k >= 1 && kind_of(pieces[k - 1]) == TokenKind::AT;
+}
+
 /* `is_type_keyword` ya no vive aqui: es una propiedad del TOKEN y esta en
  * `vx/token.h`, junto al enum.  La tenian el formateador y el parser por
  * separado, que es una lista de tipos del lenguaje escrita dos veces. */

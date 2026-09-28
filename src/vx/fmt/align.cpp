@@ -691,9 +691,7 @@ std::vector<uint32_t> compute_alignment(const std::vector<Piece> &pieces,
             } else if (kind == TokenKind::LPAREN) {
                 ++paren_depth;
                 // `@Nombre(`: dentro van etiquetas, no expresiones.
-                if (annot_at < 0 && k >= 2 &&
-                    kind_of(pieces[k - 1]) == TokenKind::IDENTIFIER &&
-                    kind_of(pieces[k - 2]) == TokenKind::AT)
+                if (annot_at < 0 && opens_annotation_args(pieces, k))
                     annot_at = paren_depth;
             } else if (kind == TokenKind::RPAREN) {
                 if (annot_at == paren_depth) annot_at = -1;

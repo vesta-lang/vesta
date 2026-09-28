@@ -214,6 +214,8 @@ const CatEntry kEntries[] = {
     {"VX2159", {"'{0}' declares ': {1}', and '{1}' is neither a known concept nor a base it can extend", "'{0}' declara ': {1}', y '{1}' no es un concepto conocido ni una base que pueda extender"}},
     {"VX2160", {"'{0}' does not satisfy the concept '{1}' it declares (directly, or inherited from an @Abstract base)", "'{0}' no cumple el concepto '{1}' que declara (directamente, o heredado de una base @Abstract)"}},
     {"VX2161", {"'{0}' adds methods to '{1}', and '{1}' is not a known struct or class", "'{0}' anyade metodos a '{1}', y '{1}' no es un struct ni una clase conocidos"}},
+    {"VX2162", {"'{1}' has the shape of '{2}', which gives '{0}', but '{3}' cannot be deduced from its members: declare it, `: {2}<...>`, to say which", "'{1}' tiene la forma de '{2}', que da '{0}', pero '{3}' no se deduce de sus miembros: declaralo, `: {2}<...>`, para decir cual"}},
+    {"VX2163", {"'{0}' on '{1}' is ambiguous: it is a default method of several concepts it satisfies ({2}); declare the one you mean, or write '{0}' in the type", "'{0}' sobre '{1}' es ambiguo: es metodo por defecto de varios conceptos que cumple ({2}); declara el que quieres, o escribe '{0}' en el tipo"}},
     {"VX3001", {"{0} of {1} bytes is outside {2}: the object reserves [0, {3}) and the access is [{4}, {5})", "{0} de {1} bytes fuera de {2}: el objeto reserva [0, {3}) y el acceso es [{4}, {5})"}},
     {"VX3002", {"write", "escritura"}},
     {"VX3003", {"read", "lectura"}},
@@ -896,7 +898,7 @@ const CatEntry kEntries[] = {
     {"use_def.unused", {"'{2}' is never used", "'{2}' no se usa en ningun sitio"}},
     {"value_shape.none", {"it has no values with components", "no tiene valores con componentes"}},
 };
-const int kEntryCount = 875;
+const int kEntryCount = 877;
 
 } // namespace
 

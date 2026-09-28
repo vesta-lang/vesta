@@ -2019,6 +2019,21 @@ enum class MemberOriginKind : uint8_t {
 };
 
 /**
+ * @enum ConceptInjection
+ * @brief Si un miembro de un concepto se da al tipo que lo declara.
+ *
+ * Por defecto si: el concepto trae el campo o el metodo con su cuerpo y quien
+ * lo declara lo recibe.  `@No.Inject` lo deja fuera: un campo pasa a ser algo
+ * que el tipo tiene que escribir, y un metodo por defecto no se copia al tipo
+ * (sigue estando para quien lo llame: se instancia entonces, como para quien
+ * cumple por forma).
+ */
+enum class ConceptInjection : uint8_t {
+    Inject,   ///< se da al tipo que declara el concepto
+    NoInject, ///< `@No.Inject`: no se copia al tipo
+};
+
+/**
  * @struct MemberOrigin
  * @brief De donde VIENE un campo o un metodo que el tipo no escribio.
  *
@@ -2861,6 +2876,8 @@ struct StructFieldDecl {
     bool is_comptime = false;
     /// De donde viene si el struct no lo escribio (base o concepto).
     MemberOrigin origin;
+    /// En un CONCEPTO: si se da al tipo que lo declara (`@No.Inject`).
+    ConceptInjection injection = ConceptInjection::Inject;
 };
 
 /**
@@ -3140,6 +3157,8 @@ struct ClassMethodDecl : Node {
      * que no era, sin una queja.
      */
     MemberOrigin origin;
+    /// En un CONCEPTO: si se da al tipo que lo declara (`@No.Inject`).
+    ConceptInjection injection = ConceptInjection::Inject;
     /// `@Virtual` (structs): el metodo se despacha dinamicamente por vtable
     /// (modelo AOT: vtable estatica + devirtualizacion a llamada directa cuando
     /// el tipo concreto se conoce).  Opt-in por metodo; el resto es estatico.

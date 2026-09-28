@@ -55,6 +55,7 @@ const char *const k_annotations[] = {
     "Log",            ///< inyecta el registro
     "Macro",          ///< se expande al compilar
     "Naked",          ///< sin prologo ni epilogo: el cuerpo se emite tal cual
+    ann::kNoInject,      ///< miembro de concepto que no se da a quien lo declara
     "NoArgsConstructor", ///< genera el constructor vacio
     "NoExcept",          ///< la funcion no lanza
     "NoExceptions",      ///< el modulo entero sin excepciones

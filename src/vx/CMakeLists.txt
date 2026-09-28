@@ -102,6 +102,8 @@ add_library(vx_lib STATIC
     # `concept N { ... }` en sus tres formas; los miembros, con el cuerpo de
     # struct.
     parser/concept_decl.cpp
+    # El nombre de una anotacion tras el `@`, con punto (`@No.Inject`).
+    parser/annotation_name.cpp
     # Que declara el modulo, indexado UNA vez.  Buscar una declaracion por
     # nombre estaba escrito a mano, con un recorrido del modulo entero, en 33
     # sitios del frontend; varios corren por cada identificador del programa.
@@ -307,6 +309,8 @@ add_library(vx_lib STATIC
     checker/member_host.cpp
     # Lo que un concepto inyecta en el tipo que declara cumplirlo.
     checker/concept_defaults.cpp
+    # Y lo que da a quien lo cumple por forma, al llamarlo.
+    checker/concept_shape_defaults.cpp
     # Fase 4 interop C: generador de header C publico (vx --emit-header).
     c_header_gen.cpp
     lombok.cpp

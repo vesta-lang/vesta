@@ -601,6 +601,16 @@ void check_field_shapes() {
                                       "}\n");
     check(anotacion.find("@Override") != std::string::npos,
           "una anotacion se queda como esta");
+
+    /* Un nombre de anotacion con PUNTO es uno solo: `@No.Inject` va entero en
+     * su linea, no partido en `@No` y `.Inject`. */
+    const std::string con_punto = fmt("concept C<Self> {\n"
+                                      "@No.Inject i64 alto;\n"
+                                      "}\n");
+    check(con_punto.find("@No.Inject\n") != std::string::npos,
+          "`@No.Inject` va entero en su linea");
+    check(con_punto.find("@No\n") == std::string::npos,
+          "`@No.Inject` no se parte por el punto");
 }
 
 /**

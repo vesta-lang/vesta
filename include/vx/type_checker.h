@@ -1581,6 +1581,39 @@ class TypeChecker {
     /// @param s El struct (concreto).
     void inject_concept_defaults_into(ast::StructDecl &s);
 
+    /**
+     * @enum ConceptDefaultOutcome
+     * @brief Que paso al buscar un metodo por defecto de concepto para un
+     *        tipo que no tiene el metodo.
+     */
+    enum class ConceptDefaultOutcome : uint8_t {
+        NotApplicable, ///< ningun concepto que cumpla lo da: el metodo falta
+        Found,         ///< instanciado y anyadido al tipo
+        Reported,      ///< lo hay pero no se puede usar; el error ya se dijo
+    };
+
+    /**
+     * @brief El metodo por defecto de un concepto para un tipo que lo cumple
+     *        por FORMA sin declararlo: lo instancia como metodo del tipo, con
+     *        los argumentos del concepto deducidos de sus miembros.
+     *
+     * Se llama cuando el tipo no tiene el metodo y ninguna funcion libre lo
+     * toma (lo escrito gana).  Dos conceptos que lo den a la vez: VX2163.  Un
+     * argumento que no sale de la forma del tipo: VX2162.
+     *
+     * @param recv  El tipo del receptor.
+     * @param name  El metodo.
+     * @param arity Sus argumentos (sin el receptor).
+     * @param loc   La llamada.
+     * @param out   Recibe la ficha del metodo si se instancio.
+     * @return Que paso.
+     */
+    ConceptDefaultOutcome concept_default_for(const Type &recv,
+                                              const std::string &name,
+                                              size_t arity,
+                                              const SourceLoc &loc,
+                                              const ClassMethodInfo *&out);
+
     /// Los structs y clases declarados en el modulo, por nombre.  Antes de
     /// montar los layouts es la unica forma de ver los metodos de un tipo
     /// local.
@@ -1741,6 +1774,24 @@ class TypeChecker {
                                     const ast::ClassMethodDecl *tmpl,
                                     const std::vector<Type> &targs,
                                     const SourceLoc &loc);
+
+    /**
+     * @brief Anyade a un tipo YA montado un metodo que nace despues: al layout
+     *        ahora (con su ficha, su hueco y su simbolo), y a la cola para
+     *        ponerlo en el arbol y comprobar su cuerpo en el drenado.
+     *
+     * Lo usan la instancia de un metodo generico y el metodo por defecto de
+     * un concepto que se da a quien lo cumple por forma: los dos son un
+     * metodo concreto que aparece a mitad de la comprobacion.
+     *
+     * @param container El tipo (clave de su layout).
+     * @param kind      @c STRUCT o @c CLASS.
+     * @param method    El metodo, ya concreto.
+     * @return Su ficha en el layout, o @c nullptr si el tipo no tiene layout.
+     */
+    const ClassMethodInfo *
+    add_method_late(const std::string &container, PrimitiveKind kind,
+                    std::unique_ptr<ast::ClassMethodDecl> method);
 
     /**
      * @brief Drena @c pending_method_monos_: anyade cada metodo clonado al

@@ -1,0 +1,19 @@
+namespace ejemplos.concepto_argumento_sin_deducir_err;
+
+// `Punto` tiene la forma de `Cero` (el campo `n`), pero `E` solo aparece en el
+// metodo por defecto: nada de `Punto` dice que es `E`, asi que `cero()` no se
+// puede dar sin que el tipo lo declare (VX2162).
+concept Cero<Self, E> {
+	i64 n;
+
+	E cero() => (E) 0;
+}
+
+struct Punto {
+	i64 n;
+}
+
+i32 main() {
+	Punto p = {.n = 1};
+	return (i32)p.cero();
+}

@@ -356,9 +356,7 @@ void split_half_wrapped(const std::vector<Piece> &pieces, const Layout &layout,
          * intermedio no ayuda a nadie. */
         const TokenKind k = kind_of(pieces[i]);
         if (k != TokenKind::LPAREN) continue;
-        if (i < 2 || kind_of(pieces[i - 1]) != TokenKind::IDENTIFIER ||
-            kind_of(pieces[i - 2]) != TokenKind::AT)
-            continue;
+        if (!opens_annotation_args(pieces, i)) continue;
 
         // Buscar el cierre de esta lista.
         int depth = 0;
@@ -441,7 +439,9 @@ std::vector<Break> compute_breaks(const std::vector<Piece> &pieces,
          * medio de su declaracion y forma parte de ella (`R76`), asi que
          * romperlo ahi partiria el campo por la mitad. */
         if (kind_of(pieces[i]) == TokenKind::AT && i + 1 <= last) {
-            size_t after = i + 1; // el nombre de la anotacion
+            // El nombre de la anotacion, entero (`@No.Inject`).
+            size_t after = annotation_name_end(pieces, i + 1);
+            if (after > last) after = last;
             if (after + 1 <= last &&
                 kind_of(pieces[after + 1]) == TokenKind::LPAREN) {
                 // Saltar sus argumentos.

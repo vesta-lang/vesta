@@ -1963,9 +1963,11 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
             /* El nombre y su posicion, guardados antes de consumirlo: los
              * necesitan tanto el mensaje de las retiradas como el de las que
              * no existen, y los dos tienen que apuntar a la MARCA. */
-            const std::string ann_name = current_.lexeme;
             const SourceLoc ann_loc = current_.loc;
-            (void)consume();
+            /* Entero, con sus partes: `@No.Inject` es UN nombre.  Leyendo solo
+             * la primera, se diria que `@No` no existe y el `.Inject` de
+             * detras romperia la declaracion. */
+            const std::string ann_name = read_annotation_name_();
             if (is_retired_hook) {
                 /* El reemplazo se nombra entero.  Para el del asignador son
                  * DOS, porque el rol ya no se adivina por el tipo de retorno
@@ -6172,6 +6174,7 @@ void Parser::parse_struct_body_(ast::StructDecl &sd, MemberBodyOwner owner) {
         // anotacion que no es contrato, asi que alternamos hasta agotar ambos.
         bool annot_virtual = false;
         bool annot_override = false;
+        ast::ConceptInjection injection = ast::ConceptInjection::Inject;
         for (;;) {
             parse_member_contracts_(mc);
             if (current_.kind == TokenKind::AT &&
@@ -6203,10 +6206,19 @@ void Parser::parse_struct_body_(ast::StructDecl &sd, MemberBodyOwner owner) {
                 lex_.peek_at(0).kind == TokenKind::IDENTIFIER) {
                 (void)consume(); // '@'
                 const SourceLoc aloc = current_.loc;
-                const std::string an = consume().lexeme;
+                const std::string an = read_annotation_name_();
+                /* `@No.Inject`: solo en un concepto, donde dice que el
+                 * miembro no se da a quien declara el concepto. */
+                if (an == ann::kNoInject && owner == MemberBodyOwner::Concept) {
+                    injection = ast::ConceptInjection::NoInject;
+                    continue;
+                }
                 if (annotation_exists(an))
                     diags_.diag(aloc, DiagLevel::ERR, "VXP094",
-                                {an, "`@Virtual` / `@Override`"});
+                                {an, owner == MemberBodyOwner::Concept
+                                         ? "`@Virtual` / `@Override` / "
+                                           "`@No.Inject`"
+                                         : "`@Virtual` / `@Override`"});
                 else
                     (void)check_annotation_name_(an, aloc);
                 /* Y sus argumentos, si los lleva, para que el error sea UNO. */
@@ -6462,6 +6474,7 @@ void Parser::parse_struct_body_(ast::StructDecl &sd, MemberBodyOwner owner) {
             m->is_comptime = is_comptime_member; // `comptime` metodo
             m->is_virtual = annot_virtual; // `@Virtual`: dispatch dinamico
             m->is_override = annot_override;
+            m->injection = injection; // `@No.Inject` (solo en un concepto)
             m->method_type_params = method_tparams;
             m->type_bounds = method_tbounds;
             (void)consume(); // '('
@@ -6501,6 +6514,7 @@ void Parser::parse_struct_body_(ast::StructDecl &sd, MemberBodyOwner owner) {
         f.loc = mloc;
         f.dir = campo_dir;
         f.is_static = is_static; // `static <T> nombre;` -> storage por-tipo
+        f.injection = injection; // `@No.Inject` (solo en un concepto)
         f.is_comptime =
             is_comptime_member; // `comptime T campo` -> solo compile-time
         // Clon del tipo BASE (sin dims de array) para el multi-declarador C

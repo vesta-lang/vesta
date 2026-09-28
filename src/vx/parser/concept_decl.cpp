@@ -98,7 +98,7 @@ bool Parser::concept_body_declares_members_() const {
         /* Anotaciones y modificadores delante del miembro. */
         if (tk == TokenKind::AT &&
             ml.peek_at(k + 1).kind == TokenKind::IDENTIFIER) {
-            k += 2;
+            k = peek_skip_annotation_name_(k + 1); // `@No.Inject` entero
             if (ml.peek_at(k).kind == TokenKind::LPAREN) {
                 int depth = 0;
                 do {

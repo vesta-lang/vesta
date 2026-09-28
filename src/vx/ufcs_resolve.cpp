@@ -870,8 +870,19 @@ bool TypeChecker::try_ufcs_reverse(ast::CallExpr *e, const ast::IdentExpr *id) {
      * llamarla.  Preguntar solo por el layout hacia decir que el tipo no tiene
      * ese miembro, que es FALSO: lo tiene, es una plantilla. */
     if (find_instance_method(*ms, member) == nullptr &&
-        find_generic_method_template(norm.struct_name, member) == nullptr)
-        return false;
+        find_generic_method_template(norm.struct_name, member) == nullptr) {
+        /* Ni escrito ni plantilla: puede darlo un concepto que el tipo cumple
+         * por forma, igual que por el punto (`vacio(s)` es `s.vacio()`). */
+        const ClassMethodInfo *given = nullptr;
+        switch (concept_default_for(norm, member, e->args.size() - 1, e->loc,
+                                    given)) {
+        case ConceptDefaultOutcome::NotApplicable: return false;
+        case ConceptDefaultOutcome::Reported:
+            e->result_type = Type{PrimitiveKind::COUNT}; // ya se dijo
+            return true;
+        case ConceptDefaultOutcome::Found: break;
+        }
+    }
 
     /* Encontrado: el nodo se convierte en la OTRA grafia.  A partir de aqui no
      * hay nada propio de esta direccion: los argumentos por nombre, la

@@ -2993,6 +2993,19 @@ es = "'{0}' no cumple el concepto '{1}' que declara (directamente, o heredado de
 en = "'{0}' adds methods to '{1}', and '{1}' is not a known struct or class"
 es = "'{0}' anyade metodos a '{1}', y '{1}' no es un struct ni una clase conocidos"
 
+# `x.m()` con `m` metodo por defecto de un concepto que el tipo de `x` tiene
+# por forma, pero un argumento del concepto no sale de sus miembros.  {0} el
+# metodo, {1} el tipo, {2} el concepto, {3} el parametro que no se deduce.
+[VX2162]
+en = "'{1}' has the shape of '{2}', which gives '{0}', but '{3}' cannot be deduced from its members: declare it, `: {2}<...>`, to say which"
+es = "'{1}' tiene la forma de '{2}', que da '{0}', pero '{3}' no se deduce de sus miembros: declaralo, `: {2}<...>`, para decir cual"
+
+# `x.m()` con `m` metodo por defecto de VARIOS conceptos que el tipo cumple por
+# forma.  {0} el metodo, {1} el tipo, {2} los conceptos.
+[VX2163]
+en = "'{0}' on '{1}' is ambiguous: it is a default method of several concepts it satisfies ({2}); declare the one you mean, or write '{0}' in the type"
+es = "'{0}' sobre '{1}' es ambiguo: es metodo por defecto de varios conceptos que cumple ({2}); declara el que quieres, o escribe '{0}' en el tipo"
+
 # Escribir a traves de un prestamo compartido.  {0} el tipo del prestamo.
 [VX2153]
 en = "'{0}' is a shared borrow: it only reads, and this writes through it.  Take it with `lend_mut` to write"

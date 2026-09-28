@@ -1,0 +1,16 @@
+namespace ejemplos.no_inject_campo_falta_err;
+
+// Un campo `@No.Inject` no se da a quien declara el concepto: lo tiene que
+// escribir el tipo.  `Lienzo` no lo escribe, asi que no cumple lo que
+// declara (VX2160).
+concept Medible<Self> {
+	i64 ancho;
+	@No.Inject
+	i64 alto;
+}
+
+struct Lienzo : Medible {
+	i64 x;
+}
+
+i32 main() => 0;

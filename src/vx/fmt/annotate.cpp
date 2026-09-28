@@ -627,7 +627,7 @@ std::vector<Role> annotate_roles(const std::vector<Piece> &pieces) {
         }
 
         if (k == TokenKind::AT && i + 1 < pieces.size()) {
-            size_t t = i + 1; // el nombre de la anotacion
+            size_t t = annotation_name_end(pieces, i + 1); // `No.Inject` entero
             if (t + 1 < pieces.size() &&
                 kind_of(pieces[t + 1]) == TokenKind::LPAREN) {
                 int prof = 0;
@@ -1056,8 +1056,7 @@ std::vector<Role> annotate_roles(const std::vector<Piece> &pieces) {
             /* `@Nombre(`: los parentesis de una anotacion.  Se anota su
              * profundidad para saber cuando se cierra, porque dentro puede
              * haber otros parentesis que no son suyos (`O(n)`). */
-            if (i >= 2 && kind_of(pieces[i - 1]) == TokenKind::IDENTIFIER &&
-                kind_of(pieces[i - 2]) == TokenKind::AT) {
+            if (opens_annotation_args(pieces, i)) {
                 annot_depth = paren_depth;
                 label_seen = false;
             }

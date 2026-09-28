@@ -319,11 +319,9 @@ std::vector<Rewrite> apply_token_rules(std::vector<Piece> &pieces) {
          * `@Override()` y `@Override` son la misma anotacion -- comprobado
          * ejecutando las dos --, y los parentesis vacios solo anaden ruido en
          * la linea que mas se lee de un metodo. */
-        if (kind_of(pieces[i]) == TokenKind::LPAREN && i >= 2 &&
-            i + 1 < pieces.size() &&
+        if (kind_of(pieces[i]) == TokenKind::LPAREN && i + 1 < pieces.size() &&
             kind_of(pieces[i + 1]) == TokenKind::RPAREN &&
-            kind_of(pieces[i - 1]) == TokenKind::IDENTIFIER &&
-            kind_of(pieces[i - 2]) == TokenKind::AT) {
+            opens_annotation_args(pieces, i)) {
             pieces[i].drop = true;
             pieces[i + 1].drop = true;
             done.push_back({RewriteKind::DropEmptyParens, pieces[i].offset});

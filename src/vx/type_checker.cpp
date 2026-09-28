@@ -17072,8 +17072,19 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
                 if (base_denotes_type(fa->base.get()) &&
                     try_ufcs_type_receiver(e, fa, bt.struct_name))
                     return e->result_type;
-                return report_method_missing(e, fa, slay.fields, bt.struct_name,
-                                             "struct", funcptr_field_call);
+                /* O un concepto que el tipo cumple por forma lo da por
+                 * defecto: se instancia para el y sigue como un metodo. */
+                const ConceptDefaultOutcome cdo =
+                    e->has_receiver_hole
+                        ? ConceptDefaultOutcome::NotApplicable
+                        : concept_default_for(bt, fa->field_name,
+                                              e->args.size(), e->loc, smtd);
+                if (cdo == ConceptDefaultOutcome::Reported)
+                    return Type{PrimitiveKind::COUNT};
+                if (cdo == ConceptDefaultOutcome::NotApplicable)
+                    return report_method_missing(e, fa, slay.fields,
+                                                 bt.struct_name, "struct",
+                                                 funcptr_field_call);
             }
             /* Tenerlo no cierra la pregunta: si ademas hay una libre que toma
              * este receptor, hay dos candidatos y no se elige en silencio. */
@@ -17135,8 +17146,14 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
             if (base_denotes_type(fa->base.get()) &&
                 try_ufcs_type_receiver(e, fa, bt.struct_name))
                 return e->result_type;
-            return report_method_missing(e, fa, cls.fields, bt.struct_name,
-                                         "class", funcptr_field_call);
+            // Y el metodo por defecto de un concepto, igual que en el struct.
+            const ConceptDefaultOutcome cdo = concept_default_for(
+                bt, fa->field_name, e->args.size(), e->loc, mtd);
+            if (cdo == ConceptDefaultOutcome::Reported)
+                return Type{PrimitiveKind::COUNT};
+            if (cdo == ConceptDefaultOutcome::NotApplicable)
+                return report_method_missing(e, fa, cls.fields, bt.struct_name,
+                                             "class", funcptr_field_call);
         }
         // Y como en el struct: tenerlo no cierra la pregunta.
         if (report_ufcs_clash(bt, fa->field_name, written_type_name(bt),

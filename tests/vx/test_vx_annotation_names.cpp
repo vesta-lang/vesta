@@ -88,6 +88,9 @@ int main() {
     check(annotation_exists("Getter"), "falta @Getter (Lombok)");
     check(annotation_exists("Data"), "falta @Data (Lombok)");
     check(annotation_exists("complexity"), "falta @complexity");
+    // Un nombre con punto (familia `@No.X`) es UNA entrada, entera.
+    check(annotation_exists("No.Inject"), "falta @No.Inject");
+    check(!annotation_exists("No"), "`No` suelto no es una anotacion");
 
     /* Las RETIRADAS no estan a proposito: tienen su propio mensaje, que dice el
      * reemplazo, y ese es mejor que "no existe". */

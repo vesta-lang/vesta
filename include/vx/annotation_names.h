@@ -49,6 +49,9 @@ constexpr const char *kAspect = "Aspect";
 constexpr const char *kAsync = "Async";
 constexpr const char *kBefore = "Before";
 constexpr const char *kInline = "Inline";
+/// Familia `@No.X`: lo que NO se hace con un miembro.  El nombre entero,
+/// punto incluido, es la entrada de la tabla.
+constexpr const char *kNoInject = "No.Inject";
 constexpr const char *kOverride = "Override";
 } // namespace ann
 
