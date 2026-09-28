@@ -4808,7 +4808,7 @@ Parser::parse_typedef_struct_or_enum(bool leading_typedef) {
          * `static` o un destructor escritos asi se rechazaban con un "se
          * esperaba un tipo de campo", sin que nada dijera que esta forma
          * admitia menos que la otra. */
-        parse_struct_body_(*s, /*is_overlay=*/false);
+        parse_struct_body_(*s, MemberBodyOwner::Type);
         (void)expect(TokenKind::RBRACE, "se esperaba '}' al cerrar el struct");
         if (current_.kind != TokenKind::IDENTIFIER) {
             error_here("se esperaba el nombre del typedef tras '}'");
@@ -6151,7 +6151,7 @@ std::unique_ptr<ast::Expr> Parser::parse_match_expr() {
 /**
  * @copydoc vx::Parser::parse_struct_body_
  */
-void Parser::parse_struct_body_(ast::StructDecl &sd, bool is_overlay) {
+void Parser::parse_struct_body_(ast::StructDecl &sd, MemberBodyOwner owner) {
     ast::StructDecl *const s = &sd;
     while (current_.kind != TokenKind::RBRACE &&
            current_.kind != TokenKind::END_OF_FILE) {
@@ -6479,6 +6479,15 @@ void Parser::parse_struct_body_(ast::StructDecl &sd, bool is_overlay) {
             std::vector<std::string> all_tp = s->type_params;
             all_tp.insert(all_tp.end(), method_tparams.begin(),
                           method_tparams.end());
+            /* En un concepto, `;` en lugar de cuerpo: el metodo que se EXIGE
+             * al tipo, sin nada que darle. */
+            if (owner == MemberBodyOwner::Concept &&
+                current_.kind == TokenKind::SEMICOLON) {
+                (void)consume(); // ';'
+                apply_member_contracts_(mc, *m);
+                s->methods.push_back(std::move(m));
+                continue;
+            }
             const auto temp_aliases = register_temp_type_aliases(all_tp);
             m->body = parse_method_body(/*is_void=*/false);
             unregister_temp_type_aliases(temp_aliases);
@@ -6770,7 +6779,7 @@ std::unique_ptr<ast::StructDecl> Parser::parse_struct_decl(bool is_overlay) {
     (void)expect(TokenKind::LBRACE,
                  "se esperaba '{' al abrir el cuerpo del struct");
 
-    parse_struct_body_(*s, is_overlay);
+    parse_struct_body_(*s, MemberBodyOwner::Type);
     (void)expect(TokenKind::RBRACE, "se esperaba '}' al cerrar el struct");
     return s;
 }
@@ -7618,115 +7627,6 @@ void Parser::parse_where_clause(std::vector<ast::TypeBound> &bounds) {
         bounds.push_back(std::move(tb));
         if (!match(TokenKind::COMMA)) break;
     }
-}
-
-std::unique_ptr<ast::ConceptDecl> Parser::parse_concept_decl() {
-    auto c = std::make_unique<ast::ConceptDecl>();
-    c->loc = current_.loc;
-    (void)consume(); // 'concept' (identificador contextual)
-    if (current_.kind != TokenKind::IDENTIFIER) {
-        error_here("se esperaba el nombre del concepto tras 'concept'");
-        return nullptr;
-    }
-    c->name = consume().lexeme;
-    // Type-params opcionales `<T>` / `<K, V>`.
-    if (current_.kind == TokenKind::LT) {
-        (void)consume(); // '<'
-        while (current_.kind == TokenKind::IDENTIFIER) {
-            c->type_params.push_back(consume().lexeme);
-            if (!match(TokenKind::COMMA)) break;
-        }
-        (void)expect_close_angle(
-            "se esperaba '>' al cerrar los parametros del concepto");
-    }
-
-    if (current_.kind == TokenKind::ASSIGN) {
-        // Forma predicado: `concept N<T> = <bool-expr>;`.
-        (void)consume(); // '='
-        c->ckind = ast::ConceptKind::Predicate;
-        // Registrar T como alias temporal para `(T)x` / `is_x<T>()`.
-        const auto temp = register_temp_type_aliases(c->type_params);
-        c->predicate = parse_expr();
-        unregister_temp_type_aliases(temp);
-        (void)expect(TokenKind::SEMICOLON,
-                     "se esperaba ';' tras el predicado del concepto");
-        return c;
-    }
-
-    if (current_.kind != TokenKind::LBRACE) {
-        error_here("se esperaba '=' o '{' tras el nombre del concepto");
-        return c;
-    }
-
-    // Disambiguar BLOQUE (stmts comptime) vs ESTRUCTURAL (firmas de metodo).
-    // Estructural: el primer miembro es `<tipo> <ident> ( ... )`, con el TIPO
-    // saltado entero -- mirando un solo token, `Optional<E> next();` se tomaba
-    // por un bloque --.
-    Lexer &ml = const_cast<Lexer &>(lex_);
-    const size_t after_type = peek_skip_type(0);
-    const bool is_structural =
-        after_type != 0 &&
-        ml.peek_at(after_type).kind == TokenKind::IDENTIFIER &&
-        ml.peek_at(after_type + 1).kind == TokenKind::LPAREN;
-    (void)consume(); // '{'
-
-    if (is_structural) {
-        c->ckind = ast::ConceptKind::Structural;
-        while (current_.kind != TokenKind::RBRACE &&
-               current_.kind != TokenKind::END_OF_FILE) {
-            ast::StructuralMethod sm;
-            sm.return_type = parse_type_node(); // tipo de retorno
-            if (!sm.return_type) {
-                synchronize();
-                break;
-            }
-            if (current_.kind != TokenKind::IDENTIFIER) {
-                error_here("se esperaba el nombre del metodo en el concepto "
-                           "estructural");
-                synchronize();
-                break;
-            }
-            sm.name = consume().lexeme;
-            // Firma de parametros: `(T1, T2, ...)` -- solo los TIPOS (los
-            // nombres de param son opcionales y se ignoran).
-            (void)expect(TokenKind::LPAREN,
-                         "se esperaba '(' tras el nombre del metodo");
-            while (current_.kind != TokenKind::RPAREN &&
-                   current_.kind != TokenKind::END_OF_FILE) {
-                auto pt = parse_type_node();
-                if (!pt) {
-                    synchronize();
-                    break;
-                }
-                sm.param_types.push_back(std::move(pt));
-                // Nombre de param opcional (e.g. `i64 x`): consumirlo.
-                if (current_.kind == TokenKind::IDENTIFIER) (void)consume();
-                if (!match(TokenKind::COMMA)) break;
-            }
-            (void)expect(TokenKind::RPAREN,
-                         "se esperaba ')' al cerrar la firma del metodo");
-            (void)match(TokenKind::SEMICOLON);
-            c->structural_methods.push_back(std::move(sm));
-        }
-        (void)expect(TokenKind::RBRACE,
-                     "se esperaba '}' al cerrar el concepto estructural");
-        return c;
-    }
-
-    // Forma bloque: `concept N<T> { <stmts comptime>; return <bool>; }`.
-    c->ckind = ast::ConceptKind::Block;
-    auto blk = std::make_unique<ast::BlockStmt>();
-    blk->loc = c->loc;
-    const auto temp = register_temp_type_aliases(c->type_params);
-    while (current_.kind != TokenKind::RBRACE &&
-           current_.kind != TokenKind::END_OF_FILE) {
-        if (!parse_statement_into(blk->body)) break;
-    }
-    unregister_temp_type_aliases(temp);
-    (void)expect(TokenKind::RBRACE,
-                 "se esperaba '}' al cerrar el cuerpo del concepto");
-    c->body = std::move(blk);
-    return c;
 }
 
 std::vector<std::string>

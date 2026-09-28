@@ -55,6 +55,24 @@ namespace vxgen {
 struct GenSubst {
     const std::vector<std::string> *params = nullptr;
     const std::vector<Type> *args = nullptr;
+    /**
+     * @brief Los argumentos TAL COMO SE ESCRIBIERON, en lugar de @c args.
+     *
+     * Lo que un concepto inyecta en un tipo se clona ANTES de montar los
+     * layouts, y ahi `View<Punto>` todavia no se puede resolver a un @c Type:
+     * `Punto` no esta registrado.  No hace falta: el argumento se copia como
+     * se escribio y se resuelve despues, con todo lo demas.  Si esta puesto,
+     * gana a @c args.
+     */
+    const std::vector<const ast::TypeNode *> *arg_nodes = nullptr;
+
+    /**
+     * @brief Hay algo que sustituir.
+     * @return Cierto si hay parametros y argumentos de alguna de las formas.
+     */
+    [[nodiscard]] bool active() const {
+        return params != nullptr && (args != nullptr || arg_nodes != nullptr);
+    }
 };
 
 /// @brief Mangling canonico de un @c Type para nombres de instancia.
@@ -125,6 +143,20 @@ void clone_header_with_subst(const Decl &src, Decl &dst, const GenSubst &g) {
     dst.super_args = clone_shared_types_with_subst(src.super_args, g);
     dst.interface_names = clone_concept_refs_with_subst(src.interface_names, g);
 }
+
+/**
+ * @brief Copia un parametro con su tipo sustituido y TODO lo que lleva: la
+ *        direccion (`in`/`out`/`inout`), si es variadico, el registro ABI.
+ *
+ * Las copias sueltas de metodos y lambdas solo copiaban nombre y tipo, asi
+ * que un `inout T x` de un generico perdia el `inout` al instanciarse.
+ *
+ * @param p El parametro.
+ * @param g La sustitucion.
+ * @return La copia.
+ */
+std::unique_ptr<ast::ParamDecl> clone_param_with_subst(const ast::ParamDecl &p,
+                                                       const GenSubst &g);
 
 /// @brief Clona una @c Expr aplicando la sustitucion @p g (default: vacia).
 std::unique_ptr<ast::Expr> clone_expr(const ast::Expr *e,

@@ -37,7 +37,18 @@ namespace vx {
 class TypeChecker;
 namespace ast {
 struct ConceptRef;
-}
+struct ConceptDecl;
+} // namespace ast
+
+/**
+ * @brief El concepto de USUARIO @p name, escrito tal cual o cualificado por
+ *        su espacio de nombres (`mat.Numerico`).
+ * @param tc   Comprobador.
+ * @param name Nombre como se escribio.
+ * @return Su declaracion, o nulo si no hay un concepto de usuario asi.
+ */
+const ast::ConceptDecl *find_user_concept(const TypeChecker &tc,
+                                          const std::string &name);
 
 /**
  * @struct ConceptEval

@@ -1,0 +1,21 @@
+namespace ejemplos.impl_sin_campo_err;
+
+// Un `impl` solo anyade METODOS: no puede darle a un tipo ya declarado el
+// campo que exige el concepto.  `Pila` no tiene `total`, asi que no cumple
+// `Contable` aunque el `impl` escriba el metodo exigido (VX2139).
+concept Contable<Self> {
+	i64 total;
+
+	i64 cuantos();
+	bool vacio() => this.cuantos() == 0;
+}
+
+struct Pila {
+	i64 n;
+}
+
+impl Contable for Pila {
+	i64 cuantos() => this.n;
+}
+
+i32 main() => 0;

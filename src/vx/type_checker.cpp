@@ -54,6 +54,7 @@
 #include "vx/parser.h" // parse_one_expr para macros con splice
 #include "loader/oop_types.h" // para sizeof(loader::ObjectHeader) en el layout de clases
 #include "vx/generics/generic_clone.h" // GenSubst + clone_* + mangle_* (extraidos del monolito)
+#include "vx/generics/member_clone.h" // la unica copia de un metodo o un campo
 
 #include <algorithm>
 #include <utility>
@@ -442,10 +443,7 @@ template <class MapT>
 static std::string resolve_generic_key(const std::string &name, const MapT &m) {
     if (m.count(name)) return name;
     if (name.find('.') != std::string::npos) {
-        std::string dd = name;
-        size_t p;
-        while ((p = dd.find('.')) != std::string::npos)
-            dd.replace(p, 1, "__");
+        const std::string dd = namespace_symbol_path(name);
         if (m.count(dd)) return dd;
     } else {
         // Nombre simple `Box`: buscar un unico `<ns>__Box`
@@ -667,6 +665,33 @@ static bool method_body_is_ours(vx::GenericInstanceRegistry *reg, size_t index,
     return reg->claim(mangled + "::" + m->name, index);
 }
 
+std::unique_ptr<ast::ClassMethodDecl>
+TypeChecker::clone_instance_method_(const ast::ClassMethodDecl &m,
+                                    const std::string &mangled,
+                                    const vxgen::GenSubst &g,
+                                    const SourceLoc &loc) {
+    /* #6: disponibilidad condicional por `where` sobre el T del tipo.  Si el
+     * metodo exige `where T: Concepto` y el argumento no lo cumple, el metodo
+     * NO existe en esta instancia (no se clona ni se comprueba). */
+    std::vector<ast::TypeBound> method_only;
+    if (!method_available_for_subst(&m, *g.params, *g.args, method_only)) {
+        record_unavailable_method(mangled, &m);
+        return nullptr;
+    }
+    /* El cuerpo solo lo clona quien se queda con este metodo de la instancia;
+     * ver @c method_body_is_ours. */
+    const vxgen::MethodBodyCopy body =
+        m.body && method_body_is_ours(generic_instances_, generic_module_index_,
+                                      mangled, &m)
+            ? vxgen::MethodBodyCopy::Clone
+            : vxgen::MethodBodyCopy::Skip;
+    auto nm = vxgen::clone_method_with_subst(m, g, body);
+    nm->type_bounds = std::move(method_only); // solo las cotas sobre `m<U>`
+    // Los @complexity/huella cuyo `when:` habla de T: aqui T ya es concreto.
+    resolve_pending_complexity_(*nm, m, g, loc);
+    return nm;
+}
+
 bool TypeChecker::report_type_name_taken(const std::string &name,
                                          const SourceLoc &loc) {
     const char *taken = declared_type_keyword(name);
@@ -853,95 +878,19 @@ std::string TypeChecker::monomorphize_class(const std::string &template_name,
     cloned->is_introspect = src->is_introspect;
     // type_params vacio: ya es concreto.
 
-    // Clonar fields.
-    for (const auto &f : src->fields) {
-        ast::ClassFieldDecl nf;
-        nf.loc = f.loc;
-        nf.name = f.name;
-        nf.access = f.access;
-        nf.is_static = f.is_static;
-        nf.is_final = f.is_final;
-        nf.type = clone_type_with_subst(f.type.get(), g);
-        if (f.init) nf.init = clone_expr(f.init.get(), g);
-        cloned->fields.push_back(std::move(nf));
-    }
-    // Clonar metodos.
+    for (const auto &f : src->fields)
+        cloned->fields.push_back(vxgen::clone_class_field_with_subst(f, g));
     for (const auto &m : src->methods) {
-        // #6: disponibilidad condicional por `where` sobre el T de la clase.
-        std::vector<ast::TypeBound> method_only;
-        if (!method_available_for_subst(m.get(), *g.params, *g.args,
-                                        method_only)) {
-            record_unavailable_method(mangled, m.get());
-            continue;
-        }
-        auto nm = std::make_unique<ast::ClassMethodDecl>();
-        nm->type_bounds = std::move(method_only); // solo bounds sobre `m<U>`
-        nm->loc = m->loc;
-        // Si el metodo es el constructor del template, su nombre
-        // textualmente coincide con el template_name; en la version
-        // monomorphizada debe coincidir con el mangled name.
-        nm->name = m->is_constructor ? mangled : m->name;
-        nm->access = m->access;
-        nm->is_static = m->is_static;
-        // Un constructor `comptime` que se hereda o se monomorphiza sigue
-        // siendolo: sin copiar el flag, el clon dejaba de ser comptime y su
-        // cuerpo se trataba como codigo normal.
-        nm->is_comptime = m->is_comptime;
-        nm->is_final = m->is_final;
-        nm->is_override = m->is_override;
-        nm->is_virtual = m->is_virtual;
-        nm->is_inline = m->is_inline;
-        nm->is_constructor = m->is_constructor;
-        nm->advice_kind = m->advice_kind;
-        nm->advice_target = m->advice_target;
-        // Contratos de efectos y coste: son del METODO, asi que viajan a cada
-        // instanciacion.  Sin copiarlos, un contrato declarado sobre la
-        // plantilla se evaporaba al monomorphizar -- en silencio -- y no se
-        // verificaba en ninguna instanciacion.
-        nm->contract_pure = m->contract_pure;
-        nm->contract_nothrow = m->contract_nothrow;
-        nm->contract_nopanic = m->contract_nopanic;
-        nm->contract_alloc = m->contract_alloc;
-        nm->contract_alloc_partial = m->contract_alloc_partial;
-        nm->contract_stack = m->contract_stack;
-        nm->contract_stack_partial = m->contract_stack_partial;
-        nm->complexity_expr = m->complexity_expr;
-        nm->complexity_vars = m->complexity_vars;
-        nm->complexity_partial_pre = m->complexity_partial_pre;
-        nm->complexity_partial_post = m->complexity_partial_post;
-        nm->complexity_total_pre = m->complexity_total_pre;
-        nm->complexity_total_post = m->complexity_total_post;
-        // Contratos de HUELLA con `when:` (sobre arch o sobre T): al clon.
-        nm->footprint_pending = m->footprint_pending;
-        // Los @complexity/huella cuyo `when:` habla de T: aqui T ya es
-        // concreto.
-        resolve_pending_complexity_(*nm, *m, g, loc);
-        // #4: preservar los type-params del METODO (`metodo<U>`) tras
-        // sustituir T; el metodo sigue siendo generico y se monomorphiza
-        // por separado en cada llamada `obj.metodo<U>()`.
-        nm->method_type_params = m->method_type_params;
-        if (m->return_type) {
-            nm->return_type = clone_type_with_subst(m->return_type.get(), g);
-        }
-        for (const auto &p : m->params) {
-            auto np = std::make_unique<ast::ParamDecl>();
-            np->loc = p->loc;
-            np->name = p->name;
-            np->type = clone_type_with_subst(p->type.get(), g);
-            nm->params.push_back(std::move(np));
-        }
-        /* El cuerpo solo lo clona quien se queda con este metodo de la
-         * instancia; ver @c method_body_is_ours. */
-        if (m->body &&
-            method_body_is_ours(generic_instances_, generic_module_index_,
-                                mangled, m.get())) {
-            auto cb = clone_stmt(m->body.get(), g);
-            if (cb && cb->kind == ast::NodeKind::BlockStmt) {
-                nm->body.reset(static_cast<ast::BlockStmt *>(cb.release()));
-            }
-        }
+        auto nm = clone_instance_method_(*m, mangled, g, loc);
+        if (!nm) continue;
+        // El constructor de la plantilla se llama como ella; el de la
+        // instancia, como la instancia.
+        if (nm->is_constructor) nm->name = mangled;
         cloned->methods.push_back(std::move(nm));
     }
+    // Nacida despues de la pasada de conceptos: recibe lo suyo aqui.
+    if (concept_defaults_pass_ == ConceptDefaultsPass::Done)
+        inject_concept_defaults_into(*cloned, nullptr);
 
     monomorphized_[mangled] = true;
 
@@ -1121,98 +1070,15 @@ std::string TypeChecker::monomorphize_struct(const std::string &template_name,
     clone_header_with_subst(*src, *cloned, g);
     // type_params vacio: ya es concreto.
 
-    // Clonar campos sustituyendo el tipo (T -> arg concreto).
-    for (const auto &f : src->fields) {
-        ast::StructFieldDecl nf;
-        nf.loc = f.loc;
-        nf.name = f.name;
-        nf.bit_width = f.bit_width;
-        nf.type = clone_type_with_subst(f.type.get(), g);
-        // Clonar el valor por defecto del campo (`u8 tag = 0x7`) para que el
-        // struct monomorphizado conserve sus defaults.
-        if (f.default_init)
-            nf.default_init = clone_expr(f.default_init.get(), g);
-        cloned->fields.push_back(std::move(nf));
-    }
-    // Clonar metodos (dtor `__dtor`, copy-hook `__clone__`, y metodos normales;
-    // los structs no tienen constructores nombrados como el tipo).
+    for (const auto &f : src->fields)
+        cloned->fields.push_back(vxgen::clone_struct_field_with_subst(f, g));
     for (const auto &m : src->methods) {
-        // #6: disponibilidad condicional por `where` sobre el T del struct.  Si
-        // el metodo exige `where T: Concepto` y el arg concreto no lo cumple,
-        // el metodo NO existe en esta instanciacion (no se clona ni
-        // type-checkea).
-        std::vector<ast::TypeBound> method_only;
-        if (!method_available_for_subst(m.get(), *g.params, *g.args,
-                                        method_only)) {
-            record_unavailable_method(mangled, m.get());
-            continue;
-        }
-        auto nm = std::make_unique<ast::ClassMethodDecl>();
-        nm->type_bounds = std::move(method_only); // solo bounds sobre `m<U>`
-        nm->loc = m->loc;
-        nm->name = m->name;
-        nm->access = m->access;
-        nm->is_static = m->is_static;
-        // Un constructor `comptime` que se hereda o se monomorphiza sigue
-        // siendolo: sin copiar el flag, el clon dejaba de ser comptime y su
-        // cuerpo se trataba como codigo normal.
-        nm->is_comptime = m->is_comptime;
-        // Y sigue siendo un CONSTRUCTOR: el aplanado de la herencia tampoco
-        // copiaba el flag, con lo que el clon dejaba de reconocerse como tal.
-        nm->is_constructor = m->is_constructor;
-        nm->is_final = m->is_final;
-        nm->is_virtual = m->is_virtual;
-        nm->is_inline = m->is_inline;
-        nm->is_destructor = m->is_destructor;
-        // Contratos de efectos y coste: son del METODO, asi que viajan a cada
-        // instanciacion.  Sin copiarlos, un contrato declarado sobre la
-        // plantilla se evaporaba al monomorphizar -- en silencio -- y no se
-        // verificaba en ninguna instanciacion.
-        nm->contract_pure = m->contract_pure;
-        nm->contract_nothrow = m->contract_nothrow;
-        nm->contract_nopanic = m->contract_nopanic;
-        nm->contract_alloc = m->contract_alloc;
-        nm->contract_alloc_partial = m->contract_alloc_partial;
-        nm->contract_stack = m->contract_stack;
-        nm->contract_stack_partial = m->contract_stack_partial;
-        nm->complexity_expr = m->complexity_expr;
-        nm->complexity_vars = m->complexity_vars;
-        nm->complexity_partial_pre = m->complexity_partial_pre;
-        nm->complexity_partial_post = m->complexity_partial_post;
-        nm->complexity_total_pre = m->complexity_total_pre;
-        nm->complexity_total_post = m->complexity_total_post;
-        // Contratos de HUELLA con `when:` (sobre arch o sobre T): al clon.
-        nm->footprint_pending = m->footprint_pending;
-        // Los @complexity/huella cuyo `when:` habla de T: aqui T ya es
-        // concreto.
-        resolve_pending_complexity_(*nm, *m, g, loc);
-        // #4: preservar los type-params del METODO (`mezcla<U>`).  El
-        // substituto @c g solo sustituye T (el type-param del struct); U
-        // queda intacto y el metodo sigue siendo template generico, que se
-        // monomorphiza en cada `obj.mezcla<U>()` sobre el struct concreto.
-        nm->method_type_params = m->method_type_params;
-        if (m->return_type) {
-            nm->return_type = clone_type_with_subst(m->return_type.get(), g);
-        }
-        for (const auto &p : m->params) {
-            auto np = std::make_unique<ast::ParamDecl>();
-            np->loc = p->loc;
-            np->name = p->name;
-            np->type = clone_type_with_subst(p->type.get(), g);
-            nm->params.push_back(std::move(np));
-        }
-        /* El cuerpo solo lo clona quien se queda con este metodo de la
-         * instancia; ver @c method_body_is_ours. */
-        if (m->body &&
-            method_body_is_ours(generic_instances_, generic_module_index_,
-                                mangled, m.get())) {
-            auto cb = clone_stmt(m->body.get(), g);
-            if (cb && cb->kind == ast::NodeKind::BlockStmt) {
-                nm->body.reset(static_cast<ast::BlockStmt *>(cb.release()));
-            }
-        }
-        cloned->methods.push_back(std::move(nm));
+        auto nm = clone_instance_method_(*m, mangled, g, loc);
+        if (nm) cloned->methods.push_back(std::move(nm));
     }
+    // Nacida despues de la pasada de conceptos: recibe lo suyo aqui.
+    if (concept_defaults_pass_ == ConceptDefaultsPass::Done)
+        inject_concept_defaults_into(*cloned);
 
     monomorphized_[mangled] = true;
 
@@ -1336,60 +1202,6 @@ static bool struct_uses_self(const ast::StructDecl *s) {
     return false;
 }
 
-/// Clona un ClassMethodDecl aplicando la sustitucion @p g (Self -> derivado).
-/// Mismo conjunto de campos que el clon de monomorphize_struct (preserva
-/// contratos de efectos/coste, type-params de metodo generico, etc.).
-static std::unique_ptr<ast::ClassMethodDecl>
-clone_method_subst(const ast::ClassMethodDecl *m, const GenSubst &g) {
-    auto nm = std::make_unique<ast::ClassMethodDecl>();
-    nm->loc = m->loc;
-    nm->name = m->name;
-    nm->access = m->access;
-    nm->is_static = m->is_static;
-    // Un constructor `comptime` que se hereda o se monomorphiza sigue
-    // siendolo: sin copiar el flag, el clon dejaba de ser comptime y su
-    // cuerpo se trataba como codigo normal.
-    nm->is_comptime = m->is_comptime;
-    // Y sigue siendo un CONSTRUCTOR: el aplanado de la herencia tampoco
-    // copiaba el flag, con lo que el clon dejaba de reconocerse como tal.
-    nm->is_constructor = m->is_constructor;
-    nm->is_final = m->is_final;
-    nm->is_virtual = m->is_virtual;
-    nm->is_inline = m->is_inline;
-    nm->is_destructor = m->is_destructor;
-    nm->contract_pure = m->contract_pure;
-    nm->contract_nothrow = m->contract_nothrow;
-    nm->contract_nopanic = m->contract_nopanic;
-    nm->contract_alloc = m->contract_alloc;
-    nm->contract_alloc_partial = m->contract_alloc_partial;
-    nm->contract_stack = m->contract_stack;
-    nm->contract_stack_partial = m->contract_stack_partial;
-    nm->complexity_expr = m->complexity_expr;
-    nm->complexity_vars = m->complexity_vars;
-    nm->complexity_partial_pre = m->complexity_partial_pre;
-    nm->complexity_partial_post = m->complexity_partial_post;
-    nm->complexity_total_pre = m->complexity_total_pre;
-    nm->complexity_total_post = m->complexity_total_post;
-    nm->footprint_pending = m->footprint_pending;
-    nm->method_type_params = m->method_type_params;
-    nm->type_bounds = m->type_bounds;
-    if (m->return_type)
-        nm->return_type = clone_type_with_subst(m->return_type.get(), g);
-    for (const auto &p : m->params) {
-        auto np = std::make_unique<ast::ParamDecl>();
-        np->loc = p->loc;
-        np->name = p->name;
-        np->type = clone_type_with_subst(p->type.get(), g);
-        nm->params.push_back(std::move(np));
-    }
-    if (m->body) {
-        auto cb = clone_stmt(m->body.get(), g);
-        if (cb && cb->kind == ast::NodeKind::BlockStmt)
-            nm->body.reset(static_cast<ast::BlockStmt *>(cb.release()));
-    }
-    return nm;
-}
-
 bool TypeChecker::struct_ptr_upcast_ok(const Type &target,
                                        const Type &value) const {
     if (target.kind != PrimitiveKind::PTR || value.kind != PrimitiveKind::PTR ||
@@ -1408,6 +1220,26 @@ bool TypeChecker::struct_ptr_upcast_ok(const Type &target,
     return false;
 }
 
+
+/**
+ * @brief Marca un miembro copiado de un struct base como heredado.
+ *
+ * El origen se hereda por la cadena: lo que la base intermedia ya habia
+ * recibido sigue viniendo de donde venia (la raiz).
+ *
+ * @param origin   La procedencia de la copia.
+ * @param base     El struct del que se copia.
+ * @param original Donde esta escrito el miembro en la base.
+ */
+static void mark_inherited(ast::MemberOrigin &origin,
+                           const ast::StructDecl &base,
+                           const SourceLoc &original) {
+    if (origin.received()) return;
+    origin.kind = ast::MemberOriginKind::Inherited;
+    origin.via.name = util::InternedName::intern(base.name);
+    origin.via.loc = base.loc;
+    origin.original = original;
+}
 
 void TypeChecker::flatten_struct_inheritance() {
     // Indice nombre -> StructDecl.
@@ -1476,42 +1308,9 @@ void TypeChecker::flatten_struct_inheritance() {
                             S->name +
                             "' (produciria un layout de tamano infinito); usa "
                             "'Self*'");
-                ast::StructFieldDecl nf;
-                nf.loc = fld.loc;
-                nf.name = fld.name;
-                nf.type = clone_type_with_subst(fld.type.get(), g);
-                // Preservar TODOS los atributos del campo (sin esto un miembro
-                // ANONIMO -- union/struct sin nombre -- o un array/overlay
-                // heredado se copiaba como campo escalar sin nombre y se
-                // perdian sus subcampos, p.ej. la union lo64/hi64/bytes de un
-                // wide-int).
-                nf.is_anonymous = fld.is_anonymous;
-                nf.bit_width = fld.bit_width;
-                nf.explicit_offset = fld.explicit_offset;
-                nf.is_array = fld.is_array;
-                nf.endian = fld.endian;
-                if (fld.offset_expr)
-                    nf.offset_expr = clone_expr(fld.offset_expr.get(), g);
-                if (fld.array_count)
-                    nf.array_count = clone_expr(fld.array_count.get(), g);
-                if (fld.array_stride)
-                    nf.array_stride = clone_expr(fld.array_stride.get(), g);
-                if (fld.endian_expr)
-                    nf.endian_expr = clone_expr(fld.endian_expr.get(), g);
-                if (fld.offset_block) {
-                    auto cb = clone_stmt(fld.offset_block.get(), g);
-                    if (cb && cb->kind == ast::NodeKind::BlockStmt)
-                        nf.offset_block.reset(
-                            static_cast<ast::BlockStmt *>(cb.release()));
-                }
-                if (fld.element_block) {
-                    auto cb = clone_stmt(fld.element_block.get(), g);
-                    if (cb && cb->kind == ast::NodeKind::BlockStmt)
-                        nf.element_block.reset(
-                            static_cast<ast::BlockStmt *>(cb.release()));
-                }
-                if (fld.default_init)
-                    nf.default_init = clone_expr(fld.default_init.get(), g);
+                ast::StructFieldDecl nf =
+                    vxgen::clone_struct_field_with_subst(fld, g);
+                if (*rit != S) mark_inherited(nf.origin, **rit, fld.loc);
                 f.fields.push_back(std::move(nf));
             }
         }
@@ -1550,13 +1349,9 @@ void TypeChecker::flatten_struct_inheritance() {
                                 "mientras que "
                                 "@Virtual es dispatch dinamico por vtable");
                 }
-                auto clon = clone_method_subst(m.get(), g);
-                /* El origen se hereda por la cadena: un metodo que la base
-                 * intermedia ya heredo sigue viniendo de la raiz. */
-                if (from_base)
-                    clon->inherited_from =
-                        m->inherited_from.empty() ? (*rit)->name
-                                                  : m->inherited_from;
+                auto clon = vxgen::clone_method_with_subst(
+                    *m, g, vxgen::MethodBodyCopy::Clone);
+                if (from_base) mark_inherited(clon->origin, **rit, m->loc);
                 f.methods.push_back(std::move(clon));
             }
         }
@@ -3110,6 +2905,11 @@ bool TypeChecker::run() {
     // derivado y resolver el marcador `Self` -> tipo concreto, ANTES de que
     // collect_globals construya los layouts.  Tras esto no queda ningun `Self`.
     flatten_struct_inheritance();
+
+    // Lo que trae un concepto a quien declara cumplirlo: DESPUES del aplanado
+    // (lo escrito en una base tambien gana) y ANTES de los layouts (lo
+    // inyectado es un miembro mas).
+    inject_concept_defaults();
 
     collect_globals();
 
@@ -5265,6 +5065,7 @@ void TypeChecker::collect_globals() {
                     cfi.name = f.name;
                     cfi.type = type_from_node(f.type.get());
                     cfi.is_comptime = true;
+                    cfi.origin = f.origin;
                     if (f.default_init) cfi.default_init = f.default_init.get();
                     layout.comptime_fields.push_back(std::move(cfi));
                     continue;
@@ -5490,6 +5291,7 @@ void TypeChecker::collect_globals() {
                     fi.bit_offset = bf_used;
                     fi.bit_width = bw;
                     fi.default_init = f.default_init.get();
+                    fi.origin = f.origin;
                     // Overlay: un bitfield puede llevar @offset dinamico
                     // (`u8 mod : 2 @offset { ... }`).  Sin copiar el resolver,
                     // la direccion del BYTE contenedor caeria al offset
@@ -5566,6 +5368,7 @@ void TypeChecker::collect_globals() {
                 fi.default_init = f.default_init.get();
                 fi.overlaps_with = f.overlaps_with;
                 fi.loc = f.loc;
+                fi.origin = f.origin;
                 layout.fields.push_back(std::move(fi));
 
                 if (s->is_union) {
@@ -5817,7 +5620,7 @@ void TypeChecker::collect_globals() {
                  * su hueco -- mismo criterio que las clases --.  Los
                  * constructores no entran: se siguen tratando como siempre. */
                 if (same_sig >= 0 && !mi.is_constructor &&
-                    !slot_decls[same_sig]->inherited_from.empty()) {
+                    slot_decls[same_sig]->origin.received()) {
                     const ClassMethodInfo &prev = layout.methods[same_sig];
                     /* Redefinir un virtual lo sigue siendo, y en el MISMO hueco
                      * de la tabla: si no, los virtuales de detras se correrian
@@ -6302,6 +6105,7 @@ void TypeChecker::collect_globals() {
                 StructFieldInfo fi;
                 fi.name = f.name;
                 fi.type = ft;
+                fi.origin = f.origin;
                 fi.size = 8; // todos los slots de instancia ocupan 8 bytes
                 if (f.is_static) {
                     fi.offset = off_stat;
@@ -6601,66 +6405,26 @@ void TypeChecker::collect_globals() {
     std::vector<PendingImplCheck> pending_impl_checks;
     for (const auto &decl : mod_.decls) {
         if (!decl) continue;
-        const bool is_ext = decl->kind == ast::NodeKind::ExtensionDecl;
+        std::string target_src;
+        auto *methods = ast::added_methods_of(*decl, target_src);
+        if (methods == nullptr) continue;
         const bool is_impl = decl->kind == ast::NodeKind::ImplDecl;
-        if (!is_ext && !is_impl) continue;
-        std::string target_src, concept_name;
-        const std::vector<std::unique_ptr<ast::ClassMethodDecl>> *methods =
-            nullptr;
-        if (is_ext) {
-            auto *e = static_cast<const ast::ExtensionDecl *>(decl.get());
-            target_src = e->target_type;
-            methods = &e->methods;
-        } else {
-            auto *im = static_cast<const ast::ImplDecl *>(decl.get());
-            target_src = im->target_type;
-            concept_name = im->concept_name;
-            methods = &im->methods;
-        }
-        // Resolver el nombre destino a la clave del layout (directo o via
-        // resolve_type_string para tipos importados/cualificados).
-        std::string key;
-        std::vector<ClassMethodInfo> *dst = nullptr;
-        bool is_class_target = false;
-        auto try_key = [&](const std::string &k) -> bool {
-            auto sit = struct_layouts_.find(k);
-            if (sit != struct_layouts_.end()) {
-                key = k;
-                dst = &sit->second.methods;
-                is_class_target = false;
-                return true;
-            }
-            auto cit = class_layouts_.find(k);
-            if (cit != class_layouts_.end()) {
-                key = k;
-                dst = &cit->second.methods;
-                is_class_target = true;
-                return true;
-            }
-            return false;
-        };
-        if (!try_key(target_src)) {
-            // Nombre cualificado `mod.Tipo` -> clave mangled `mod__Tipo`.
-            std::string mangled = target_src;
-            for (size_t p = mangled.find('.'); p != std::string::npos;
-                 p = mangled.find('.'))
-                mangled.replace(p, 1, "__");
-            if (mangled == target_src || !try_key(mangled)) {
-                const Type rt = resolve_type_string(target_src);
-                if (rt.kind == PrimitiveKind::STRUCT ||
-                    rt.kind == PrimitiveKind::CLASS)
-                    try_key(rt.struct_name);
-            }
-        }
-        if (!dst) {
-            diags_.error(decl->loc,
-                         std::string(is_impl ? "impl" : "extension") +
-                             " sobre un tipo desconocido: '" + target_src +
-                             "'");
+        const std::string concept_name =
+            is_impl ? static_cast<const ast::ImplDecl &>(*decl).concept_name
+                    : std::string();
+        const MemberHost host = find_member_host(target_src);
+        if (host.key.empty()) {
+            diags_.diag(decl->loc, DiagLevel::ERR, "VX2161",
+                        {is_impl ? "impl" : "extension", target_src});
             continue;
         }
-        for (const auto &m_uptr : *methods) {
-            auto *m = m_uptr.get();
+        const std::string &key = host.key;
+        const bool is_class_target = host.kind == PrimitiveKind::CLASS;
+        std::vector<ClassMethodInfo> *dst =
+            is_class_target ? &class_layouts_.at(key).methods
+                            : &struct_layouts_.at(key).methods;
+        for (size_t mi_idx = 0; mi_idx < methods->size(); ++mi_idx) {
+            auto *m = (*methods)[mi_idx].get();
             if (!m) continue;
             if (!m->method_type_params.empty()) continue; // template: on-use
             bool collision = false;
@@ -6670,6 +6434,14 @@ void TypeChecker::collect_globals() {
                     collision = true;
                     break;
                 }
+            }
+            if (collision && m->origin.received()) {
+                /* Lo trajo el concepto y el tipo ya lo tiene: gana lo escrito.
+                 * Se retira, para que nadie lo compruebe ni lo baje. */
+                methods->erase(methods->begin() +
+                               static_cast<std::ptrdiff_t>(mi_idx));
+                --mi_idx;
+                continue;
             }
             if (collision) {
                 diags_.diag(m->loc, DiagLevel::ERR, "VX2063", {m->name, key});
@@ -7813,7 +7585,7 @@ ClassMethodInfo TypeChecker::make_method_info(const ast::ClassMethodDecl &m,
     mi.is_virtual = m.is_virtual;
     mi.is_comptime = m.is_comptime;
     mi.defining_class = class_name;
-    if (!m.inherited_from.empty()) mi.inherited_from = m.inherited_from;
+    mi.origin = m.origin;
     mi.source_file = m.loc.file();
     mi.source_line = m.loc.line;
     mi.return_type = m.return_type ? type_from_node(m.return_type.get())
@@ -8310,49 +8082,13 @@ void TypeChecker::check_functions() {
     // se tipa correcto y el rewrite implicit-this funciona).
     for (auto &decl : mod_.decls) {
         if (!decl) continue;
-        const bool is_ext = decl->kind == ast::NodeKind::ExtensionDecl;
-        const bool is_impl = decl->kind == ast::NodeKind::ImplDecl;
-        if (!is_ext && !is_impl) continue;
         std::string target_src;
-        std::vector<std::unique_ptr<ast::ClassMethodDecl>> *methods = nullptr;
-        if (is_ext) {
-            auto *e = static_cast<ast::ExtensionDecl *>(decl.get());
-            target_src = e->target_type;
-            methods = &e->methods;
-        } else {
-            auto *im = static_cast<ast::ImplDecl *>(decl.get());
-            target_src = im->target_type;
-            methods = &im->methods;
-        }
-        // Resolver la clave del layout (directo o via resolve_type_string).
-        std::string key;
-        bool is_class_target = false;
-        auto find_key = [&](const std::string &k) -> bool {
-            if (struct_layouts_.count(k)) {
-                key = k;
-                is_class_target = false;
-                return true;
-            }
-            if (class_layouts_.count(k)) {
-                key = k;
-                is_class_target = true;
-                return true;
-            }
-            return false;
-        };
-        if (!find_key(target_src)) {
-            std::string mangled = target_src;
-            for (size_t p = mangled.find('.'); p != std::string::npos;
-                 p = mangled.find('.'))
-                mangled.replace(p, 1, "__");
-            if (mangled == target_src || !find_key(mangled)) {
-                const Type rt = resolve_type_string(target_src);
-                if (rt.kind == PrimitiveKind::STRUCT ||
-                    rt.kind == PrimitiveKind::CLASS)
-                    find_key(rt.struct_name);
-            }
-        }
-        if (key.empty()) continue;
+        auto *methods = ast::added_methods_of(*decl, target_src);
+        if (methods == nullptr) continue;
+        const MemberHost host = find_member_host(target_src);
+        if (host.key.empty()) continue; // ya dicho al registrarlos
+        const std::string &key = host.key;
+        const bool is_class_target = host.kind == PrimitiveKind::CLASS;
         if (!is_class_target) {
             auto it = struct_layouts_.find(key);
             const std::string saved = current_struct_;

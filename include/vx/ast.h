@@ -2008,6 +2008,47 @@ struct TypeBound {
     SourceLoc loc;
 };
 
+/**
+ * @enum MemberOriginKind
+ * @brief Quien puso un miembro en un tipo.
+ */
+enum class MemberOriginKind : uint8_t {
+    Written,   ///< lo escribe el propio tipo
+    Inherited, ///< copia del de un struct base (aplanado de la herencia)
+    Concept,   ///< inyectado desde un concepto que el tipo declara cumplir
+};
+
+/**
+ * @struct MemberOrigin
+ * @brief De donde VIENE un campo o un metodo que el tipo no escribio.
+ *
+ * Un tipo recibe miembros que no escribio: los de su struct base y los que
+ * trae un concepto que declara cumplir.  Por dentro son miembros como
+ * cualquier otro -- esa es la gracia --, pero quien los mira tiene que poder
+ * distinguirlos: el montaje del layout, para que lo ESCRITO gane a lo
+ * recibido; el editor, para decir "inyectado desde View<i64>" y llevar a la
+ * definicion original en lugar de a ninguna parte.
+ *
+ * Un solo dato para las dos procedencias: antes lo heredado era un nombre
+ * suelto y lo inyectado no existia.
+ */
+struct MemberOrigin {
+    MemberOriginKind kind = MemberOriginKind::Written;
+    /// El base (sin argumentos) o el concepto tal como lo escribio el tipo,
+    /// con sus argumentos: `View<i64>`.  Vacio si es @c Written.
+    ConceptRef via;
+    /// Donde esta escrito el miembro original (en el base o en el concepto).
+    SourceLoc original;
+
+    /**
+     * @brief El miembro NO lo escribio el tipo.
+     * @return Cierto si es heredado o inyectado.
+     */
+    [[nodiscard]] bool received() const {
+        return kind != MemberOriginKind::Written;
+    }
+};
+
 struct FunctionDecl : Node {
     std::unique_ptr<TypeNode> return_type;
     std::string name;
@@ -2345,41 +2386,6 @@ enum class ConceptKind : uint8_t {
 };
 
 /**
- * @struct ConceptDecl
- * @brief Declaracion de un CONCEPTO: un predicado comptime sobre un tipo (#6).
- *
- * Un concepto es una funcion booleana evaluada en compile-time sobre un
- * type-arg.  Tres formas (ver @c ConceptKind).  Se evalua al monomorphizar
- * un generico con bound `<T: N>`; si devuelve false, error claro.  No emite
- * codigo: las constraints DESAPARECEN tras el type-check.
- */
-/**
- * @struct StructuralMethod
- * @brief Firma de un metodo exigido por un concepto estructural (#6 ext).
- *
- * `concept Dibujable { i64 area(); bool igual(i64 x); }` produce dos
- * StructuralMethod.  El chequeo compara nombre + aridad + tipo de retorno +
- * tipos de parametros contra los metodos del tipo concreto.
- */
-struct StructuralMethod {
-    std::string name;
-    std::unique_ptr<TypeNode> return_type; ///< null = void
-    std::vector<std::unique_ptr<TypeNode>> param_types;
-};
-
-struct ConceptDecl : Node {
-    std::string name;
-    std::vector<std::string> type_params; ///< usualmente ["T"]
-    ConceptKind ckind = ConceptKind::Predicate;
-    std::unique_ptr<Expr> predicate; ///< forma Predicate
-    std::unique_ptr<BlockStmt> body; ///< forma Block
-    /// forma Structural: firmas completas (nombre + retorno + params).
-    std::vector<StructuralMethod> structural_methods;
-    bool is_public = true;
-    ConceptDecl() : Node(NodeKind::ConceptDecl) {}
-};
-
-/**
  * @struct ExtensionDecl
  * @brief NS.6-ext: @c "extension Tipo { metodos }".  anyade metodos a un tipo
  * (struct o clase) ya declarado, posiblemente desde otro fichero/namespace
@@ -2413,6 +2419,32 @@ struct ImplDecl : Node {
     bool is_public = true;
     ImplDecl() : Node(NodeKind::ImplDecl) {}
 };
+
+/**
+ * @brief Los metodos que un `extension` o un `impl` ANYADE a otro tipo.
+ *
+ * Las dos formas hacen lo mismo con sus metodos -- anyadirlos al tipo destino
+ * --, y cada sitio que los recorre (registrarlos, comprobarlos, bajarlos)
+ * preguntaba por separado cual de las dos era.
+ *
+ * @param d      La declaracion.
+ * @param target Recibe el tipo destino tal como se escribio.
+ * @return Sus metodos, o @c nullptr si @p d no es ninguna de las dos.
+ */
+inline std::vector<std::unique_ptr<ClassMethodDecl>> *
+added_methods_of(Node &d, std::string &target) {
+    if (d.kind == NodeKind::ExtensionDecl) {
+        auto &e = static_cast<ExtensionDecl &>(d);
+        target = e.target_type;
+        return &e.methods;
+    }
+    if (d.kind == NodeKind::ImplDecl) {
+        auto &im = static_cast<ImplDecl &>(d);
+        target = im.target_type;
+        return &im.methods;
+    }
+    return nullptr;
+}
 
 /**
  * @struct ExternFnDecl
@@ -2827,6 +2859,8 @@ struct StructFieldDecl {
     /// lo excluye del calculo de offsets/tamano.  Su valor lo consume el codigo
     /// comptime (constructores/metodos comptime).
     bool is_comptime = false;
+    /// De donde viene si el struct no lo escribio (base o concepto).
+    MemberOrigin origin;
 };
 
 /**
@@ -3054,6 +3088,8 @@ struct ClassFieldDecl {
     bool lombok_nonnull = false; ///< @NonNull -> check runtime
     bool lombok_with = false;    ///< @With -> with_<name>(v) -> nueva instancia
     bool lombok_getter_lazy = false; ///< @Getter(lazy=true)
+    /// De donde viene si la clase no lo escribio (un concepto).
+    MemberOrigin origin;
 };
 
 /**
@@ -3089,8 +3125,9 @@ struct ClassMethodDecl : Node {
     bool is_final = false;
     bool is_override = false;
     /**
-     * @brief El struct base del que el aplanado de la herencia COPIO este
-     *        metodo; vacio si lo declara el propio tipo.
+     * @brief De donde viene el metodo si el tipo no lo escribio: el struct
+     *        base del que lo COPIO el aplanado de la herencia, o el concepto
+     *        que lo inyecto.
      *
      * El aplanado junta los metodos de toda la cadena sin decidir quien
      * sustituye a quien: eso pide comparar las firmas con los tipos ya
@@ -3102,7 +3139,7 @@ struct ClassMethodDecl : Node {
      * la otra: el derivado se quedaba con una sola y el programa llamaba a la
      * que no era, sin una queja.
      */
-    std::string inherited_from;
+    MemberOrigin origin;
     /// `@Virtual` (structs): el metodo se despacha dinamicamente por vtable
     /// (modelo AOT: vtable estatica + devirtualizacion a llamada directa cuando
     /// el tipo concreto se conoce).  Opt-in por metodo; el resto es estatico.
@@ -3191,6 +3228,45 @@ struct ClassMethodDecl : Node {
     /// o `where U: A + B`).  Verificados al monomorphizar el metodo.
     std::vector<TypeBound> type_bounds;
     ClassMethodDecl() : Node(NodeKind::FunctionDecl) {}
+};
+
+/**
+ * @struct ConceptDecl
+ * @brief Declaracion de un CONCEPTO: un predicado comptime sobre un tipo (#6).
+ *
+ * Un concepto es una funcion booleana evaluada en compile-time sobre un
+ * type-arg.  Tres formas (ver @c ConceptKind).  Se evalua al monomorphizar
+ * un generico con bound `<T: N>`; si devuelve false, error claro.  No emite
+ * codigo: las constraints DESAPARECEN tras el type-check.
+ *
+ * La forma ESTRUCTURAL describe miembros con los MISMOS nodos que un struct:
+ *
+ * @code
+ *     concept Contable<Self> {
+ *         i64 total;                        // campo
+ *         i64 cuantos();                    // exigido: sin cuerpo
+ *         bool vacio() => this.cuantos() == 0; // por defecto: con cuerpo
+ *     }
+ * @endcode
+ *
+ * Un tipo que DECLARA cumplirlo (`struct S : Contable`, una clase o un `impl`)
+ * recibe los campos y los metodos por defecto que no escribio (ver
+ * @c MemberOrigin); lo que escribe gana.  Quien lo cumple por FORMA sin
+ * declararlo tiene que tener los exigidos y los campos.
+ */
+struct ConceptDecl : Node {
+    std::string name;
+    std::vector<std::string> type_params; ///< usualmente ["T"]
+    ConceptKind ckind = ConceptKind::Predicate;
+    std::unique_ptr<Expr> predicate; ///< forma Predicate
+    std::unique_ptr<BlockStmt> body; ///< forma Block
+    /// Forma Structural: los metodos.  Sin cuerpo, el tipo tiene que tenerlo;
+    /// con cuerpo, es el que recibe quien no lo escribe.
+    std::vector<std::unique_ptr<ClassMethodDecl>> methods;
+    /// Forma Structural: los campos, que recibe quien declara cumplirlo.
+    std::vector<StructFieldDecl> fields;
+    bool is_public = true;
+    ConceptDecl() : Node(NodeKind::ConceptDecl) {}
 };
 
 /**

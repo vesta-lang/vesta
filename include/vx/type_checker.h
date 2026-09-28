@@ -379,6 +379,8 @@ struct StructFieldInfo {
     /// en
     /// @c fields).  @c offset/@c size no aplican (no vive en la instancia).
     bool is_comptime = false;
+    /// De donde viene si el tipo no lo escribio (base o concepto).
+    ast::MemberOrigin origin;
     /// Valor por defecto del campo (`u8 a = 0x10;`), no-owning al AST (vive
     /// durante toda la compilacion).  null = sin default (zero-init).  Lo usa
     /// el lowering para `= {}`, campos no listados en el init y `default()`.
@@ -558,14 +560,14 @@ struct ClassMethodInfo {
      */
     PooledName ir_symbol;
     /**
-     * @brief El struct base del que el aplanado de la herencia COPIO este
-     *        metodo; vacio si lo declara el propio tipo.
+     * @brief De donde viene si el tipo no lo escribio: el struct base del que
+     *        el aplanado de la herencia lo COPIO, o el concepto que lo inyecto.
      *
-     * Sale de @c ast::ClassMethodDecl::inherited_from y llega al IR como
+     * Sale de @c ast::ClassMethodDecl::origin.  Lo heredado llega al IR como
      * @c ir::IrMethod::inherited_from: es lo que dice que `u128____add__` es
      * el `__add__` de `Wide128` aunque sea una copia.
      */
-    PooledName inherited_from;
+    ast::MemberOrigin origin;
     /**
      * @brief Hay mas metodos con este nombre en el mismo tipo.
      *
@@ -1549,6 +1551,74 @@ class TypeChecker {
     void flatten_struct_inheritance();
 
     /**
+     * @enum ConceptDefaultsPass
+     * @brief Si ya corrio la pasada que inyecta lo que traen los conceptos.
+     *
+     * Una instancia generica que nace despues de la pasada se inyecta sola al
+     * crearse; una que nace antes la recoge la pasada, que va DESPUES del
+     * aplanado de la herencia (para que lo escrito en un struct base tambien
+     * gane a lo que trae el concepto).
+     */
+    enum class ConceptDefaultsPass : uint8_t { Pending, Done };
+
+    /**
+     * @brief Da a cada struct, clase e `impl` que DECLARA cumplir un concepto
+     *        los campos y los metodos por defecto del concepto que no escribio.
+     *
+     * Lo escrito gana: un miembro con el mismo nombre (y, en un metodo, la
+     * misma aridad) que ya tenga el tipo -- escrito o heredado -- no se
+     * inyecta.  Cada miembro inyectado lleva su procedencia
+     * (@c ast::MemberOrigin): de que concepto, con que argumentos, y donde
+     * esta el original.  Un `impl` solo recibe metodos: no puede anyadir
+     * campos a un tipo ya declarado.
+     *
+     * No baja a nada propio: lo inyectado son miembros normales del tipo, y
+     * bajan como los demas.  No necesita runtime.
+     */
+    void inject_concept_defaults();
+
+    /// @brief La inyeccion de @ref inject_concept_defaults en un struct.
+    /// @param s El struct (concreto).
+    void inject_concept_defaults_into(ast::StructDecl &s);
+
+    /// Los structs y clases declarados en el modulo, por nombre.  Antes de
+    /// montar los layouts es la unica forma de ver los metodos de un tipo
+    /// local.
+    using TypeDeclIndex = std::unordered_map<std::string, const ast::Node *>;
+
+    /// @brief Construye el @ref TypeDeclIndex del modulo (una pasada).
+    /// @return El indice.
+    [[nodiscard]] TypeDeclIndex index_type_decls() const;
+
+    /// @brief La inyeccion de @ref inject_concept_defaults en una clase.
+    /// @param c     La clase (concreta).
+    /// @param index Los tipos del modulo, o @c nullptr para construirlo solo
+    ///              si hace falta (una instancia que nace tarde).
+    void inject_concept_defaults_into(ast::ClassDecl &c,
+                                      const TypeDeclIndex *index);
+
+    /// @brief La inyeccion de @ref inject_concept_defaults en un `impl`: solo
+    ///        metodos, que el tipo destino no tenga ya.
+    /// @param im    El `impl`.
+    /// @param index Los tipos del modulo.
+    void inject_concept_defaults_into(ast::ImplDecl &im,
+                                      const TypeDeclIndex &index);
+
+    /**
+     * @brief Tiene la clase @p class_name (o su cadena de bases) un metodo con
+     *        ese nombre y esa aridad, escrito o heredado?
+     * @param index      Los tipos del modulo.
+     * @param class_name La clase.
+     * @param name       El metodo.
+     * @param arity      Su numero de parametros.
+     * @return Cierto si lo tiene.
+     */
+    [[nodiscard]] bool class_chain_has_method(const TypeDeclIndex &index,
+                                              const std::string &class_name,
+                                              const std::string &name,
+                                              size_t arity) const;
+
+    /**
      * @brief Verifica que cada struct o clase que declara `: Concepto<...>`
      *        lo cumple, con sus argumentos.  Coste cero: es una comprobacion
      *        comptime (misma via que `where T: C`), no genera codigo ni
@@ -1609,6 +1679,26 @@ class TypeChecker {
                                      const ast::ClassMethodDecl &m,
                                      const vxgen::GenSubst &g,
                                      const SourceLoc &loc);
+
+    /**
+     * @brief Copia un metodo de una plantilla a una INSTANCIA (struct o
+     *        clase): lo que es comun a las dos.
+     *
+     * Si su `where` no se cumple con estos argumentos, el metodo no existe en
+     * la instancia (se apunta por que).  El cuerpo solo si le toca a este
+     * modulo; las cotas que quedan son las del propio metodo; los contratos con
+     * `when:` sobre T, resueltos.
+     *
+     * @param m       El metodo de la plantilla.
+     * @param mangled Nombre de la instancia.
+     * @param g       La sustitucion de la instancia.
+     * @param loc     Donde se pidio la instancia.
+     * @return La copia, o @c nullptr si el metodo no existe en la instancia.
+     */
+    std::unique_ptr<ast::ClassMethodDecl>
+    clone_instance_method_(const ast::ClassMethodDecl &m,
+                           const std::string &mangled, const vxgen::GenSubst &g,
+                           const SourceLoc &loc);
 
     /// Resuelve los @complexity de un metodo NO generico (todos sus atomos
     /// deben ser de target: aqui no hay T al que referirse).
@@ -5040,6 +5130,32 @@ class TypeChecker {
      */
     void check_impl_conformance(const PendingImplCheck &pc);
 
+  public:
+    /**
+     * @struct MemberHost
+     * @brief El tipo al que un `extension` / `impl` anyade metodos: su clave de
+     *        layout y si es struct o clase.
+     */
+    struct MemberHost {
+        std::string key;                          ///< vacia si no se encontro
+        PrimitiveKind kind = PrimitiveKind::COUNT; ///< STRUCT o CLASS
+    };
+
+    /**
+     * @brief Resuelve el tipo destino ESCRITO de un `extension` / `impl` a la
+     *        clave de su layout: directo, cualificado (`mod.Tipo` ->
+     *        `mod__Tipo`) o por la resolucion de tipos (importados, alias).
+     *
+     * La registran, la comprueban y la bajan tres sitios distintos, y cada uno
+     * tenia su copia de esta busqueda.
+     *
+     * @param written El tipo como se escribio.
+     * @return El destino; clave vacia si no es un struct ni una clase.
+     */
+    [[nodiscard]] MemberHost find_member_host(const std::string &written) const;
+
+  private:
+
     /**
      * @brief Tipa una lista `{...}` por el destino al que va: una asignacion
      *        (`a[i] = {.x = 1}`, `p.c = {...}`, `*q = {...}`), un `return` o
@@ -5139,6 +5255,9 @@ class TypeChecker {
     /// Poblado al registrar templates.  Consultado por la evaluacion de
     /// bounds y por la composicion de conceptos en predicados comptime.
     std::unordered_map<std::string, const ast::ConceptDecl *> concepts_;
+    /// Si ya corrio @ref inject_concept_defaults (las instancias que nacen
+    /// despues se inyectan al crearse).
+    ConceptDefaultsPass concept_defaults_pass_ = ConceptDefaultsPass::Pending;
     /// #cross-module-generics: nombres de plantillas/conceptos ya inyectados
     /// desde un `.vxi` importado (dedup de re-parse + evita doble inyeccion
     /// si varios imports los traen).

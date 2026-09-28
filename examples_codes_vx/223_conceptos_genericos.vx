@@ -125,6 +125,75 @@ impl Da<i64> for Pieza {
 	i64 dame() => this.v;
 }
 
+// Un concepto con CAMPOS y METODOS POR DEFECTO.  Se escribe como el cuerpo de
+// un struct: un metodo sin cuerpo (`;`) es el que se EXIGE; uno con cuerpo es
+// el que RECIBE quien declara cumplirlo y no lo escribe; un campo lo recibe
+// tambien.  Lo que el tipo escribe gana.
+concept Contable<Self> {
+	i64 total;
+
+	i64 cuantos();
+	bool vacio() => this.cuantos() == 0;
+	i64 doble() => this.cuantos() * 2;
+	Self mismo() => this; // `Self` es el tipo que lo declara
+}
+struct Saco : Contable { // recibe `total`, `vacio`, `mismo`...
+	i64 cuantos() => this.total;
+	i64 doble() => 100; // ...pero `doble` lo escribe: gana el suyo
+}
+class Cesta : Contable { // una clase tambien los recibe (el campo incluido)
+	Cesta(i64 n) { this.total = n; }
+	i64 cuantos() => this.total + 1;
+}
+struct Monton {
+	i64 total;
+}
+impl Contable for Monton { // un `impl` solo recibe METODOS
+	i64 cuantos() => this.total * 10;
+}
+// Con argumentos, en un generico: cada instancia recibe los suyos ya
+// sustituidos (`Lote<i64> : Medida<i64>` recibe un `i64 tope()`).
+concept Medida<Self, E> {
+	E base;
+
+	E tope() => this.base + this.base;
+}
+struct Lote<T> : Medida<T> {
+	i64 n;
+}
+
+// Un BLOQUE puede empezar por una variable, que se escribe igual que un campo
+// con valor: lo que lo hace bloque son sus sentencias (el `return`).
+concept Pequeno<T> {
+	i64 tam = type.size<T>();
+	return tam <= 8;
+}
+// Cumplirlo por FORMA, sin declararlo: basta con el campo y el exigido; los
+// metodos por defecto no se exigen (ni se reciben).
+struct Suelto {
+	i64 total;
+
+	i64 cuantos() => this.total;
+}
+i64 cuenta<C: Contable>(C c) => c.cuantos();
+
+i64 prueba_defaults() {
+	if (!Pequeno<i64>() || Pequeno<Plano>()) return 6;
+	Suelto su = {.total = 9};
+	if (cuenta(su) != 9) return 7;
+	Saco s = {.total = 3};
+	if (s.cuantos() != 3 || s.vacio() || s.doble() != 100) return 1;
+	Saco otro = s.mismo();
+	if (otro.total != 3) return 2;
+	Cesta c = new Cesta(4);
+	if (c.cuantos() != 5 || c.vacio() || c.doble() != 10) return 3;
+	Monton m = {.total = 2};
+	if (m.cuantos() != 20 || m.doble() != 40 || m.vacio()) return 4;
+	Lote<i64> l = {.base = 7, .n = 1};
+	if (l.tope() != 14) return 5;
+	return 0;
+}
+
 i32 main() {
 	if (bytes_de<Plano>() != 16) return 1;
 	if (!Pod<Plano>() || !Pod<i64>()) return 2;
@@ -136,6 +205,8 @@ i32 main() {
 	IHabla     hb = vz;
 	Pieza      pz = {.v = 5};
 	if (saca(cj) + saca(vz) + hb.habla() + saca(pz) != 17) return 5;
+	const i64 pd = prueba_defaults();
+	if (pd != 0) return (i32)(10 + pd);
 
 	i64 mx = maximo<i64>(10, 30); // built-in Comparable      -> 30
 	i64 sm = sumar<i64>(3, 4);    // user MiNumero (where)     -> 7

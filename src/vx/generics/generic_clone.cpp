@@ -24,7 +24,8 @@
 
 #include "vx/generics/generic_clone.h"
 
-#include "util/os/thread_slot.h" // el mapa activo, sin `thread_local`
+#include "util/os/thread_slot.h"      // el mapa activo, sin `thread_local`
+#include "vx/generics/generic_infer.h" // type_node_text
 
 namespace vx {
 namespace vxgen {
@@ -278,9 +279,11 @@ std::unique_ptr<ast::TypeNode> clone_type_shape(const ast::TypeNode *t,
         auto *src = static_cast<const ast::NamedTypeNode *>(t);
         // Si el nombre es uno de los type params, sustituimos por
         // el tipo concreto del binding.
-        if (g.params && g.args) {
+        if (g.active()) {
             for (size_t i = 0; i < g.params->size(); ++i) {
                 if ((*g.params)[i] == src->name) {
+                    if (g.arg_nodes != nullptr)
+                        return clone_type_with_subst((*g.arg_nodes)[i]);
                     // Reconstruir el TypeNode COMPLETO del arg (preserva
                     // puntero/array/pointee; antes un `i64*` colapsaba a un
                     // PrimitiveTypeNode{PTR} sin pointee -> deref fallaba, #2).
@@ -348,6 +351,20 @@ std::unique_ptr<ast::TypeNode> clone_type_shape(const ast::TypeNode *t,
 }
 
 } // namespace
+
+std::unique_ptr<ast::ParamDecl> clone_param_with_subst(const ast::ParamDecl &p,
+                                                       const GenSubst &g) {
+    auto np = std::make_unique<ast::ParamDecl>();
+    np->loc = p.loc;
+    np->name = p.name;
+    np->type = clone_type_with_subst(p.type.get(), g);
+    np->dir = p.dir;
+    np->is_expr_capture = p.is_expr_capture;
+    np->is_variadic = p.is_variadic;
+    np->is_raw_variadic = p.is_raw_variadic;
+    np->abi_reg = p.abi_reg;
+    return np;
+}
 
 std::unique_ptr<ast::Expr> clone_expr(const ast::Expr *e, const GenSubst &g) {
     if (!e) return nullptr;
@@ -494,9 +511,15 @@ std::unique_ptr<ast::Expr> clone_expr(const ast::Expr *e, const GenSubst &g) {
         // arg es CLASS/STRUCT/ENUM, usa el struct_name.  Si es
         // primitivo, usa el nombre canonico ("i32", "f64", etc).
         bool substituted = false;
-        if (g.params && g.args) {
+        if (g.active()) {
             for (size_t i = 0; i < g.params->size(); ++i) {
                 if ((*g.params)[i] == s->class_name) {
+                    if (g.arg_nodes != nullptr) {
+                        x->class_name =
+                            generics::type_node_text((*g.arg_nodes)[i]);
+                        substituted = true;
+                        break;
+                    }
                     const Type &a = (*g.args)[i];
                     if (a.kind == PrimitiveKind::CLASS ||
                         a.kind == PrimitiveKind::STRUCT) {
@@ -564,13 +587,8 @@ std::unique_ptr<ast::Expr> clone_expr(const ast::Expr *e, const GenSubst &g) {
         auto *s = static_cast<const ast::LambdaExpr *>(e);
         auto x = std::make_unique<ast::LambdaExpr>();
         x->loc = s->loc;
-        for (const auto &p : s->params) {
-            auto np = std::make_unique<ast::ParamDecl>();
-            np->loc = p->loc;
-            np->name = p->name;
-            np->type = clone_type_with_subst(p->type.get(), g);
-            x->params.push_back(std::move(np));
-        }
+        for (const auto &p : s->params)
+            if (p) x->params.push_back(clone_param_with_subst(*p, g));
         if (s->return_type)
             x->return_type = clone_type_with_subst(s->return_type.get(), g);
         if (s->body) {
@@ -1003,6 +1021,15 @@ void rename_idents(
     }
     case ast::NodeKind::ClassDecl: {
         auto *cd = static_cast<ast::ClassDecl *>(n);
+        for (auto &m : cd->methods)
+            if (m) rename_in_stmt(m->body.get());
+        break;
+    }
+    /* Los metodos por defecto de un concepto son cuerpos como los de un
+     * struct, y se inyectan en tipos de OTRO modulo: tienen que seguir
+     * nombrando lo que nombraban en el suyo. */
+    case ast::NodeKind::ConceptDecl: {
+        auto *cd = static_cast<ast::ConceptDecl *>(n);
         for (auto &m : cd->methods)
             if (m) rename_in_stmt(m->body.get());
         break;

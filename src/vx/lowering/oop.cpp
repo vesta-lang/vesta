@@ -2538,49 +2538,14 @@ ir::IrValueId Lowering::lower_class_method_call(ast::CallExpr *e) {
 void Lowering::lower_extension_methods(ir::IrModule &out) {
     for (auto &decl : mod_.decls) {
         if (!decl) continue;
-        const bool is_ext = decl->kind == ast::NodeKind::ExtensionDecl;
-        const bool is_impl = decl->kind == ast::NodeKind::ImplDecl;
-        if (!is_ext && !is_impl) continue;
         std::string target_src;
-        std::vector<std::unique_ptr<ast::ClassMethodDecl>> *methods = nullptr;
-        if (is_ext) {
-            auto *e = static_cast<ast::ExtensionDecl *>(decl.get());
-            target_src = e->target_type;
-            methods = &e->methods;
-        } else {
-            auto *im = static_cast<ast::ImplDecl *>(decl.get());
-            target_src = im->target_type;
-            methods = &im->methods;
-        }
-        // Resolver la clave del layout destino (misma logica que el checker).
-        std::string key;
-        bool is_class = false;
-        auto set_key = [&](const std::string &k) -> bool {
-            if (tc_.struct_layouts().count(k)) {
-                key = k;
-                is_class = false;
-                return true;
-            }
-            if (tc_.class_layouts().count(k)) {
-                key = k;
-                is_class = true;
-                return true;
-            }
-            return false;
-        };
-        if (!set_key(target_src)) {
-            std::string mangled = target_src;
-            for (size_t p = mangled.find('.'); p != std::string::npos;
-                 p = mangled.find('.'))
-                mangled.replace(p, 1, "__");
-            if (mangled == target_src || !set_key(mangled)) {
-                const Type rt = tc_.resolve_type_string(target_src);
-                if (rt.kind == PrimitiveKind::STRUCT ||
-                    rt.kind == PrimitiveKind::CLASS)
-                    set_key(rt.struct_name);
-            }
-        }
-        if (key.empty()) continue;
+        auto *methods = ast::added_methods_of(*decl, target_src);
+        if (methods == nullptr) continue;
+        // El destino, con la misma busqueda que el comprobador.
+        const TypeChecker::MemberHost host = tc_.find_member_host(target_src);
+        if (host.key.empty()) continue;
+        const std::string &key = host.key;
+        const bool is_class = host.kind == PrimitiveKind::CLASS;
         // StructDecl temporal: name = clave, methods = los de la extension
         // (movidos temporalmente y devueltos al terminar).
         ast::StructDecl tmp;
@@ -2714,7 +2679,10 @@ ir::IrMethod Lowering::ir_method_from(const ClassMethodInfo &m) {
     imeth.is_destructor = m.is_destructor;
     imeth.is_inline = m.is_inline;
     imeth.defining_class = m.defining_class;
-    imeth.inherited_from = m.inherited_from.str();
+    /* El IR solo sabe de copias de un BASE: lo que inyecta un concepto es del
+     * propio tipo a efectos de emitirlo. */
+    if (m.origin.kind == ast::MemberOriginKind::Inherited)
+        imeth.inherited_from = m.origin.via.name.str();
     return imeth;
 }
 

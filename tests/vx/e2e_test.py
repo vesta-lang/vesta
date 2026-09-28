@@ -3693,6 +3693,8 @@ fails_case("gen224", "constraint violada (Punto no es Numeric)", "224_conceptos_
 fails_case("inst618", "struct generico `: Da<i64>` cuya INSTANCIA no lo cumple (antes la instancia no heredaba la clausula)", "618_instancia_no_cumple_err.vx", "VX2160", line=3673)
 fails_case("clase619", "clase `: Da<i64>` que no lo cumple: concepto estatico tras `:` en una clase", "619_clase_no_cumple_err.vx", "VX2160", line=3673)
 fails_case("impl620", "`impl Da<i64> for X` que no lo cumple: el error cita Da<i64>", "620_impl_con_argumentos_err.vx", "Da<i64>", line=3673)
+fails_case("impldesc623", "`impl X` sobre algo que no es un struct ni una clase", "623_impl_tipo_desconocido_err.vx", "VX2161", line=3673)
+fails_case("implcampo622","un `impl` no aporta el CAMPO que exige el concepto: el tipo no lo cumple", "622_impl_sin_campo_err.vx", "VX2139", line=3673)
 fails_case("plantilla621", "dos plantillas con el mismo nombre: la segunda pisaba a la primera sin avisar", "621_plantilla_duplicada_err.vx", "VX2062", line=3673)
 fails_case("cota617", "cota con argumentos `<C: Da<i64>>` que no se cumple: el error cita Da<i64>", "617_cota_con_argumentos_err.vx", "Da<i64>", line=3673)
 r0_case("gen225", "especializacion total + parcial (Caja<T> / Caja<i64> / Caja<Punto> / Caja<T*>)", "225_especializacion.vx", 42, line=3676)

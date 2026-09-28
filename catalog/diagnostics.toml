@@ -2987,6 +2987,12 @@ es = "'{0}' declara ': {1}', y '{1}' no es un concepto conocido ni una base que 
 en = "'{0}' does not satisfy the concept '{1}' it declares (directly, or inherited from an @Abstract base)"
 es = "'{0}' no cumple el concepto '{1}' que declara (directamente, o heredado de una base @Abstract)"
 
+# `extension X {...}` / `impl C for X {...}` con un X que no es un struct ni
+# una clase conocidos.  {0} la palabra (`extension` / `impl`), {1} el tipo.
+[VX2161]
+en = "'{0}' adds methods to '{1}', and '{1}' is not a known struct or class"
+es = "'{0}' anyade metodos a '{1}', y '{1}' no es un struct ni una clase conocidos"
+
 # Escribir a traves de un prestamo compartido.  {0} el tipo del prestamo.
 [VX2153]
 en = "'{0}' is a shared borrow: it only reads, and this writes through it.  Take it with `lend_mut` to write"

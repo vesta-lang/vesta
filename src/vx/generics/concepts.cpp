@@ -127,15 +127,8 @@ static bool eval_builtin_concept(const TypeChecker &tc, const std::string &name,
     return false;
 }
 
-/**
- * @brief El concepto de usuario @p name, escrito tal cual o cualificado por
- *        su espacio de nombres (`mat.Numerico`).
- * @param tc   Comprobador.
- * @param name Nombre como se escribio.
- * @return Su declaracion, o nulo si no hay un concepto de usuario asi.
- */
-static const ast::ConceptDecl *find_user_concept(const TypeChecker &tc,
-                                                 const std::string &name) {
+const ast::ConceptDecl *find_user_concept(const TypeChecker &tc,
+                                          const std::string &name) {
     auto it = tc.concepts().find(name);
     const size_t dot = name.rfind('.');
     if (it == tc.concepts().end() && dot != std::string::npos)
@@ -169,6 +162,100 @@ static Type resolve_concept_type(const TypeChecker &tc,
                                  const vxgen::GenSubst &g) {
     const auto concrete = vxgen::clone_type_with_subst(node, g);
     return tc.resolve_type_node(concrete.get());
+}
+
+/**
+ * @brief El tipo tiene un metodo con la FIRMA que pide el concepto: mismo
+ *        nombre, mismos tipos de parametros y mismo retorno.
+ *
+ * Los tipos de la firma se resuelven con los parametros del concepto
+ * SUSTITUIDOS: sin eso `Optional<E>` resolvia `E` como un tipo desconocido --
+ * void -- y ninguna firma casaba, sin que nadie lo dijera.  Entre varias
+ * sobrecargas vale cualquiera que case.
+ *
+ * @param tc      Comprobador.
+ * @param methods Los metodos del tipo.
+ * @param want    El metodo del concepto.
+ * @param g       Sustitucion de los parametros del concepto.
+ * @return Cierto si lo tiene.
+ */
+static bool has_method_like(const TypeChecker &tc,
+                            const std::vector<ClassMethodInfo> &methods,
+                            const ast::ClassMethodDecl &want,
+                            const vxgen::GenSubst &g) {
+    const Type want_ret =
+        want.return_type ? resolve_concept_type(tc, want.return_type.get(), g)
+                         : Type{PrimitiveKind::VOID};
+    for (const ClassMethodInfo &m : methods) {
+        if (m.is_constructor || m.is_destructor) continue;
+        if (m.name != want.name) continue;
+        if (m.param_types.size() != want.params.size()) continue;
+        if (!(m.return_type == want_ret)) continue;
+        size_t i = 0;
+        for (; i < want.params.size(); ++i) {
+            const Type want_p =
+                resolve_concept_type(tc, want.params[i]->type.get(), g);
+            if (!(m.param_types[i] == want_p)) break;
+        }
+        if (i == want.params.size()) return true;
+    }
+    return false;
+}
+
+/**
+ * @brief El tipo tiene un campo con el nombre y el tipo que pide el concepto.
+ * @param tc     Comprobador.
+ * @param fields Los campos del tipo.
+ * @param want   El campo del concepto.
+ * @param g      Sustitucion de los parametros del concepto.
+ * @return Cierto si lo tiene.
+ */
+static bool has_field_like(const TypeChecker &tc,
+                           const std::vector<StructFieldInfo> &fields,
+                           const ast::StructFieldDecl &want,
+                           const vxgen::GenSubst &g) {
+    const Type want_t = resolve_concept_type(tc, want.type.get(), g);
+    for (const StructFieldInfo &f : fields)
+        if (f.name == want.name) return f.type == want_t;
+    return false;
+}
+
+/**
+ * @brief El tipo tiene la FORMA de un concepto estructural: todos sus campos y
+ *        todos sus metodos EXIGIDOS (los que no traen cuerpo).
+ *
+ * Los que traen cuerpo no se exigen: quien declara el concepto los recibe, y
+ * quien lo cumple sin declararlo se queda sin ellos.
+ *
+ * @param tc Comprobador.
+ * @param cd El concepto.
+ * @param t  El tipo comprobado.
+ * @param g  Sustitucion de los parametros del concepto.
+ * @return Cierto si lo cumple.
+ */
+static bool has_concept_shape(const TypeChecker &tc, const ast::ConceptDecl &cd,
+                              const Type &t, const vxgen::GenSubst &g) {
+    const std::vector<ClassMethodInfo> *methods = nullptr;
+    const std::vector<StructFieldInfo> *fields = nullptr;
+    if (t.kind == PrimitiveKind::CLASS) {
+        auto itc = tc.class_layouts().find(t.struct_name);
+        if (itc == tc.class_layouts().end()) return false;
+        methods = &itc->second.methods;
+        fields = &itc->second.fields;
+    } else if (t.kind == PrimitiveKind::STRUCT) {
+        auto its = tc.struct_layouts().find(t.struct_name);
+        if (its == tc.struct_layouts().end()) return false;
+        methods = &its->second.methods;
+        fields = &its->second.fields;
+    } else {
+        return false;
+    }
+    for (const ast::StructFieldDecl &f : cd.fields)
+        if (!has_field_like(tc, *fields, f, g)) return false;
+    for (const auto &m : cd.methods)
+        if (m && !m->body && !has_method_like(tc, *methods, *m, g))
+            return false;
+    return true;
 }
 
 // ------------------------------------------------------------------
@@ -261,70 +348,9 @@ ConceptEval comptime_eval_concept(const TypeChecker &tc,
                       ctrl.return_value.value != 0;
         return r;
     }
-    case ast::ConceptKind::Structural: {
-        // El tipo debe tener TODOS los metodos exigidos, con FIRMA
-        // compatible: mismo nombre, misma aridad, mismo tipo de retorno y
-        // mismos tipos de parametros.  Localiza el ClassMethodInfo del tipo
-        // (clase o struct) y lo compara contra la firma del concepto.
-        const std::vector<ClassMethodInfo> *methods = nullptr;
-        if (t.kind == PrimitiveKind::CLASS) {
-            auto itc = tc.class_layouts().find(t.struct_name);
-            if (itc != tc.class_layouts().end()) methods = &itc->second.methods;
-        } else if (t.kind == PrimitiveKind::STRUCT) {
-            auto its = tc.struct_layouts().find(t.struct_name);
-            if (its != tc.struct_layouts().end())
-                methods = &its->second.methods;
-        }
-        bool all = (methods != nullptr);
-        if (methods) {
-            for (const auto &sm : cd->structural_methods) {
-                const ClassMethodInfo *found = nullptr;
-                for (const auto &m : *methods) {
-                    if (m.is_constructor || m.is_destructor) continue;
-                    if (m.name == sm.name) {
-                        found = &m;
-                        break;
-                    }
-                }
-                if (!found) {
-                    all = false;
-                    break;
-                }
-                // Aridad.
-                if (found->param_types.size() != sm.param_types.size()) {
-                    all = false;
-                    break;
-                }
-                // Tipo de retorno (null en la firma = void).  Con los
-                // parametros del concepto SUSTITUIDOS: sin eso `Optional<E>`
-                // resolvia `E` como un tipo desconocido -- void -- y ninguna
-                // firma casaba, sin que nadie lo dijera.
-                const Type want_ret =
-                    sm.return_type ? resolve_concept_type(tc, sm.return_type.get(), g)
-                                   : Type{PrimitiveKind::VOID};
-                if (!(found->return_type == want_ret)) {
-                    all = false;
-                    break;
-                }
-                // Tipos de parametros.
-                bool params_ok = true;
-                for (size_t i = 0; i < sm.param_types.size(); ++i) {
-                    const Type want_p =
-                        resolve_concept_type(tc, sm.param_types[i].get(), g);
-                    if (!(found->param_types[i] == want_p)) {
-                        params_ok = false;
-                        break;
-                    }
-                }
-                if (!params_ok) {
-                    all = false;
-                    break;
-                }
-            }
-        }
-        r.satisfied = all;
+    case ast::ConceptKind::Structural:
+        r.satisfied = has_concept_shape(tc, *cd, t, g);
         return r;
-    }
     }
     return r;
 }
@@ -408,8 +434,11 @@ ConceptArgs concept_ref_args(const TypeChecker &tc, const ast::ConceptRef &c,
 
 std::string written_concept(const TypeChecker &tc, const std::string &name,
                             const ConceptArgs &args) {
-    if (args.empty()) return name;
-    std::string out = name + "<";
+    /* Como se escribio: el aplanado de namespaces lo registro con su simbolo
+     * (`ejemplos__x__Contable`), que no esta en el fuente. */
+    std::string out = tc.written_name(name);
+    if (args.empty()) return out;
+    out += "<";
     for (size_t i = 0; i < args.size(); ++i) {
         if (i != 0) out += ", ";
         out += tc.written_type_name(args[i]);

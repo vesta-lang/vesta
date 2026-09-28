@@ -141,6 +141,15 @@ bool is_comptime_builtin_name(const std::string &name);
 std::string target_expr_unknown_atom(const std::string &spec) noexcept;
 
 /**
+ * @enum MemberBodyOwner
+ * @brief De quien es un cuerpo de miembros `{ campos; metodos }`.
+ */
+enum class MemberBodyOwner : uint8_t {
+    Type,    ///< un struct (o una vista): cada metodo trae su cuerpo
+    Concept, ///< un concepto: un metodo sin cuerpo (`;`) es el que exige
+};
+
+/**
  * @class Parser
  * @brief Construye un AST a partir de los tokens producidos por @c Lexer.
  *
@@ -1112,11 +1121,36 @@ class Parser {
      * C se rechazaban con un "se esperaba un tipo de campo", sin que nada
      * dijera que esa forma admite menos.
      *
-     * @param sd         Declaracion que se va rellenando.
-     * @param is_overlay Si es una vista sobre memoria (admite `[count]` y
-     *                   `stride(...)` en los campos).
+     * Y lo usa un CONCEPTO estructural, que describe sus miembros con la misma
+     * forma: ahi un metodo puede acabar en `;` sin cuerpo (el que se exige).
+     *
+     * @param sd    Declaracion que se va rellenando (si es una vista sobre
+     *              memoria lo dice @c sd.is_overlay).
+     * @param owner De quien es el cuerpo.
      */
-    void parse_struct_body_(ast::StructDecl &sd, bool is_overlay);
+    void parse_struct_body_(ast::StructDecl &sd, MemberBodyOwner owner);
+
+    /**
+     * @brief Mira, sin consumir, si el cuerpo de un concepto (con `{` en
+     *        @c current_) DECLARA MIEMBROS o es un bloque de sentencias.
+     *
+     * Declara miembros si cada cosa de su nivel empieza por `<tipo> <nombre>`
+     * seguido de `(`, `<`, `;` o `=`.  Mirando solo la primera no basta: un
+     * campo con valor por defecto (`i64 total = 0;`) se escribe igual que una
+     * variable de un bloque, y lo que lo decide es que el bloque tiene
+     * ademas SENTENCIAS (su `return`).
+     *
+     * @return Cierto si es la forma estructural.
+     */
+    [[nodiscard]] bool concept_body_declares_members_() const;
+
+    /**
+     * @brief Salta, sin consumir, un miembro de un cuerpo de concepto que
+     *        empieza en @p at (tras su `<tipo> <nombre>`).
+     * @param at Posicion de lookahead del token que sigue al nombre.
+     * @return La posicion tras el miembro, o 0 si no tiene forma de miembro.
+     */
+    [[nodiscard]] size_t peek_skip_concept_member_(size_t at) const;
 
     std::unique_ptr<ast::StructDecl> parse_inline_anon_aggregate_();
 

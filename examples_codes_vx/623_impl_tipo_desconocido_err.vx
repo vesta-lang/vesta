@@ -1,0 +1,9 @@
+namespace ejemplos.impl_tipo_desconocido_err;
+
+// `impl X { ... }` anyade metodos a un struct o una clase: si X no es ninguno
+// de los dos, no hay a quien anyadirselos (VX2161).
+impl NoExiste {
+	i64 f() => 1;
+}
+
+i32 main() => 0;

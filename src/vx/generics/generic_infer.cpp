@@ -122,53 +122,6 @@ build_deduction_plan(const std::vector<std::string> &type_params,
     return plan;
 }
 
-std::string type_node_text(const ast::TypeNode *t) {
-    if (t == nullptr) return std::string();
-    switch (t->kind) {
-    case ast::NodeKind::NamedTypeNode: {
-        const auto *n = static_cast<const ast::NamedTypeNode *>(t);
-        if (n->type_args.empty()) return n->name;
-        std::string s = n->name + "<";
-        for (size_t i = 0; i < n->type_args.size(); ++i) {
-            if (i != 0) s += ", ";
-            s += type_node_text(n->type_args[i].get());
-        }
-        return s + ">";
-    }
-    case ast::NodeKind::PrimitiveTypeNode: {
-        const auto *p = static_cast<const ast::PrimitiveTypeNode *>(t);
-        std::string s = primitive_name(p->prim);
-        if (p->type_args.empty()) return s;
-        s += "<";
-        for (size_t i = 0; i < p->type_args.size(); ++i) {
-            if (i != 0) s += ", ";
-            s += type_node_text(p->type_args[i].get());
-        }
-        return s + ">";
-    }
-    case ast::NodeKind::PointerTypeNode:
-        return type_node_text(static_cast<const ast::PointerTypeNode *>(t)
-                                  ->pointee.get()) +
-               "*";
-    case ast::NodeKind::ArrayTypeNode:
-        return type_node_text(static_cast<const ast::ArrayTypeNode *>(t)
-                                  ->element_type.get()) +
-               "[]";
-    case ast::NodeKind::FunctionTypeNode: {
-        const auto *f = static_cast<const ast::FunctionTypeNode *>(t);
-        std::string s = "fn(";
-        for (size_t i = 0; i < f->param_types.size(); ++i) {
-            if (i != 0) s += ", ";
-            s += type_node_text(f->param_types[i].get());
-        }
-        s += ")";
-        if (f->return_type) s += " -> " + type_node_text(f->return_type.get());
-        return s;
-    }
-    default: return std::string();
-    }
-}
-
 uint32_t shape_specificity(const ast::TypeNode *t,
                            const std::vector<std::string> &vars) {
     if (t == nullptr) return 0;

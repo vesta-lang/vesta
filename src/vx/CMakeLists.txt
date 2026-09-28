@@ -99,6 +99,9 @@ add_library(vx_lib STATIC
     # Mirar hacia delante si empieza un tipo y donde acaba.
     parser/type_lookahead.cpp
     parser/concept_bounds.cpp
+    # `concept N { ... }` en sus tres formas; los miembros, con el cuerpo de
+    # struct.
+    parser/concept_decl.cpp
     # Que declara el modulo, indexado UNA vez.  Buscar una declaracion por
     # nombre estaba escrito a mano, con un recorrido del modulo entero, en 33
     # sitios del frontend; varios corren por cada identificador del programa.
@@ -267,6 +270,9 @@ add_library(vx_lib STATIC
     # Utilidades de clonacion de AST con sustitucion de type-params,
     # extraidas de type_checker.cpp (monolito) para mantenerlo manejable.
     generics/generic_clone.cpp
+    # La unica lista de "que se copia" de un metodo o un campo: instancias,
+    # herencia de structs y lo que inyecta un concepto.
+    generics/member_clone.cpp
     # Monomorphizacion de metodos genericos `obj.metodo<U>()` (#4).
     generics/generic_methods.cpp
     # Conceptos / constraints de genericos `<T: Concepto>` / where (#6).
@@ -278,6 +284,9 @@ add_library(vx_lib STATIC
     # funciones libres, los metodos y la eleccion de especializacion: escrito
     # en cada sitio serian tres criterios de deduccion esperando a divergir.
     generics/generic_infer.cpp
+    # Un tipo como se escribio, en texto.  AST puro, en su propio objeto: lo
+    # usa el clonado sin arrastrar al enlace el comprobador.
+    generics/type_node_text.cpp
     # Repartir los `<...>` de una declaracion: que DECLARA variables y que PASA
     # argumentos.  Solo se puede decidir sabiendo que nombres son tipos, asi
     # que no lo hace el parser.
@@ -294,6 +303,10 @@ add_library(vx_lib STATIC
     checker/type_pod.cpp
     checker/subscript_operator.cpp
     checker/concept_conformance.cpp
+    # A que tipo le anyade metodos un `extension` / `impl`.
+    checker/member_host.cpp
+    # Lo que un concepto inyecta en el tipo que declara cumplirlo.
+    checker/concept_defaults.cpp
     # Fase 4 interop C: generador de header C publico (vx --emit-header).
     c_header_gen.cpp
     lombok.cpp

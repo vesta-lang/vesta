@@ -426,6 +426,63 @@ void mangle_function_decl_(
     rewrite_refs_in_stmt_(fd->body.get(), rename_map);
 }
 
+/**
+ * @brief Reescribe las referencias de un METODO: su firma, sus cotas y su
+ *        cuerpo.
+ *
+ * Lo mismo para el de un struct, una clase, un `impl` o un concepto: estaba
+ * copiado en cada uno.
+ *
+ * @param m          El metodo.
+ * @param rename_map Los pares nombre -> mangleado.
+ */
+void rewrite_refs_in_method_(
+    ast::ClassMethodDecl &m,
+    const std::unordered_map<std::string, std::string> &rename_map) {
+    rewrite_refs_in_type_(m.return_type.get(), rename_map);
+    for (auto &p : m.params) rewrite_refs_in_type_(p->type.get(), rename_map);
+    rewrite_bounds_(m.type_bounds, rename_map);
+    rewrite_refs_in_stmt_(m.body.get(), rename_map);
+}
+
+/**
+ * @brief Reescribe las referencias de un campo de struct (o de concepto): su
+ *        tipo y todo lo que lleva de codigo.
+ * @param f          El campo.
+ * @param rename_map Los pares nombre -> mangleado.
+ */
+void rewrite_refs_in_struct_field_(
+    ast::StructFieldDecl &f,
+    const std::unordered_map<std::string, std::string> &rename_map) {
+    rewrite_refs_in_type_(f.type.get(), rename_map);
+    /* Y su VALOR POR DEFECTO, que tambien es codigo: `op metodo = doblar;`
+     * nombra ahi una funcion hermana del namespace.  Faltaba en esta lista,
+     * asi que el default seguia diciendo `doblar` cuando la declaracion ya se
+     * llamaba `prueba__doblar`.
+     *
+     * Con un tipo normal eso salia como un error de compilacion claro.  Con un
+     * campo PUNTERO A FUNCION no: el nombre venia de un `import` -- que entra
+     * sin cualificar y si resolvia --, el default no se aplicaba, el campo se
+     * quedaba a CERO, y cero es una direccion, asi que el programa compilaba,
+     * arrancaba y se moria al llamar por ese campo.  Es lo que pasaba a
+     * `resolve_syscall resolve_method = resolve;`. */
+    rewrite_refs_in_expr_(f.default_init.get(), rename_map);
+    /* Y lo que un campo de OVERLAY lleva dentro: la expresion de su offset, el
+     * resolver de su direccion, el tamanyo y el paso de un array y el resolver
+     * por elemento.  Son CODIGO, y ahi se nombran tipos igual que en el cuerpo
+     * de un metodo -- `parent<Elf64_Ehdr>()` es el caso --.
+     *
+     * Sin esto, ese `parent<T>` seguia diciendo `Ehdr` cuando la declaracion
+     * ya se llamaba `bin__Ehdr`, y el comprobador contestaba que T no era un
+     * tipo @overlay... senyalando al tipo que el usuario SI habia declarado
+     * @overlay dos lineas mas arriba. */
+    rewrite_refs_in_expr_(f.offset_expr.get(), rename_map);
+    rewrite_refs_in_stmt_(f.offset_block.get(), rename_map);
+    rewrite_refs_in_expr_(f.array_count.get(), rename_map);
+    rewrite_refs_in_expr_(f.array_stride.get(), rename_map);
+    rewrite_refs_in_stmt_(f.element_block.get(), rename_map);
+}
+
 void mangle_struct_decl_(
     ast::StructDecl *sd, const std::string &ns_path,
     std::unordered_map<std::string, std::string> &rename_map) {
@@ -452,48 +509,10 @@ void mangle_struct_decl_(
     for (auto &sp : sd->spec_pattern) {
         rewrite_refs_in_type_(sp.get(), rename_map);
     }
-    for (auto &f : sd->fields) {
-        rewrite_refs_in_type_(f.type.get(), rename_map);
-        /* Y su VALOR POR DEFECTO, que tambien es codigo: `op metodo = doblar;`
-         * nombra ahi una funcion hermana del namespace.  Faltaba en esta
-         * lista, asi que el default seguia diciendo `doblar` cuando la
-         * declaracion ya se llamaba `prueba__doblar`.
-         *
-         * Con un tipo normal eso salia como un error de compilacion claro.  Con
-         * un campo PUNTERO A FUNCION no: el nombre venia de un `import` -- que
-         * entra sin cualificar y si resolvia --, el default no se aplicaba, el
-         * campo se quedaba a CERO, y cero es una direccion, asi que el programa
-         * compilaba, arrancaba y se moria al llamar por ese campo.  Es lo que
-         * pasaba a `resolve_syscall resolve_method = resolve;`. */
-        rewrite_refs_in_expr_(f.default_init.get(), rename_map);
-        /* Y lo que un campo de OVERLAY lleva dentro: la expresion de su offset,
-         * el resolver de su direccion, el tamanyo y el paso de un array y el
-         * resolver por elemento.  Son CoDIGO, y ahi se nombran tipos igual que
-         * en el cuerpo de un metodo -- `parent<Elf64_Ehdr>()` es el caso --.
-         *
-         * Sin esto, ese `parent<T>` seguia diciendo `Ehdr` cuando la
-         * declaracion ya se llamaba `bin__Ehdr`, y el comprobador contestaba
-         * que T no era un tipo @overlay... senyalando al tipo que el usuario
-         * SI habia declarado @overlay dos lineas mas arriba.  O sea que los
-         * overlays con `parent` no se podian usar dentro de un namespace, que
-         * es donde vive casi todo el codigo. */
-        rewrite_refs_in_expr_(f.offset_expr.get(), rename_map);
-        rewrite_refs_in_stmt_(f.offset_block.get(), rename_map);
-        rewrite_refs_in_expr_(f.array_count.get(), rename_map);
-        rewrite_refs_in_expr_(f.array_stride.get(), rename_map);
-        rewrite_refs_in_stmt_(f.element_block.get(), rename_map);
-    }
+    for (auto &f : sd->fields) rewrite_refs_in_struct_field_(f, rename_map);
     // NS.1 fix: los STRUCTS tambien tienen metodos (dispatch estatico) + dtor.
-    // Sus cuerpos deben reescribirse igual que los de clase, si no las refs a
-    // globals/hermanos del namespace dentro de un metodo de struct fallan.
-    for (auto &m : sd->methods) {
-        if (!m) continue;
-        rewrite_refs_in_type_(m->return_type.get(), rename_map);
-        for (auto &p : m->params)
-            rewrite_refs_in_type_(p->type.get(), rename_map);
-        rewrite_bounds_(m->type_bounds, rename_map);
-        rewrite_refs_in_stmt_(m->body.get(), rename_map);
-    }
+    for (auto &m : sd->methods)
+        if (m) rewrite_refs_in_method_(*m, rename_map);
 }
 
 /**
@@ -523,14 +542,8 @@ void mangle_impl_decl_(
         for (auto &arg : im->concept_args)
             rewrite_refs_in_type_(arg.get(), rename_map);
     }
-    for (auto &m : im->methods) {
-        if (!m) continue;
-        rewrite_refs_in_type_(m->return_type.get(), rename_map);
-        for (auto &p : m->params)
-            rewrite_refs_in_type_(p->type.get(), rename_map);
-        rewrite_bounds_(m->type_bounds, rename_map);
-        rewrite_refs_in_stmt_(m->body.get(), rename_map);
-    }
+    for (auto &m : im->methods)
+        if (m) rewrite_refs_in_method_(*m, rename_map);
 }
 
 void mangle_class_decl_(
@@ -563,11 +576,7 @@ void mangle_class_decl_(
     }
     rewrite_bounds_(cd->type_bounds, rename_map);
     for (auto &m : cd->methods) {
-        rewrite_refs_in_type_(m->return_type.get(), rename_map);
-        for (auto &p : m->params)
-            rewrite_refs_in_type_(p->type.get(), rename_map);
-        rewrite_bounds_(m->type_bounds, rename_map);
-        rewrite_refs_in_stmt_(m->body.get(), rename_map);
+        rewrite_refs_in_method_(*m, rename_map);
         // NS.1 fix: AOP.  El pointcut de un advice (@Before/@After/@Around) se
         // guarda como string "ClassName.methodName" en advice_target.  Si la
         // clase target es del namespace, esta mangled -> reescribir la parte de
@@ -643,6 +652,13 @@ void mangle_concept_decl_(
     // El predicado puede referenciar otros conceptos del mismo namespace
     // (composicion `A<T>() && B<T>()`); reescribir sus referencias.
     if (cd->predicate) rewrite_refs_in_expr_(cd->predicate.get(), rename_map);
+    /* Y sus miembros, igual que los de un struct: una firma exigida que nombra
+     * `Punto` no casaba con nada cuando `Punto` ya era `ns__Punto`, y lo que el
+     * concepto inyecta en otro tipo tiene que nombrar lo mismo que nombraba
+     * aqui. */
+    for (auto &f : cd->fields) rewrite_refs_in_struct_field_(f, rename_map);
+    for (auto &m : cd->methods)
+        if (m) rewrite_refs_in_method_(*m, rename_map);
 }
 
 /**

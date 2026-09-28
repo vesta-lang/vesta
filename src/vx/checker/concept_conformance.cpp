@@ -131,10 +131,11 @@ void TypeChecker::check_concept_promise(const Type &t,
     const std::string &cname = ref.name.str();
     const std::string type_text = written_type_name(t);
     if (!is_concept_name(*this, cname)) {
+        const std::string written = written_name(cname);
         if (promise == ConceptPromise::Impl)
-            diags_.diag(loc, DiagLevel::ERR, "VX2140", {cname, type_text});
+            diags_.diag(loc, DiagLevel::ERR, "VX2140", {written, type_text});
         else
-            diags_.diag(loc, DiagLevel::ERR, "VX2159", {type_text, cname});
+            diags_.diag(loc, DiagLevel::ERR, "VX2159", {type_text, written});
         return;
     }
     if (depth == PromiseDepth::ExistenceOnly) return;
