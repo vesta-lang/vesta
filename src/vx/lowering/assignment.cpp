@@ -1012,33 +1012,11 @@ bool Lowering::try_lower_assign_to_index(ast::AssignExpr *e,
                                          ir::IrValueId &out) {
     if (e->target->kind != ast::NodeKind::IndexExpr) return false;
     auto *ix = static_cast<ast::IndexExpr *>(e->target.get());
-    // Operator overloading (escritura): el type checker marco
-    // @c ix->index_set_method cuando @c base es CLASS o STRUCT con
-    // @c __index_set__(index, value).  Construimos un CallExpr
-    // sintetico @c `base.__index_set__(index, value)` y delegamos en
-    // la maquinaria de metodos (CALLVIRT para CLASS, CALL para
-    // STRUCT).  Robamos los hijos del AST y los restauramos despues.
+    // `x[i] = v` con operador: `x.__index_set__(i, v)`, por el mismo camino
+    // que los demas operadores de subindice.
     if (!ix->index_set_method.empty() && ix->base && ix->index && e->value &&
         e->op == ast::AssignOp::Assign) {
-        const bool recv_is_struct =
-            (ix->base->result_type.kind == PrimitiveKind::STRUCT);
-        ast::CallExpr synth;
-        synth.loc = e->loc;
-        auto fa = std::make_unique<ast::FieldAccessExpr>();
-        fa->loc = e->loc;
-        fa->field_name = ix->index_set_method;
-        fa->base = std::move(ix->base); // receptor (CLASS o STRUCT)
-        synth.callee = std::move(fa);
-        synth.args.push_back(std::move(ix->index)); // arg 0: indice
-        synth.args.push_back(std::move(e->value));  // arg 1: valor
-        ir::IrValueId v_call = recv_is_struct ? lower_struct_method_call(&synth)
-                                              : lower_class_method_call(&synth);
-        // Restaurar los hijos a sus nodos originales.
-        auto *fa_back = static_cast<ast::FieldAccessExpr *>(synth.callee.get());
-        ix->base = std::move(fa_back->base);
-        ix->index = std::move(synth.args[0]);
-        e->value = std::move(synth.args[1]);
-        out = v_call;
+        out = lower_subscript_operator(ix, &e->value);
         return true;
     }
     // String Inc (native_poo_): `s[i] = c` muta el byte i del

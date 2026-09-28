@@ -11701,42 +11701,20 @@ Type TypeChecker::check_index(ast::IndexExpr *e) {
      * recibia `1` -- otro resultado sin una palabra. */
     if (e->is_range && bt.kind != PrimitiveKind::STRING) {
         if (e->range_hi) (void)check_expr(e->range_hi.get());
+        // Un struct o una clase cortan con su operador (`__slice__`).
+        if (bt.kind == PrimitiveKind::STRUCT || bt.kind == PrimitiveKind::CLASS)
+            return check_range_operator_(e, bt);
         diags_.diag(e->loc, DiagLevel::ERR, "VX2154", {written_type_name(bt)});
         return Type{};
     }
-    // Operator overloading C-2: `base[i]` (LECTURA) -> base.__index__(i)
-    // cuando @c bt es CLASS o STRUCT y declara @c __index__ cuya firma
-    // unaria acepta el tipo del indice.  El resultado es el return type
-    // del metodo.  Sin el dunder cae al flujo clasico (subscript de
-    // puntero/array).  Nota: solo LECTURA en C-2; @c base[i] = v
-    // (index-set) no esta cubierto aqui.
-    {
-        Type it = e->index ? e->index->result_type : Type{};
-        const std::vector<ClassMethodInfo> *methods = nullptr;
-        if (bt.kind == PrimitiveKind::CLASS && !bt.struct_name.empty()) {
-            auto it_cls = class_layouts_.find(bt.struct_name);
-            if (it_cls != class_layouts_.end())
-                methods = &it_cls->second.methods;
-        } else if (bt.kind == PrimitiveKind::STRUCT &&
-                   !bt.struct_name.empty()) {
-            auto it_s = struct_layouts_.find(bt.struct_name);
-            if (it_s != struct_layouts_.end()) methods = &it_s->second.methods;
-        }
-        if (methods) {
-            for (const auto &m : *methods) {
-                if (m.is_constructor || m.is_static) continue;
-                if (m.name != kIndexGetMethod) continue;
-                if (m.param_types.size() != 1) continue;
-                /* El indice es un ARGUMENTO: cabe donde cabria en una llamada
-                 * escrita -- un literal en un `usize`, una subclase donde se
-                 * pide la base --.  Con la regla a mano, `s[0]` no encontraba
-                 * `__index__(usize)` y `s.__index__(0)` si. */
-                if (!e->index || !arg_fits_param(e->index.get(),
-                                                 m.param_types[0], it))
-                    continue;
-                e->overload_method = kIndexGetMethod;
-                return m.return_type;
-            }
+    // `base[i]` (LECTURA) sobre un struct o clase -> base.__index__(i), si lo
+    // declara para este indice.  Sin el operador cae al subindice clasico.
+    if (e->index) {
+        SubscriptArg arg{e->index.get(), e->index->result_type};
+        if (const ClassMethodInfo *m =
+                find_subscript_operator(bt, kIndexGetMethod, &arg, 1)) {
+            e->overload_method = kIndexGetMethod;
+            return m->return_type;
         }
     }
     // String Inc 3: `s[i]` (indexado simple) y `s[a..b]` / `s[a..=b]`
@@ -16085,45 +16063,22 @@ Type TypeChecker::check_assign_impl(ast::AssignExpr *e) {
             use_judged_by_parent_ = ix->base.get(); // destino, no lectura
             const Type bt = check_expr(ix->base.get());
             ix->base->result_type = bt;
-            const std::vector<ClassMethodInfo> *methods = nullptr;
-            bool base_is_class_or_struct = false;
-            if (bt.kind == PrimitiveKind::CLASS && !bt.struct_name.empty()) {
-                auto it_c = class_layouts_.find(bt.struct_name);
-                if (it_c != class_layouts_.end()) {
-                    methods = &it_c->second.methods;
-                    base_is_class_or_struct = true;
-                }
-            } else if (bt.kind == PrimitiveKind::STRUCT &&
-                       !bt.struct_name.empty()) {
-                auto it_s = struct_layouts_.find(bt.struct_name);
-                if (it_s != struct_layouts_.end()) {
-                    methods = &it_s->second.methods;
-                    base_is_class_or_struct = true;
-                }
-            }
+            const bool base_is_class_or_struct =
+                (bt.kind == PrimitiveKind::STRUCT ||
+                 bt.kind == PrimitiveKind::CLASS) &&
+                receiver_methods(bt, nullptr, nullptr, nullptr) != nullptr;
             if (base_is_class_or_struct) {
-                // Tipo del indice y del value para validar la firma.
+                // Indice y valor son ARGUMENTOS del operador.
                 Type it = ix->index ? check_expr(ix->index.get()) : Type{};
                 if (ix->index) ix->index->result_type = it;
                 Type vt = check_expr(e->value.get());
                 e->value->result_type = vt;
-                const ClassMethodInfo *setter = nullptr;
-                if (methods) {
-                    for (const auto &m : *methods) {
-                        if (m.is_constructor || m.is_static) continue;
-                        if (m.name != kIndexSetMethod) continue;
-                        if (m.param_types.size() != 2) continue;
-                        // Indice y valor son ARGUMENTOS (ver `__index__`).
-                        if (!ix->index || !arg_fits_param(ix->index.get(),
-                                                          m.param_types[0], it))
-                            continue;
-                        if (!arg_fits_param(e->value.get(), m.param_types[1],
-                                            vt))
-                            continue;
-                        setter = &m;
-                        break;
-                    }
-                }
+                SubscriptArg args[2] = {{ix->index.get(), it},
+                                        {e->value.get(), vt}};
+                const ClassMethodInfo *setter =
+                    ix->index
+                        ? find_subscript_operator(bt, kIndexSetMethod, args, 2)
+                        : nullptr;
                 if (setter) {
                     ix->index_set_method = kIndexSetMethod;
                     /* El ELEMENTO escrito es el segundo parametro; lo que la
@@ -16135,14 +16090,10 @@ Type TypeChecker::check_assign_impl(ast::AssignExpr *e) {
                     ix->result_type = setter->param_types[1];
                     return setter->return_type;
                 }
-                // No hay __index_set__ aplicable: para CLASS/STRUCT no hay
-                // forma clasica de escribir un slot subscript, asi que es
-                // un error claro (a diferencia de array/ptr/string).
-                diags_.error(
-                    e->loc,
-                    std::string("la clase/struct '") + bt.struct_name +
-                        "' no declara `__index_set__(indice, valor)` para "
-                        "soportar `base[i] = valor`");
+                // Sin `__index_set__` aplicable no hay otra forma de escribir
+                // un subindice de struct o clase.
+                diags_.diag(e->loc, DiagLevel::ERR, "VX2158",
+                            {written_type_name(bt)});
                 return Type{PrimitiveKind::VOID};
             }
         }

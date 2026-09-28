@@ -70,6 +70,25 @@ inline constexpr const char kIndexGetMethod[] = "__index__";
 inline constexpr const char kIndexSetMethod[] = "__index_set__";
 
 /**
+ * @brief El operador de CORTE para leer: `x[a..b]` sobre un struct o clase es
+ *        `x.__slice__(lo, hi)`, con el rango ya normalizado a `[lo, hi)`.
+ */
+inline constexpr const char kSliceMethod[] = "__slice__";
+
+/**
+ * @brief El operador de CORTE para escribir: el mismo `x[a..b]` cuando el
+ *        destino pide una vista que escribe -- lo decide el destino, como con
+ *        las listas de inicializacion --: `x.__slice_mut__(lo, hi)`.
+ */
+inline constexpr const char kSliceMutMethod[] = "__slice_mut__";
+
+/**
+ * @brief La longitud de lo que se indexa: `x[a..]` sobre un struct o clase
+ *        corta hasta `x.len()`.
+ */
+inline constexpr const char kLengthMethod[] = "len";
+
+/**
  * @brief El simbolo del destructor de @p owner: `<owner>____dtor`.
  * @param owner Tipo dueno.
  * @return El simbolo.

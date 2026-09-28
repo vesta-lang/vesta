@@ -291,6 +291,7 @@ add_library(vx_lib STATIC
     checker/value_for_target.cpp
     # Si un tipo es POD (concepto `Pod` y huella `@pod`).
     checker/type_pod.cpp
+    checker/subscript_operator.cpp
     # Fase 4 interop C: generador de header C publico (vx --emit-header).
     c_header_gen.cpp
     lombok.cpp
@@ -381,6 +382,7 @@ add_library(vx_lib STATIC
     # quien pregunta necesita la direccion o el contenido.
     lowering/access.cpp
     lowering/index_operands.cpp
+    lowering/subscript_call.cpp
     # Invocar algo: llamadas, construccion de objetos y lambdas.  "Llamar" no
     # es una sola cosa (funcion del modulo, nativa, puntero a funcion, metodo
     # virtual, lambda con entorno, builtin, constructor) y averiguar cual es

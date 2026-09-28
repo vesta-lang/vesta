@@ -266,6 +266,23 @@ inline std::string async_helper_symbol(const std::string &fn) {
 }
 
 // ===========================================================================
+// Operadores de subindice
+// ===========================================================================
+
+/* Nombres LOCALES que la bajada liga, en un ambito propio, a valores ya
+ * bajados para llamar a un operador de subindice por el camino normal de los
+ * metodos: `x[a..b]` es `x.__slice__(lo, hi)` con `x` evaluado UNA vez y
+ * `lo`/`hi` ya normalizados.  Solo los nombra la llamada que se monta; el
+ * ambito se cierra al volver. */
+
+/// El receptor del operador.
+inline constexpr const char kSubscriptRecv[] = "__subscript_recv";
+/// El limite inferior normalizado de un corte.
+inline constexpr const char kSubscriptLo[] = "__subscript_lo";
+/// El limite superior (exclusivo) normalizado de un corte.
+inline constexpr const char kSubscriptHi[] = "__subscript_hi";
+
+// ===========================================================================
 // Plantillas y excepciones
 // ===========================================================================
 

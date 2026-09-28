@@ -3252,6 +3252,49 @@ class TypeChecker {
     bool arg_fits_param(ast::Expr *arg, const Type &tp, Type &ta);
 
     /**
+     * @brief Un argumento de un operador de subindice: la expresion escrita
+     *        (nula si es un limite OMITIDO de un rango) y su tipo.
+     */
+    struct SubscriptArg {
+        ast::Expr *expr = nullptr; ///< Lo escrito; nulo = limite omitido.
+        Type type;                 ///< Su tipo ya comprobado.
+    };
+
+    /**
+     * @brief El operador de subindice @p name que declara @p recv para estos
+     *        argumentos, si lo declara.
+     *
+     * Un dueno para los cuatro -- `__index__`, `__index_set__`, `__slice__`,
+     * `__slice_mut__` --: cada uno tenia su busqueda escrita a mano, y dos
+     * copias de "que metodo toma este indice" acaban contestando distinto.
+     * Solo struct y clase: `p[i]` sobre un `Struct*` indexa el PUNTERO.
+     *
+     * @param recv El tipo indexado.
+     * @param name El operador.
+     * @param args Sus argumentos, en orden; un limite omitido cabe en
+     *             cualquier parametro entero (lo pone la normalizacion).
+     * @param n    Cuantos.
+     * @return El metodo, o nulo si no lo declara con esa forma.
+     */
+    const ClassMethodInfo *find_subscript_operator(const Type &recv,
+                                                   const char *name,
+                                                   SubscriptArg *args,
+                                                   size_t n);
+
+    /**
+     * @brief `x[a..b]` sobre un struct o clase: el operador de corte que toca.
+     *
+     * `__slice__` o `__slice_mut__` segun pida el DESTINO (como las listas de
+     * inicializacion); si solo declara uno, ese.  Un superior omitido pide que
+     * el tipo declare `len()`, que da hasta donde.
+     *
+     * @param e  El subindice con rango.
+     * @param bt Su base, ya comprobada.
+     * @return El tipo del corte, o vacio si no hay operador (ya reportado).
+     */
+    Type check_range_operator_(ast::IndexExpr *e, const Type &bt);
+
+    /**
      * @brief Comprueba un argumento contra su parametro.
      * @param arg El argumento escrito.
      * @param tp El tipo del parametro, tal y como quedo en la firma.
@@ -5567,6 +5610,15 @@ class TypeChecker {
     // Idem para Optional<T>: cuando el destino es Optional<T>, propagar
     // T al Some(v).
     Type expected_optional_type_{};
+    /// El tipo DESTINO del valor que se comprueba, sea cual sea
+    /// (@ref check_value_for), o vacio sin destino.  Lo mira quien tiene que
+    /// elegir por lo que se pide y no por lo que se escribio: el corte
+    /// `x[a..b]` entre `__slice__` y `__slice_mut__`.
+    Type expected_value_type_{};
+    /// A QUE expresion se refiere @ref expected_value_type_: solo la de arriba.
+    /// En `SliceMut<T> m = f(x[1..3])` el destino del corte es el parametro de
+    /// `f`, no `m`, y sin esto se filtraria a lo que cuelga del valor.
+    const ast::Expr *expected_value_node_ = nullptr;
 
     /// BugFix R8: indica si estamos en el body de un @Macro.  Cuando
     /// es true, check_var_decl trata las var-decls como

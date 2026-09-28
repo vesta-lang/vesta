@@ -1,0 +1,15 @@
+namespace ejemplos.indice_sin_set_err;
+
+// `x[i] = v` sobre un struct llama a `__index_set__`.  Uno que solo declara la
+// LECTURA (`__index__`) no se puede escribir por indice (VX2158).
+struct SoloLee {
+	i64 v;
+
+	i64 __index__(u64 i) => this.v;
+}
+
+i32 main() {
+	SoloLee t = {.v = 1};
+	t[0]      = 5;
+	return 0;
+}

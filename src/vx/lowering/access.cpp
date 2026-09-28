@@ -370,25 +370,9 @@ ir::IrValueId Lowering::lower_index(ast::IndexExpr *e) {
     // CallExpr sintetico `base.__index__(index)` y delegamos en la
     // maquinaria de metodos.  Robamos los hijos @c base/@c index y los
     // restauramos despues para no danar el AST.
-    if (!e->overload_method.empty() && e->base && e->index) {
-        const bool recv_is_struct =
-            (e->base->result_type.kind == PrimitiveKind::STRUCT);
-        ast::CallExpr synth;
-        synth.loc = e->loc;
-        auto fa = std::make_unique<ast::FieldAccessExpr>();
-        fa->loc = e->loc;
-        fa->field_name = e->overload_method;
-        fa->base = std::move(e->base); // receptor (CLASS o STRUCT)
-        synth.callee = std::move(fa);
-        synth.args.push_back(std::move(e->index)); // unico argumento (indice)
-        ir::IrValueId v_call = recv_is_struct ? lower_struct_method_call(&synth)
-                                              : lower_class_method_call(&synth);
-        // Restaurar los hijos al IndexExpr original.
-        auto *fa_back = static_cast<ast::FieldAccessExpr *>(synth.callee.get());
-        e->base = std::move(fa_back->base);
-        e->index = std::move(synth.args[0]);
-        return v_call;
-    }
+    // `x[i]` / `x[a..b]` con operador (`__index__`, `__slice__`...).
+    if (!e->overload_method.empty() && e->base)
+        return lower_subscript_operator(e, nullptr);
 
     const ir::IrValueId addr = lower_index_addr(e);
     if (addr == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;

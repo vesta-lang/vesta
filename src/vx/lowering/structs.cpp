@@ -272,6 +272,7 @@ ir::IrValueId Lowering::lower_struct_method_call(ast::CallExpr *e) {
     std::vector<ir::IrValueId> arg_vals;
     if (!lower_method_call_args(e->args, *mtd, arg_vals))
         return ir::IR_NO_VALUE;
+    const uint32_t line = e->loc.line;
 
     /* Si el ultimo parametro recoge los que sobren, los que sobran no van uno
      * por uno: se meten en un array y se pasa su direccion y cuantos son. */
@@ -279,7 +280,7 @@ ir::IrValueId Lowering::lower_struct_method_call(ast::CallExpr *e) {
         arg_vals.size() >= mtd->param_types.size() - 1) {
         pack_variadic_args(arg_vals, mtd->param_types.size() - 1,
                            ir_type_from_primitive(mtd->variadic_elem.kind),
-                           e->loc.line);
+                           line);
     }
 
     // SRET: si el metodo devuelve Optional/Result, el caller aloca el
@@ -306,7 +307,7 @@ ir::IrValueId Lowering::lower_struct_method_call(ast::CallExpr *e) {
         al.imm = msi.bytes;
         al.dst = v_retbuf;
         al.host_alloca = msi.host_buffer;
-        al.source_line = e->loc.line;
+        al.source_line = line;
         emit(current_block_, std::move(al));
         fn_->values[v_retbuf].set_host_by_construction(msi.host_buffer);
     }
@@ -343,7 +344,7 @@ ir::IrValueId Lowering::lower_struct_method_call(ast::CallExpr *e) {
             ld.type = ir::IrType::I64;
             ld.dst = v_vptr;
             ld.operands = {this_addr};
-            ld.source_line = e->loc.line;
+            ld.source_line = line;
             emit(current_block_, std::move(ld));
         }
         // %fnaddr = %vptr + slot*8  (%vptr es VM -> load de la entrada es mov
@@ -351,8 +352,8 @@ ir::IrValueId Lowering::lower_struct_method_call(ast::CallExpr *e) {
         ir::IrValueId v_fnaddr = v_vptr;
         if (slot != 0) {
             const ir::IrValueId v_off =
-                emit_const(ir::IrType::I64, (uint64_t)slot * 8u, e->loc.line);
-            v_fnaddr = emit_ptr_add(v_vptr, v_off, e->loc.line);
+                emit_const(ir::IrType::I64, (uint64_t)slot * 8u, line);
+            v_fnaddr = emit_ptr_add(v_vptr, v_off, line);
         }
         // %fn = LOAD [%fnaddr]  (cfn: direccion del metodo; slot host -> movh)
         const ir::IrValueId v_fn = fn_->new_value(ir::IrType::PTR);
@@ -362,7 +363,7 @@ ir::IrValueId Lowering::lower_struct_method_call(ast::CallExpr *e) {
             ld.type = ir::IrType::I64;
             ld.dst = v_fn;
             ld.operands = {v_fnaddr};
-            ld.source_line = e->loc.line;
+            ld.source_line = line;
             emit(current_block_, std::move(ld));
         }
         // CALLIND %fn(this_addr, [retbuf], args...)
@@ -372,7 +373,7 @@ ir::IrValueId Lowering::lower_struct_method_call(ast::CallExpr *e) {
         ins.dst = dst;
         ins.func_ptr = v_fn;
         ins.operands = std::move(operands);
-        ins.source_line = e->loc.line;
+        ins.source_line = line;
         emit(current_block_, std::move(ins));
         return method_sret ? v_retbuf : dst;
     }
@@ -389,7 +390,7 @@ ir::IrValueId Lowering::lower_struct_method_call(ast::CallExpr *e) {
      * el enlazador no lo resolveria. */
     ins.func_name = method_symbol_of(*mtd);
     ins.operands = std::move(operands);
-    ins.source_line = e->loc.line;
+    ins.source_line = line;
     emit(current_block_, std::move(ins));
 
     return method_sret ? v_retbuf : dst;

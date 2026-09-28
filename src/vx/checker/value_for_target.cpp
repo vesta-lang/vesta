@@ -23,14 +23,20 @@ namespace vx {
 Type TypeChecker::check_value_for(ast::Expr *value, const Type &target) {
     const Type saved_optional = expected_optional_type_;
     const Type saved_result = expected_result_type_;
+    const Type saved_value = expected_value_type_;
+    const ast::Expr *saved_node = expected_value_node_;
     if (target.kind == PrimitiveKind::OPTIONAL)
         expected_optional_type_ = target;
     else if (target.kind == PrimitiveKind::RESULT)
         expected_result_type_ = target;
+    expected_value_type_ = target;
+    expected_value_node_ = value;
     type_init_list_from_target(value, target);
     const Type t = check_expr(value);
     expected_optional_type_ = saved_optional;
     expected_result_type_ = saved_result;
+    expected_value_type_ = saved_value;
+    expected_value_node_ = saved_node;
     return t;
 }
 

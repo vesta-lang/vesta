@@ -4754,6 +4754,34 @@ class Lowering {
     /// @return @c false si un limite no se pudo bajar (su error ya se dio).
     bool lower_range_bounds(ast::IndexExpr *e, ir::IrValueId v_length,
                             ir::IrValueId &v_lo, ir::IrValueId &v_hi);
+
+    /// @brief Un operador de subindice de un struct o clase, como llamada:
+    ///        `x[i]` -> `__index__`, `x[i] = v` -> `__index_set__`,
+    ///        `x[a..b]` -> `__slice__` / `__slice_mut__` (el que eligio el
+    ///        comprobador).
+    ///
+    /// El receptor se evalua UNA vez; el corte recibe los limites ya
+    /// normalizados (@ref lower_range_bounds) y, sin superior, la longitud
+    /// de `x.len()`.
+    ///
+    /// @param e             El subindice, ya marcado por el comprobador.
+    /// @param written_value Para `x[i] = v`, el dueno del valor escrito (se
+    ///                      presta a la llamada y se devuelve); nulo si no.
+    /// @return El valor de la llamada.
+    ir::IrValueId
+    lower_subscript_operator(ast::IndexExpr *e,
+                             std::unique_ptr<ast::Expr> *written_value);
+
+    /// @brief `recv.metodo(args)` sobre el receptor ya ligado de un subindice.
+    /// @param loc    Donde se escribio el subindice.
+    /// @param recv_t El tipo del receptor (struct o clase).
+    /// @param method El metodo.
+    /// @param args   Sus argumentos; se prestan y se devuelven al volver.
+    /// @return El valor de la llamada.
+    ir::IrValueId
+    call_on_subscript_receiver_(const SourceLoc &loc, const Type &recv_t,
+                                const char *method,
+                                std::vector<std::unique_ptr<ast::Expr>> &args);
     /// String Inc 3 (native_poo_): indexado simple `s[i]` -> el CHAR
     /// (byte) en la posicion @p v_idx del value-string @p v_src.  Carga
     /// el ptr@0 del slot y emite LOAD u8 de [ptr+i].  Devuelve un U8

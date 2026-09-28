@@ -206,9 +206,11 @@ const CatEntry kEntries[] = {
     {"VX2151", {"'write_borrow' writes a '{0}' into a borrow of '{1}'", "'write_borrow' escribe un '{0}' en un prestamo de '{1}'"}},
     {"VX2152", {"'{0}' borrows a single '{1}', so it has nothing to index: an index would reach memory the borrow does not cover.  To index, lend the whole array -- `lend(arr)` gives `borrow<{1}[N]>`", "'{0}' presta un solo '{1}', asi que no hay nada que indexar: un indice llegaria a memoria que el prestamo no cubre.  Para indexar, presta el array entero -- `lend(arr)` da `borrow<{1}[N]>`"}},
     {"VX2153", {"'{0}' is a shared borrow: it only reads, and this writes through it.  Take it with `lend_mut` to write", "'{0}' es un prestamo compartido: solo lee, y esto escribe a traves de el.  Tomalo con `lend_mut` para escribir"}},
-    {"VX2154", {"'[a..b]' takes a range, and '{0}' has no range subscript: indexing it with the range would read only element 'a'.  Today a range applies to `string`", "'[a..b]' toma un rango, y '{0}' no tiene subindice de rango: indexarlo con el rango leeria solo el elemento 'a'.  Hoy un rango se aplica a `string`"}},
+    {"VX2154", {"'[a..b]' takes a range, and '{0}' has no range subscript: indexing it with the range would read only element 'a'.  A struct or class slices when it declares `__slice__(lo, hi)` or `__slice_mut__(lo, hi)`", "'[a..b]' toma un rango, y '{0}' no tiene subindice de rango: indexarlo con el rango leeria solo el elemento 'a'.  Un struct o una clase cortan si declaran `__slice__(lo, hi)` o `__slice_mut__(lo, hi)`"}},
     {"VX2155", {"the Result of this call is discarded: assign it and check it with isOk()/value()/error(), or propagate the error with unwrap()", "el Result de esta llamada se descarta: asignalo y compruebalo con isOk()/value()/error(), o propaga el error con unwrap()"}},
     {"VX2156", {"slicing a string with 's[a..b]' is only built for native code; in the interpreter and the JIT use substr(s, a, len)", "cortar una cadena con 's[a..b]' solo se construye en codigo nativo; en el interprete y el JIT usa substr(s, a, len)"}},
+    {"VX2157", {"'x[a..]' slices up to the end, and '{0}' does not say where that is: declare `len()` in it, or write the upper bound", "'x[a..]' corta hasta el final, y '{0}' no dice donde esta: declara `len()` en el, o escribe el limite superior"}},
+    {"VX2158", {"'{0}' declares no `__index_set__(index, value)` that takes this write: 'x[i] = v' on a struct or class calls that operator", "'{0}' no declara un `__index_set__(indice, valor)` que admita esta escritura: 'x[i] = v' sobre un struct o una clase llama a ese operador"}},
     {"VX3001", {"{0} of {1} bytes is outside {2}: the object reserves [0, {3}) and the access is [{4}, {5})", "{0} de {1} bytes fuera de {2}: el objeto reserva [0, {3}) y el acceso es [{4}, {5})"}},
     {"VX3002", {"write", "escritura"}},
     {"VX3003", {"read", "lectura"}},
@@ -891,7 +893,7 @@ const CatEntry kEntries[] = {
     {"use_def.unused", {"'{2}' is never used", "'{2}' no se usa en ningun sitio"}},
     {"value_shape.none", {"it has no values with components", "no tiene valores con componentes"}},
 };
-const int kEntryCount = 870;
+const int kEntryCount = 872;
 
 } // namespace
 

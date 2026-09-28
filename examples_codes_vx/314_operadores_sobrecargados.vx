@@ -14,6 +14,12 @@ namespace ejemplos.operadores;
 //   &  |  ^  << >>     __and__ __or__  __xor__ __lshift__ __rshift__
 //   -x  ~x             __neg__ __invert__
 //   a[i]  a[i]=v       __index__  __index_set__
+//   a[x..y]            __slice__  __slice_mut__   (el rango llega normalizado
+//                      a [lo, hi); sin superior, hasta `len()`)
+//
+// El tipo que devuelve cada operador lo decide quien lo escribe.  Entre
+// `__slice__` y `__slice_mut__` elige el DESTINO: si pide lo que da el de
+// escritura, ese; si no, el de lectura.
 //
 // Los compuestos y el incremento salen de los anteriores; no hay que
 // declararlos:
@@ -80,6 +86,33 @@ struct Vec2 {
 	}
 	/// `v` es "verdad" si no es el vector cero.
 	public bool __bool__() => this.x != 0 || this.y != 0;
+}
+
+/// Lo que da un corte de `Fila`: que tramo se pidio y si se pidio para escribir.
+struct Tramo {
+	i64  lo;
+	i64  hi;
+	bool escribe;
+}
+
+/// Una fila que se corta con `f[x..y]`.
+struct Fila {
+	i64 n;
+
+	/// La longitud: hasta donde llega `f[x..]`.
+	public u64 len() => (u64)this.n;
+	/// Cortar para LEER.
+	public Tramo __slice__(
+		u64 lo,
+		u64 hi
+	) => {.lo = (i64)lo, .hi = (i64)hi, .escribe = false};
+	/// Cortar para ESCRIBIR: lo elige un destino que lo pida.
+	public TramoMut __slice_mut__(u64 lo, u64 hi) => {.lo = (i64)lo };
+}
+
+/// El tipo que da el corte para escribir: distinto, para que el destino elija.
+struct TramoMut {
+	i64 lo;
 }
 
 /// Mascara de bits: bitwise, shifts y el `+=` con dunder IN-PLACE.
@@ -156,6 +189,18 @@ i32 main() {
 	bool dentro = (g[1] = 9); // escribe y: true
 	bool fuera  = (g[5] = 1); // no hay componente 5: false, y no escribe
 	if (!dentro || fuera || g[1] != 9 || g[0] != 0) return 1;
+
+	// El corte: el rango llega normalizado a [lo, hi) en todas sus formas.
+	Fila  fila = {.n = 10};
+	Tramo t1   = fila[2..5];  // [2, 5)
+	Tramo t2   = fila[..4];   // [0, 4)
+	Tramo t3   = fila[3..];   // [3, 10): hasta len()
+	Tramo t4   = fila[1..=3]; // [1, 4)
+	if (t1.lo != 2 || t1.hi != 5 || t2.lo != 0 || t3.hi != 10 || t4.hi != 4) {
+		return 2;
+	}
+	TramoMut w = fila[6..8]; // el destino pide el de escritura
+	if (t1.escribe || w.lo != 6) return 3;
 
 	// 4. Igualdad: `!=` se deriva negando `__eq__`.
 	if (a == d) { sum = sum + 10; } // (3,4) == (3,4) -> 27

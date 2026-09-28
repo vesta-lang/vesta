@@ -3344,6 +3344,8 @@ fails_case("berr609", "borrow R4 sin nombre: `return lend_mut(p)` con p apuntand
 fails_case("berr610", "borrow: escribir el lugar prestado por OTRO puntero de la misma procedencia mientras el prestamo vive", "610_borrow_err_write_other_path.vx", "VX2031", line=2116)
 fails_case("berr611", "borrow<T> es un elemento: indexarlo alcanzaria memoria que no cubre", "611_borrow_err_index_single.vx", "VX2152", line=2116)
 fails_case("berr612", "borrow<T[N]> compartido: escribir por indice a traves de el", "612_borrow_err_write_shared.vx", "VX2153", line=2116)
+fails_case("corte615", "x[a..] sobre un tipo con __slice__ pero sin len(): no se sabe donde esta el final", "615_corte_sin_len_err.vx", "VX2157", line=2116)
+fails_case("idxset616", "x[i] = v sobre un struct que solo declara __index__: pide __index_set__", "616_indice_sin_set_err.vx", "VX2158", line=2116)
 fails_case("rango614", "un rango [a..b] sobre un array o un struct con __index__ se ignoraba (se leia [a]): ahora es un error", "614_rango_sin_subindice_err.vx", "VX2154", line=2116)
 fails_case("berr613", "borrow R1 en LECTURA: leer por su nombre un lugar prestado en exclusiva mientras el prestamo vive", "613_borrow_err_read_while_mut.vx", "VX2032", line=2116)
 r0_case("borrow131", "borrow realista integrador: pipeline + validador + elision combinados", "131_borrow_combined_real.vx", 42, line=2122)
