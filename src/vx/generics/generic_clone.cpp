@@ -836,9 +836,9 @@ void rename_in_expr(ast::Expr *e) {
         rename_in_expr(static_cast<ast::FieldAccessExpr *>(e)->base.get());
         return;
     case ast::NodeKind::IndexExpr: {
-        auto *ix = static_cast<ast::IndexExpr *>(e);
-        rename_in_expr(ix->base.get());
-        rename_in_expr(ix->index.get());
+        // Todas las que cuelgan, tambien el limite superior de un rango.
+        for (ast::Expr *sub : static_cast<ast::IndexExpr *>(e)->operands())
+            rename_in_expr(sub);
         return;
     }
     case ast::NodeKind::CastExpr:

@@ -925,11 +925,13 @@ MacroSkipReason macro_body_unsupported_reason_expr(const TypeChecker &tc,
     case ast::NodeKind::IndexExpr: {
         /* Array indexing `arr[i]`: lowereable en macro body cuando `arr` es un
          * array local tipado (el lowering conoce el elem type via el var-decl).
-         * Recurrir en base + index. */
-        const auto *ix = static_cast<const ast::IndexExpr *>(e);
-        auto r = macro_body_unsupported_reason_expr(tc, ix->base.get());
-        if (!r.empty()) return r;
-        return macro_body_unsupported_reason_expr(tc, ix->index.get());
+         * Recurrir en todo lo que cuelga, limites de rango incluidos. */
+        for (const ast::Expr *sub :
+             static_cast<const ast::IndexExpr *>(e)->operands()) {
+            auto r = macro_body_unsupported_reason_expr(tc, sub);
+            if (!r.empty()) return r;
+        }
+        return {};
     }
     case ast::NodeKind::UnaryExpr: {
         const auto *un = static_cast<const ast::UnaryExpr *>(e);
@@ -1217,9 +1219,8 @@ void annotate_macro_param_idents(
             return;
         }
         if (e->kind == ast::NodeKind::IndexExpr) {
-            auto *ix = static_cast<ast::IndexExpr *>(e);
-            walk_expr(ix->base.get());
-            walk_expr(ix->index.get());
+            for (ast::Expr *sub : static_cast<ast::IndexExpr *>(e)->operands())
+                walk_expr(sub);
             return;
         }
         if (e->kind == ast::NodeKind::FieldAccessExpr) {

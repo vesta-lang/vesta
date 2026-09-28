@@ -3106,6 +3106,11 @@ es = "'&f(.a, .b)' nombra ranuras y ya esta: no se mezclan con argumentos, porqu
 en = "'@{0}' is not an annotation of the language.  Did you mean '@{1}'?"
 es = "'@{0}' no es una anotacion del lenguaje.  Querias decir '@{1}'?"
 
+# `x[a..=]`: un rango inclusivo sin limite superior.  Sin argumentos.
+[VXP097]
+en = "'..=' includes its upper bound, and none is written: say up to where with 'x[a..=b]', or leave the range open with 'x[a..]' to go to the end"
+es = "'..=' incluye su limite superior, y no se escribio ninguno: di hasta donde con 'x[a..=b]', o deja el rango abierto con 'x[a..]' para ir hasta el final"
+
 [VXP093]
 en = "'@{0}' is not an annotation of the language.  What is written after the '@' has to be one of the ones it knows: an unknown name used to be dropped without a word, and the annotation simply did nothing"
 es = "'@{0}' no es una anotacion del lenguaje.  Lo que va tras el '@' tiene que ser una de las que conoce: un nombre desconocido se descartaba sin una palabra, y la anotacion no hacia nada"

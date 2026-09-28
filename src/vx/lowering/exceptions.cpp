@@ -1293,9 +1293,9 @@ void Lowering::scan_read_names_expr(const ast::Expr *e,
         return;
     }
     case ast::NodeKind::IndexExpr: {
-        auto *ix = static_cast<const ast::IndexExpr *>(e);
-        scan_read_names_expr(ix->base.get(), out);
-        scan_read_names_expr(ix->index.get(), out);
+        for (const ast::Expr *sub :
+             static_cast<const ast::IndexExpr *>(e)->operands())
+            scan_read_names_expr(sub, out);
         return;
     }
     case ast::NodeKind::CastExpr: {

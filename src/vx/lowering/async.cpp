@@ -103,11 +103,10 @@ static void collect_spawn_captures_in_expr(
         return;
     }
     case ast::NodeKind::IndexExpr: {
-        const auto *ix = static_cast<const ast::IndexExpr *>(e);
-        collect_spawn_captures_in_expr(ix->base.get(), locals_defined,
-                                       out_captures, seen, lw);
-        collect_spawn_captures_in_expr(ix->index.get(), locals_defined,
-                                       out_captures, seen, lw);
+        for (const ast::Expr *sub :
+             static_cast<const ast::IndexExpr *>(e)->operands())
+            collect_spawn_captures_in_expr(sub, locals_defined, out_captures,
+                                           seen, lw);
         return;
     }
     case ast::NodeKind::NewExpr: {

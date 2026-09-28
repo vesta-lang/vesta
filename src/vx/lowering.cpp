@@ -2471,12 +2471,10 @@ bool Lowering::spawn_body_uses_coop(ast::Stmt *s) {
         case ast::NodeKind::FieldAccessExpr:
             visit_expr(static_cast<ast::FieldAccessExpr *>(e)->base.get());
             return;
-        case ast::NodeKind::IndexExpr: {
-            auto *ix = static_cast<ast::IndexExpr *>(e);
-            visit_expr(ix->base.get());
-            visit_expr(ix->index.get());
+        case ast::NodeKind::IndexExpr:
+            for (ast::Expr *sub : static_cast<ast::IndexExpr *>(e)->operands())
+                visit_expr(sub);
             return;
-        }
         case ast::NodeKind::CastExpr:
             visit_expr(static_cast<ast::CastExpr *>(e)->operand.get());
             return;

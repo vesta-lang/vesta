@@ -9500,17 +9500,26 @@ std::unique_ptr<ast::Expr> Parser::parse_postfix() {
             auto idx = std::make_unique<ast::IndexExpr>();
             idx->loc = loc;
             idx->base = std::move(expr);
-            idx->index = parse_expr();
-            // String Inc 3: slice `base[a..b]` o `base[a..=b]`.  Cuando
-            // tras el limite inferior aparece `..` / `..=`, parseamos el
-            // limite superior y marcamos el IndexExpr como rango.  El
-            // type checker valida que la base sea `string` (native_poo_).
+            /* Un rango `[a..b]` / `[a..=b]`, con cualquiera de los dos limites
+             * OMITIDO: `[..b]`, `[a..]`, `[..]`.  Un limite que falta queda
+             * NULO -- `index` sin inferior, `range_hi` sin superior -- y lo
+             * rellena la normalizacion del comprobador (0 y la longitud); asi
+             * el arbol dice lo que se escribio y no un valor inventado. */
+            const bool rango_sin_inferior =
+                current_.kind == TokenKind::DOTDOT ||
+                current_.kind == TokenKind::DOTDOTEQ;
+            if (!rango_sin_inferior) idx->index = parse_expr();
             if (current_.kind == TokenKind::DOTDOT ||
                 current_.kind == TokenKind::DOTDOTEQ) {
                 idx->is_range = true;
                 idx->range_inclusive = (current_.kind == TokenKind::DOTDOTEQ);
-                (void)consume(); // '..' o '..='
-                idx->range_hi = parse_expr();
+                const Token tk_rango = consume(); // '..' o '..='
+                if (current_.kind != TokenKind::RBRACKET) {
+                    idx->range_hi = parse_expr();
+                } else if (idx->range_inclusive) {
+                    // `[a..=]`: "hasta e incluido" sin decir hasta donde.
+                    diags_.diag(tk_rango.loc, DiagLevel::ERR, "VXP097", {});
+                }
             }
             (void)expect(TokenKind::RBRACKET,
                          "se esperaba ']' al cerrar el subindice");

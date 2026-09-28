@@ -299,6 +299,23 @@ void check_spacing() {
     check(cast_prefijo.find("(v + 1) & 3") != std::string::npos,
           "tras una AGRUPACION, `&` sigue siendo un `y` logico");
 
+    /* Un rango con un limite OMITIDO va pegado a su corchete: `s[..4]`,
+     * `s[5..]`, `s[..]`, `s[..=3]`.  El `..` no es un binario con dos lados:
+     * separarlo (`s[ ..4]`, `s[5.. ]`) cambiaria como se lee sin cambiar lo
+     * que dice. */
+    const std::string rangos =
+        fmt("i32 f(string s) { string a = s[..4]; string b = s[5..];\n"
+            "string c = s[..]; string d = s[..=3]; string e = s[1..3]; }\n");
+    check(rangos.find("s[..4]") != std::string::npos,
+          "rango sin inferior, pegado");
+    check(rangos.find("s[5..]") != std::string::npos,
+          "rango sin superior, pegado");
+    check(rangos.find("s[..]") != std::string::npos, "rango entero, pegado");
+    check(rangos.find("s[..=3]") != std::string::npos,
+          "rango inclusivo sin inferior, pegado");
+    check(rangos.find("s[1..3]") != std::string::npos,
+          "rango con los dos limites, sin espacios");
+
     /* Un literal compuesto va PEGADO sea cual sea su tipo: el salto del tipo
      * del cast no sabia de genericos ni de `[N]`, y `(i32[3]) {` salia con un
      * espacio que `(Punto){` no llevaba.  Y el `[N]` es tipo SOLO entre

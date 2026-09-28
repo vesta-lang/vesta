@@ -183,9 +183,8 @@ void rewrite_refs_in_expr_(
         break;
     }
     case ast::NodeKind::IndexExpr: {
-        auto *ix = static_cast<ast::IndexExpr *>(e);
-        rewrite_refs_in_expr_(ix->base.get(), rename_map);
-        rewrite_refs_in_expr_(ix->index.get(), rename_map);
+        for (ast::Expr *sub : static_cast<ast::IndexExpr *>(e)->operands())
+            rewrite_refs_in_expr_(sub, rename_map);
         break;
     }
     case ast::NodeKind::FieldAccessExpr: {

@@ -1043,9 +1043,8 @@ void Lowering::scan_address_taken_expr(ast::Expr *e, int &depth) {
         return;
     }
     case ast::NodeKind::IndexExpr: {
-        auto *ix = static_cast<ast::IndexExpr *>(e);
-        scan_address_taken_expr(ix->base.get(), depth);
-        scan_address_taken_expr(ix->index.get(), depth);
+        for (ast::Expr *sub : static_cast<ast::IndexExpr *>(e)->operands())
+            scan_address_taken_expr(sub, depth);
         return;
     }
     case ast::NodeKind::CastExpr: {
@@ -1306,9 +1305,8 @@ void Lowering::scan_escaping_expr(ast::Expr *e, AliasGraph &alias) {
         return;
     }
     case ast::NodeKind::IndexExpr: {
-        auto *ix = static_cast<ast::IndexExpr *>(e);
-        scan_escaping_expr(ix->base.get(), alias);
-        scan_escaping_expr(ix->index.get(), alias);
+        for (ast::Expr *sub : static_cast<ast::IndexExpr *>(e)->operands())
+            scan_escaping_expr(sub, alias);
         return;
     }
     default: return;

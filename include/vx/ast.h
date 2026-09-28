@@ -43,6 +43,7 @@
 #ifndef VX_AST_H
 #define VX_AST_H
 
+#include <array>
 #include <cstdint>
 #include <memory>
 
@@ -1238,6 +1239,21 @@ struct IndexExpr : Expr {
     /// STRIDE del overlay, no por sizeof).  @c result_type = tipo del elemento.
     bool is_overlay_array = false;
     IndexExpr() : Expr(NodeKind::IndexExpr) {}
+
+    /**
+     * @brief Sus subexpresiones, en orden de evaluacion: base, limite inferior
+     *        (o indice) y limite superior; las que no se escribieron, nulas.
+     *
+     * Un dueno para "que cuelga de un subindice".  Cada recorrido del arbol
+     * nombraba los campos a mano, y casi ninguno nombraba @c range_hi: en
+     * `s[0..n]` la `n` no se renombraba al aplanar un namespace, no se
+     * capturaba en una lambda ni se sustituia en una generica.
+     *
+     * @return Las tres, cualquiera puede ser nula.
+     */
+    std::array<Expr *, 3> operands() const {
+        return {base.get(), index.get(), range_hi.get()};
+    }
 };
 
 // -------------------------------------------------------------------

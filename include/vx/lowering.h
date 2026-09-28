@@ -4517,6 +4517,11 @@ class Lowering {
      */
     ir::IrValueId lower_expr_as_string(ast::Expr *ex);
 
+    /// @brief Baja @p ex y lo lleva a I64: un indice, un limite, una cuenta.
+    /// @param ex La expresion (entera).
+    /// @return Su valor I64, o @c ir::IR_NO_VALUE si no se pudo bajar.
+    ir::IrValueId lower_expr_as_i64(ast::Expr *ex);
+
     // --- Vesta Embed Inc 0: string value-type (solo native_poo_) ---
     /// Construye el repr value-string {ptr,len,cap} (24 bytes) en stack
     /// (ALLOCA) desde un literal: aloca buffer en heap (RAW_ALLOC len+1),
@@ -4721,17 +4726,34 @@ class Lowering {
                                              ir::IrValueId v_b,
                                              uint32_t source_line);
     /// String Inc 3 (native_poo_): slice `s[a..b]` -> NUEVO string owned
-    /// = copia de los bytes [a, b) del value-string @p v_src.  @p v_lo /
-    /// @p v_hi son IrValue I64 (limites a y b).  @p inclusive=true para
-    /// `s[a..=b]` (longitud b-a+1).  Aloca slot de 24 bytes en stack +
-    /// buffer fresco en heap de (len+1) bytes, MEMCPY (rep movsb) de
-    /// [src.ptr+a] por len bytes, nul-termina y rellena ptr/len/cap.  El
-    /// caller registra su STRING_FREE (es owned).  v1 asume indices
-    /// validos (a <= b <= src.len); negativos no soportados.
+    /// = copia de los bytes [lo, hi) del value-string @p v_src.  @p v_lo /
+    /// @p v_hi son IrValue I64 YA NORMALIZADOS por @ref lower_range_bounds
+    /// (el `..=` y los limites omitidos ya estan resueltos).  Aloca slot de
+    /// 24 bytes en stack + buffer fresco en heap de (len+1) bytes, MEMCPY
+    /// (rep movsb) de [src.ptr+lo] por len bytes, nul-termina y rellena
+    /// ptr/len/cap.  El caller registra su STRING_FREE (es owned).  v1
+    /// asume indices validos (lo <= hi <= src.len); negativos no soportados.
     ir::IrValueId build_native_string_slice(ir::IrValueId v_src,
                                             ir::IrValueId v_lo,
-                                            ir::IrValueId v_hi, bool inclusive,
+                                            ir::IrValueId v_hi,
                                             uint32_t source_line);
+
+    /// @brief Los limites de un rango `x[a..b]`, NORMALIZADOS a `[lo, hi)`.
+    ///
+    /// El dueno de la regla, para todo lo que corta (cadenas, arrays,
+    /// punteros, vistas): sin inferior, `0`; `a..=b`, `hi = b + 1`; sin
+    /// superior, la longitud de lo cortado.  Quien corta no vuelve a
+    /// escribirla, y el operador `__slice__` recibe siempre `[lo, hi)`.
+    ///
+    /// @param e        El subindice con rango.
+    /// @param v_length La longitud de lo cortado, en I64; solo se usa si el
+    ///                 limite superior se omitio (`x[a..]`), y puede ser
+    ///                 @c ir::IR_NO_VALUE en otro caso.
+    /// @param[out] v_lo El limite inferior, I64.
+    /// @param[out] v_hi El limite superior EXCLUSIVO, I64.
+    /// @return @c false si un limite no se pudo bajar (su error ya se dio).
+    bool lower_range_bounds(ast::IndexExpr *e, ir::IrValueId v_length,
+                            ir::IrValueId &v_lo, ir::IrValueId &v_hi);
     /// String Inc 3 (native_poo_): indexado simple `s[i]` -> el CHAR
     /// (byte) en la posicion @p v_idx del value-string @p v_src.  Carga
     /// el ptr@0 del slot y emite LOAD u8 de [ptr+i].  Devuelve un U8

@@ -154,36 +154,22 @@ ir::IrValueId Lowering::build_native_string_concat(ir::IrValueId v_a,
 ir::IrValueId Lowering::build_native_string_slice(ir::IrValueId v_src,
                                                   ir::IrValueId v_lo,
                                                   ir::IrValueId v_hi,
-                                                  bool inclusive,
                                                   uint32_t source_line) {
-    // String Inc 3: `s[a..b]` (exclusivo) o `s[a..=b]` (inclusivo) ->
-    // NUEVO string owned con la copia de los bytes [a, b) (o [a, b]).
+    // String Inc 3: `s[lo..hi]` -> NUEVO string owned con la copia de los
+    // bytes [lo, hi).  Los limites llegan ya normalizados
+    // (`lower_range_bounds`): el `..=` y los omitidos estan resueltos.
     // Repr value-string {ptr@0,len@8,cap@16} en stack + buffer fresco en
     // heap.  La copia usa MEMCPY (rep movsb).  Todas las ops son
     // PURE_NATIVE/LIBC (RAW_ALLOC=malloc, MEMCPY=rep movsb).  v1 asume
     // indices validos (a <= b <= src.len); indices negativos / OOB no
     // soportados (mismo contrato que el resto del AOT bare).
-    auto emit_sub = [&](ir::IrValueId a, ir::IrValueId b) -> ir::IrValueId {
-        ir::IrValueId v =
-            emit_ir_binop(ir::IrOp::SUB, a, b, ir::IrType::I64, source_line);
-        return v;
-    };
-    auto emit_add = [&](ir::IrValueId a, ir::IrValueId b) -> ir::IrValueId {
-        ir::IrValueId v =
-            emit_ir_binop(ir::IrOp::ADD, a, b, ir::IrType::I64, source_line);
-        return v;
-    };
-
     // 1. Cargar el data_ptr del slot fuente via accesor flag-aware (SSO
     //    o HEAP).  Los limites a/b ya estan en regs.
     ir::IrValueId v_src_ptr = emit_native_str_data_ptr(v_src, source_line);
 
-    // 2. len = b - a  (o  b - a + 1  si es `..=` inclusivo).
-    ir::IrValueId v_len = emit_sub(v_hi, v_lo);
-    if (inclusive) {
-        ir::IrValueId v_one = emit_const(ir::IrType::I64, 1, source_line);
-        v_len = emit_add(v_len, v_one);
-    }
+    // 2. len = hi - lo.
+    ir::IrValueId v_len = emit_ir_binop(ir::IrOp::SUB, v_hi, v_lo,
+                                        ir::IrType::I64, source_line);
 
     // 3. Slot de 24 bytes del resultado.
     const ir::IrValueId v_slot = emit_new_native_str_slot(source_line);

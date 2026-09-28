@@ -78,9 +78,8 @@ void rename_in_expr(ast::Expr *e, const RenameMap &rename_map) {
         break;
     }
     case ast::NodeKind::IndexExpr: {
-        auto *ix = static_cast<ast::IndexExpr *>(e);
-        rename_in_expr(ix->base.get(), rename_map);
-        rename_in_expr(ix->index.get(), rename_map);
+        for (ast::Expr *sub : static_cast<ast::IndexExpr *>(e)->operands())
+            rename_in_expr(sub, rename_map);
         break;
     }
     case ast::NodeKind::FieldAccessExpr: {

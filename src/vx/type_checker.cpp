@@ -2185,9 +2185,9 @@ static void pre_mono_collect_in_expr(TypeChecker &tc, const ast::Expr *e) {
         return;
     }
     case ast::NodeKind::IndexExpr: {
-        auto *i = static_cast<const ast::IndexExpr *>(e);
-        pre_mono_collect_in_expr(tc, i->base.get());
-        pre_mono_collect_in_expr(tc, i->index.get());
+        for (const ast::Expr *sub :
+             static_cast<const ast::IndexExpr *>(e)->operands())
+            pre_mono_collect_in_expr(tc, sub);
         return;
     }
     default: return;
@@ -8929,12 +8929,10 @@ void TypeChecker::compute_borrow_last_uses(ast::Stmt *body) {
             visit_expr(f->base.get());
             return;
         }
-        case ast::NodeKind::IndexExpr: {
-            auto *ix = static_cast<ast::IndexExpr *>(e);
-            visit_expr(ix->base.get());
-            visit_expr(ix->index.get());
+        case ast::NodeKind::IndexExpr:
+            for (ast::Expr *sub : static_cast<ast::IndexExpr *>(e)->operands())
+                visit_expr(sub);
             return;
-        }
         case ast::NodeKind::AssignExpr: {
             auto *as = static_cast<ast::AssignExpr *>(e);
             visit_expr(as->target.get());

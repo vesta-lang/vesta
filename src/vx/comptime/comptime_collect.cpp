@@ -160,9 +160,9 @@ void collect_calls_expr(const ast::Expr *e,
             static_cast<const ast::FieldAccessExpr *>(e)->base.get(), out);
         break;
     case ast::NodeKind::IndexExpr: {
-        const auto *i = static_cast<const ast::IndexExpr *>(e);
-        collect_calls_expr(i->base.get(), out);
-        collect_calls_expr(i->index.get(), out);
+        for (const ast::Expr *sub :
+             static_cast<const ast::IndexExpr *>(e)->operands())
+            collect_calls_expr(sub, out);
         break;
     }
     default: break;

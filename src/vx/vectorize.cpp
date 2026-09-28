@@ -60,11 +60,10 @@ static bool mc_expr_refs_ident(ast::Expr *e, const std::string &name) {
     case NodeKind::UnaryExpr:
         return mc_expr_refs_ident(static_cast<UnaryExpr *>(e)->operand.get(),
                                   name);
-    case NodeKind::IndexExpr: {
-        auto *ix = static_cast<IndexExpr *>(e);
-        return mc_expr_refs_ident(ix->base.get(), name) ||
-               mc_expr_refs_ident(ix->index.get(), name);
-    }
+    case NodeKind::IndexExpr:
+        for (Expr *sub : static_cast<IndexExpr *>(e)->operands())
+            if (mc_expr_refs_ident(sub, name)) return true;
+        return false;
     case NodeKind::CallExpr: {
         auto *c = static_cast<CallExpr *>(e);
         if (mc_expr_refs_ident(c->callee.get(), name)) return true;
@@ -1517,8 +1516,9 @@ bool Lowering::try_vectorize_scalar_for(ast::Stmt *s) {
         case NodeKind::UnaryExpr:
             return refs_idx(static_cast<const UnaryExpr *>(e)->operand.get());
         case NodeKind::IndexExpr: {
-            auto *ix = static_cast<const IndexExpr *>(e);
-            return refs_idx(ix->base.get()) || refs_idx(ix->index.get());
+            for (const Expr *sub : static_cast<const IndexExpr *>(e)->operands())
+                if (refs_idx(sub)) return true;
+            return false;
         }
         case NodeKind::FloatLitExpr:
         case NodeKind::IntLitExpr: return false;

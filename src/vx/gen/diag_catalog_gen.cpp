@@ -606,6 +606,7 @@ const CatEntry kEntries[] = {
     {"VXP094", {"'@{0}' is a real annotation, but a struct member does not take it yet: the ones it takes are {1}.  On the struct declaration itself the usual ones do work", "'@{0}' si es una anotacion, pero un miembro de struct todavia no la admite: las que admite son {1}.  Sobre la declaracion del struct si valen las de siempre"}},
     {"VXP095", {"a bare slot name only means something in '&f(.a, .b)', which says which overload is meant: here there are arguments, so this one needs its '= value'", "un nombre de ranura a secas solo significa algo en '&f(.a, .b)', que dice a que sobrecarga se apunta: aqui hay argumentos, asi que este necesita su '= valor'"}},
     {"VXP096", {"'&f(.a, .b)' names slots and nothing else: they do not mix with arguments, because nobody is being called", "'&f(.a, .b)' nombra ranuras y ya esta: no se mezclan con argumentos, porque no se esta llamando a nadie"}},
+    {"VXP097", {"'..=' includes its upper bound, and none is written: say up to where with 'x[a..=b]', or leave the range open with 'x[a..]' to go to the end", "'..=' incluye su limite superior, y no se escribio ninguno: di hasta donde con 'x[a..=b]', o deja el rango abierto con 'x[a..]' para ir hasta el final"}},
     {"VXT001", {"literal {0} does not fit in {1} ({2}); write a cast if the truncation is intended", "el literal {0} no cabe en {1} ({2}); escribe un cast si la truncacion es intencionada"}},
     {"VXT002", {"literal {0} does not fit in its own suffix '{1}' ({2})", "el literal {0} no cabe en su propio sufijo '{1}' ({2})"}},
     {"VXT003", {"'{0}' is imported from two places and they are not the same function ({1} and {2}); qualify it with its namespace or rename one with 'as'", "'{0}' llega de dos sitios y no son la misma funcion ({1} y {2}); cualificala con su namespace o renombra una con 'as'"}},
@@ -890,7 +891,7 @@ const CatEntry kEntries[] = {
     {"use_def.unused", {"'{2}' is never used", "'{2}' no se usa en ningun sitio"}},
     {"value_shape.none", {"it has no values with components", "no tiene valores con componentes"}},
 };
-const int kEntryCount = 869;
+const int kEntryCount = 870;
 
 } // namespace
 

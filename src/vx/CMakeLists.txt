@@ -380,6 +380,7 @@ add_library(vx_lib STATIC
     # trabajo no es producir un valor sino resolver DONDE esta, y decidir si
     # quien pregunta necesita la direccion o el contenido.
     lowering/access.cpp
+    lowering/index_operands.cpp
     # Invocar algo: llamadas, construccion de objetos y lambdas.  "Llamar" no
     # es una sola cosa (funcion del modulo, nativa, puntero a funcion, metodo
     # virtual, lambda con entorno, builtin, constructor) y averiguar cual es

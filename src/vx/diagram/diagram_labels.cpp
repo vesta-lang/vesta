@@ -175,8 +175,15 @@ std::string fmt_expr_brief(const ast::Expr *e, int depth) {
     }
     case ast::NodeKind::IndexExpr: {
         auto *ix = static_cast<const ast::IndexExpr *>(e);
-        return fmt_expr_brief(ix->base.get(), depth - 1) + "[" +
-               fmt_expr_brief(ix->index.get(), depth - 1) + "]";
+        std::string out = fmt_expr_brief(ix->base.get(), depth - 1) + "[";
+        if (!ix->is_range)
+            return out + fmt_expr_brief(ix->index.get(), depth - 1) + "]";
+        /* Un rango se dibuja como se escribio: el limite que falta se deja en
+         * blanco (`[..b]`, `[a..]`), no con el "?" de lo desconocido. */
+        if (ix->index) out += fmt_expr_brief(ix->index.get(), depth - 1);
+        out += ix->range_inclusive ? "..=" : "..";
+        if (ix->range_hi) out += fmt_expr_brief(ix->range_hi.get(), depth - 1);
+        return out + "]";
     }
     case ast::NodeKind::BinaryExpr: {
         auto *b = static_cast<const ast::BinaryExpr *>(e);

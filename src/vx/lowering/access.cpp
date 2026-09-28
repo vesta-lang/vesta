@@ -63,10 +63,8 @@ ir::IrValueId Lowering::lower_index_addr(ast::IndexExpr *e) {
         if (afi->element_block) {
             const std::string rname =
                 generate_overlay_resolver(lay, *afi, /*is_element=*/true);
-            ir::IrValueId idx_v = lower_expr(e->index.get());
+            const ir::IrValueId idx_v = lower_expr_as_i64(e->index.get());
             if (idx_v == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
-            idx_v = cast_if_needed(idx_v, fn_->values[idx_v].type,
-                                   ir::IrType::I64, e->loc.line);
             ir::IrValueId addr = fn_->new_value(ir::IrType::PTR);
             fn_->values[addr].memory = fn_->values[ov_base].memory;
             ir::IrInstr ins{};
@@ -208,10 +206,8 @@ ir::IrValueId Lowering::lower_index_addr(ast::IndexExpr *e) {
         } else if (table_base == ir::IR_NO_VALUE) {
             return ir::IR_NO_VALUE;
         }
-        ir::IrValueId i_v = lower_expr(e->index.get());
+        const ir::IrValueId i_v = lower_expr_as_i64(e->index.get());
         if (i_v == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
-        i_v = cast_if_needed(i_v, fn_->values[i_v].type, ir::IrType::I64,
-                             e->loc.line);
         // scaled = i * stride
         ir::IrValueId scaled = emit_ir_binop(ir::IrOp::MUL, i_v, stride_v,
                                              ir::IrType::I64, e->loc.line);
@@ -259,13 +255,10 @@ ir::IrValueId Lowering::lower_index_addr(ast::IndexExpr *e) {
         return ir::IR_NO_VALUE;
     }
     const ir::IrValueId base_v = lower_expr(e->base.get());
-    ir::IrValueId idx_v = lower_expr(e->index.get());
+    // El indice en I64: se suma al puntero, que el emisor trata como i64.
+    ir::IrValueId idx_v = lower_expr_as_i64(e->index.get());
     if (base_v == ir::IR_NO_VALUE || idx_v == ir::IR_NO_VALUE)
         return ir::IR_NO_VALUE;
-    // Promover index a I64 para sumarlo al puntero (que el emisor
-    // trata como i64 en aritmetica).
-    idx_v = cast_if_needed(idx_v, fn_->values[idx_v].type, ir::IrType::I64,
-                           e->loc.line);
     // Escalar por sizeof(pointee) si != 1.
     ir::IrValueId offset = idx_v;
     if (esz != 1) {
@@ -333,10 +326,8 @@ ir::IrValueId Lowering::lower_index(ast::IndexExpr *e) {
             }
             const ir::IrValueId v_src = lower_expr(e->base.get());
             if (v_src == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
-            ir::IrValueId v_idx = lower_expr(e->index.get());
+            const ir::IrValueId v_idx = lower_expr_as_i64(e->index.get());
             if (v_idx == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
-            v_idx = cast_if_needed(v_idx, fn_->values[v_idx].type,
-                                   ir::IrType::I64, e->loc.line);
             // host_ptr al buffer de datos.
             const ir::IrValueId v_raw = emit_strraw(v_src, e->loc.line);
             // addr = raw + idx (hereda naturaleza host de strraw).
@@ -351,32 +342,25 @@ ir::IrValueId Lowering::lower_index(ast::IndexExpr *e) {
         const ir::IrValueId v_src = lower_expr(e->base.get());
         if (v_src == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
         if (e->is_range) {
-            // `s[a..b]`: lo = index, hi = range_hi.
-            if (!e->index || !e->range_hi) {
-                error_at(e->loc, "slice de string con limite nulo");
+            /* `s[a..b]` con cualquiera de sus formas (`..=`, limites
+             * omitidos): los normaliza el dueno.  La longitud solo se lee si
+             * falta el superior. */
+            const ir::IrValueId v_len =
+                e->range_hi ? ir::IR_NO_VALUE
+                            : emit_native_str_len(v_src, e->loc.line);
+            ir::IrValueId v_lo = ir::IR_NO_VALUE;
+            ir::IrValueId v_hi = ir::IR_NO_VALUE;
+            if (!lower_range_bounds(e, v_len, v_lo, v_hi))
                 return ir::IR_NO_VALUE;
-            }
-            ir::IrValueId v_lo = lower_expr(e->index.get());
-            ir::IrValueId v_hi = lower_expr(e->range_hi.get());
-            if (v_lo == ir::IR_NO_VALUE || v_hi == ir::IR_NO_VALUE)
-                return ir::IR_NO_VALUE;
-            // Promover ambos limites a I64.
-            v_lo = cast_if_needed(v_lo, fn_->values[v_lo].type, ir::IrType::I64,
-                                  e->loc.line);
-            v_hi = cast_if_needed(v_hi, fn_->values[v_hi].type, ir::IrType::I64,
-                                  e->loc.line);
-            return build_native_string_slice(v_src, v_lo, v_hi,
-                                             e->range_inclusive, e->loc.line);
+            return build_native_string_slice(v_src, v_lo, v_hi, e->loc.line);
         }
         // `s[i]`: el char en la posicion i.
         if (!e->index) {
             error_at(e->loc, "indexado de string sin indice");
             return ir::IR_NO_VALUE;
         }
-        ir::IrValueId v_idx = lower_expr(e->index.get());
+        const ir::IrValueId v_idx = lower_expr_as_i64(e->index.get());
         if (v_idx == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
-        v_idx = cast_if_needed(v_idx, fn_->values[v_idx].type, ir::IrType::I64,
-                               e->loc.line);
         return build_native_string_index_char(v_src, v_idx, e->loc.line);
     }
 

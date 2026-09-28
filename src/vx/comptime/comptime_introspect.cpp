@@ -3327,7 +3327,10 @@ ComptimeEvalResult comptime_eval_expr(const TypeChecker &tc,
     case ast::NodeKind::IndexExpr: {
         /* A.41/A.42: `arr[i]` -- element puede ser cualquier kind. */
         auto *ie = static_cast<const ast::IndexExpr *>(expr);
-        if (!ie->base || !ie->index) return r;
+        /* Un RANGO no es un elemento: evaluarlo como `arr[a]` daba otro
+         * resultado.  Hasta que el evaluador sepa cortar, no se evalua (y
+         * quien pregunto lo dice). */
+        if (!ie->base || !ie->index || ie->is_range) return r;
         ComptimeEvalResult arr = comptime_eval_expr(tc, ie->base.get());
         if (!arr.ok || !arr.is_array) return r;
         ComptimeEvalResult idx = comptime_eval_expr(tc, ie->index.get());
