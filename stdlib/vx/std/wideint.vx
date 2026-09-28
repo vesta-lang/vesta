@@ -706,9 +706,9 @@ public struct i128 : Wide128 {
 		// negativo se niega aqui: invertir todos los limbs y sumar uno,
 		// propagando el acarreo mientras un limb desborde a cero.
 		if (v.is_negative()) {
-			w0                = ~w0;
-			w1                = ~w1;
-			w0                = w0 + 1;
+			w0 = ~w0;
+			w1 = ~w1;
+			w0 = w0 + 1;
 			if (w0 == 0) { w1 = w1 + 1; }
 		}
 		this.lo64 = w0;

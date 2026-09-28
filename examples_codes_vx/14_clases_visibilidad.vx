@@ -2,14 +2,16 @@ namespace ejemplos.clases_visibilidad;
 
 // examples_codes_vx/14_clases_visibilidad.vx
 //
-// Demuestra modificadores de acceso:
-//   - Campos privados solo accesibles desde la propia clase.
-//   - Acceso desde fuera mediante getters publicos.
+// Demuestra la visibilidad de los miembros, la MISMA en clases y structs:
+//   - `private`: solo el codigo del tipo que lo escribe.
+//   - `protected`: el tipo y los que derivan de el.
+//   - sin palabra y `public`: tambien desde fuera.
 //   - Combinacion con expression-bodied (=> expr ;).
 //
-// Nota: el compilador RECHAZA acceso a `private` desde fuera de la
-// clase con un mensaje claro.  Aqui demostramos el patron correcto:
-// encapsular el campo y exponerlo via metodo publico.
+// Nota: el compilador RECHAZA el acceso a un `private` o a un `protected`
+// desde donde no se alcanza (VX2164 / VX2165), tambien a un estatico o a un
+// constructor.  Aqui se ve el patron correcto: encapsular el campo y
+// exponerlo via metodo publico.
 //
 // Compilar y ejecutar:
 //   vm --vx examples_codes_vx/14_clases_visibilidad.vx -o cv
@@ -36,8 +38,52 @@ class Cuenta {
 	public i32 leerDeudas() => this.deudas;
 }
 
+// Una derivada usa lo `protected` de su base, no lo `private`.
+class Ahorro : Cuenta {
+	protected i32 interes;
+
+	public Ahorro(i32 inicial) {
+		super(inicial);
+		this.interes = 0;
+	}
+	public i32 total() => this.leerSaldo() + this.interes;
+}
+
+// Un struct usa la misma regla que una clase.
+struct Contador {
+	protected      i64 n;
+	protected      i64 paso;
+	private static i64 creados;
+
+	public static i64 minimo, maximo = 9; // el valor va con su declarador
+
+	public static Contador nuevo(i64 p) {
+		Contador.creados = Contador.creados + 1; // el tipo ve su estatico
+		return {.n = 0, .paso = p};
+	}
+	public void avanzar() { this.n = this.n + this.paso; }
+	public i64 valor() => this.n;
+}
+// Y su derivado ve lo `protected` de la base.
+struct ContadorDoble : Contador {
+	public static ContadorDoble crear() => {.n = 0, .paso = 1};
+	public void avanzar2() {
+		this.paso = this.paso * 2;
+		this.avanzar();
+	}
+}
+
 i32 main() {
 	Cuenta c = new Cuenta(10);
 	c.abonar(90);
+	Ahorro a = new Ahorro(5);
+	if (a.total() != 5) return 1;
+	Contador k = Contador.nuevo(3);
+	k.avanzar();
+	if (k.valor() != 3) return 2;
+	if (Contador.minimo != 0 || Contador.maximo != 9) return 4;
+	ContadorDoble d = ContadorDoble.crear();
+	d.avanzar2();
+	if (d.valor() != 2) return 3;
 	return c.leerSaldo();
 }

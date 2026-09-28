@@ -1,0 +1,15 @@
+namespace ejemplos.campo_privado_struct_err;
+
+// Un campo `private` de un STRUCT solo lo usa el codigo del struct: la misma
+// regla que en una clase (VX2164).  Antes el parser leia `private` y lo tiraba.
+struct Caja {
+	private i64 secreto;
+
+	public static Caja nueva() => {.secreto = 7};
+	public i64 ver() => this.secreto;
+}
+
+i32 main() {
+	Caja c = Caja.nueva();
+	return (i32)c.secreto;
+}

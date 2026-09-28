@@ -1064,20 +1064,6 @@ void render_function_body_subgraph(std::ostringstream &os,
 //  API publica
 // =========================================================================
 
-namespace {
-
-/// @brief Simbolo UML del modificador de acceso (0=public, 1=private,
-///        2=protected).
-const char *access_sym(uint8_t a) {
-    switch (a) {
-    case 1: return "-";
-    case 2: return "#";
-    default: return "+";
-    }
-}
-
-} // namespace
-
 std::string mermaid_types_from_ast(const ast::ModuleNode &mod) {
     std::ostringstream os;
     os << "```mermaid\n";
@@ -1097,7 +1083,7 @@ std::string mermaid_types_from_ast(const ast::ModuleNode &mod) {
             os << "    class " << d->name << " {\n";
             if (d->is_final) os << "        <<final>>\n";
             for (const auto &f : d->fields) {
-                os << "        " << access_sym(f.access)
+                os << "        " << uml_visibility_symbol(f.visibility)
                    << fmt_type(f.type.get()) << ' ' << f.name;
                 if (f.is_static)
                     os << "$"; // '$' = estatico en mermaid classDiagram.
@@ -1105,7 +1091,8 @@ std::string mermaid_types_from_ast(const ast::ModuleNode &mod) {
             }
             for (const auto &m : d->methods) {
                 if (!m || m->name.empty()) continue;
-                os << "        " << access_sym(m->access) << m->name << "(";
+                os << "        " << uml_visibility_symbol(m->visibility)
+                   << m->name << "(";
                 for (size_t i = 0; i < m->params.size(); ++i) {
                     if (i) os << ", ";
                     if (m->params[i]) os << fmt_type(m->params[i]->type.get());

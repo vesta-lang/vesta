@@ -446,10 +446,15 @@ Line classify(const std::vector<Piece> &pieces, size_t from, size_t to,
          * formateador se negara a escribir el fichero. */
         if (pieces[k].in_string) continue;
         const TokenKind kk = kind_of(pieces[k]);
-        if (kk == TokenKind::LPAREN || kk == TokenKind::LBRACKET) {
+        /* Y las LLAVES tambien: el `=` de un literal -- `return {.n = 0};` --
+         * es de un campo del literal, no de la sentencia.  Sin contarlas, se
+         * alineaba por el y salia `{.n       = 0, ...}`. */
+        if (kk == TokenKind::LPAREN || kk == TokenKind::LBRACKET ||
+            kk == TokenKind::LBRACE) {
             if (kk == TokenKind::LPAREN && prof == 0) has_call_paren = true;
             ++prof;
-        } else if (kk == TokenKind::RPAREN || kk == TokenKind::RBRACKET)
+        } else if (kk == TokenKind::RPAREN || kk == TokenKind::RBRACKET ||
+                   kk == TokenKind::RBRACE)
             --prof;
         else if (kk == TokenKind::FAT_ARROW && prof == 0)
             has_body_arrow = true;

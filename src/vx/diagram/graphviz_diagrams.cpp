@@ -1170,9 +1170,6 @@ std::string graphviz_types_from_ast(const ast::ModuleNode &mod) {
     os << "  rankdir=BT;\n"; // subclases abajo, bases arriba.
     os << "  node [shape=record, fontname=\"monospace\", fontsize=10];\n";
 
-    auto acc = [](uint8_t a) -> const char * {
-        return a == 1 ? "-" : (a == 2 ? "#" : "+");
-    };
     std::vector<std::string> rels;
 
     for (const auto &node : mod.decls) {
@@ -1184,14 +1181,14 @@ std::string graphviz_types_from_ast(const ast::ModuleNode &mod) {
             if (d->is_final) rec += " (final)";
             rec += "|";
             for (const auto &f : d->fields)
-                rec += std::string(acc(f.access)) +
+                rec += std::string(uml_visibility_symbol(f.visibility)) +
                        escape_record(fmt_type(f.type.get()) + " " + f.name) +
                        "\\l";
             rec += "|";
             for (const auto &m : d->methods) {
                 if (!m || m->name.empty()) continue;
-                rec +=
-                    std::string(acc(m->access)) + escape_record(m->name) + "()";
+                rec += std::string(uml_visibility_symbol(m->visibility)) +
+                       escape_record(m->name) + "()";
                 if (m->return_type)
                     rec += escape_record(" " + fmt_type(m->return_type.get()));
                 rec += "\\l";

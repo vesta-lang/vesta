@@ -42,6 +42,25 @@ void TypeChecker::type_init_list_from_target(ast::Expr *value,
 }
 
 /**
+ * @brief El CAMPO que rellena el elemento @p i de una lista hacia un struct
+ *        (por nombre o por posicion).
+ * @param il  La lista.
+ * @param lay Layout del struct destino, o nulo si no es un struct.
+ * @param i   Posicion del elemento.
+ * @return La ficha del campo, o nulo si no se sabe.
+ */
+static const StructFieldInfo *init_list_slot_field(const ast::InitListExpr *il,
+                                                   const StructLayout *lay,
+                                                   size_t i) {
+    if (!lay) return nullptr;
+    if (il->is_designated)
+        return i < il->field_names.size()
+                   ? find_field(*lay, il->field_names[i])
+                   : nullptr;
+    return i < lay->fields.size() ? &lay->fields[i] : nullptr;
+}
+
+/**
  * @brief El tipo del hueco @p i de una lista ya tipada: el elemento de un
  *        array o el campo de un struct (por nombre o por posicion).
  * @param il  La lista.
@@ -53,13 +72,7 @@ static const Type *init_list_slot_type(const ast::InitListExpr *il,
                                        const StructLayout *lay, size_t i) {
     const Type &target = il->target_type;
     if (target.kind == PrimitiveKind::ARRAY) return target.pointee.get();
-    if (!lay) return nullptr;
-    const StructFieldInfo *fi = nullptr;
-    if (il->is_designated)
-        fi = i < il->field_names.size() ? find_field(*lay, il->field_names[i])
-                                        : nullptr;
-    else
-        fi = i < lay->fields.size() ? &lay->fields[i] : nullptr;
+    const StructFieldInfo *fi = init_list_slot_field(il, lay, i);
     return fi ? &fi->type : nullptr;
 }
 
@@ -72,6 +85,11 @@ Type TypeChecker::check_init_list(ast::InitListExpr *il) {
     for (size_t i = 0; i < il->elements.size(); ++i) {
         ast::Expr *el = il->elements[i].get();
         const Type *slot = init_list_slot_type(il, lay, i);
+        /* Dar valor a un campo es USARLO: un `private` o un `protected` no se
+         * rellena desde fuera del tipo.  Se construye con lo que el tipo
+         * ofrece -- una factoria, un constructor, un `set` --. */
+        if (const StructFieldInfo *fi = init_list_slot_field(il, lay, i))
+            (void)check_member_visible(*fi, el->loc);
         // Cada elemento sabe a que hueco va ANTES de comprobarse, como en una
         // asignacion: una lista anidada toma su tipo de ahi y una lambda sin
         // tipos en sus parametros (`(v) => v + k`) toma su firma.

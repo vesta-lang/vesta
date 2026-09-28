@@ -6237,21 +6237,16 @@ void Parser::parse_struct_body_(ast::StructDecl &sd, MemberBodyOwner owner) {
             }
             break;
         }
-        // Modificadores de acceso opcionales en el miembro.  Los
-        // structs son flat: aceptamos public/private (informativo; sin
-        // enforcement por ahora) y `static` en METODOS (constructores/factorias
-        // tipo `Box.zero()`: no toman `this`, se llaman via
-        // `Struct.metodo(...)`).
-        uint8_t access = 0; // 0 = public/default, 1 = private
+        // Modificadores opcionales en el miembro: su visibilidad (la misma
+        // que en una clase) y `static` (campos por tipo, y metodos que no
+        // toman `this`: factorias `Box.zero()`).
+        ast::Visibility access = ast::Visibility::Unwritten;
+        bool saw_visibility = false;
         bool is_static = false;
         bool is_comptime_member = false;
         for (;;) {
-            if (current_.kind == TokenKind::KW_PUBLIC) {
-                access = 0;
-                (void)consume();
-            } else if (current_.kind == TokenKind::KW_PRIVATE) {
-                access = 1;
-                (void)consume();
+            if (parse_member_visibility_(access, saw_visibility)) {
+                continue;
             } else if (current_.kind == TokenKind::KW_STATIC) {
                 is_static = true;
                 (void)consume();
@@ -6280,7 +6275,7 @@ void Parser::parse_struct_body_(ast::StructDecl &sd, MemberBodyOwner owner) {
             m->name = kDestructorMethod;
             m->is_destructor = true;
             m->return_type = nullptr; // void implicito
-            m->access = access;
+            m->visibility = access;
             (void)expect(TokenKind::LPAREN,
                          "se esperaba '(' tras nombre del destructor");
             if (current_.kind != TokenKind::RPAREN) {
@@ -6326,7 +6321,7 @@ void Parser::parse_struct_body_(ast::StructDecl &sd, MemberBodyOwner owner) {
             // T(`).
             m->is_comptime = ctor_is_comptime || is_comptime_member;
             m->return_type = nullptr; // void implicito
-            m->access = access;
+            m->visibility = access;
             (void)expect(TokenKind::LPAREN,
                          "se esperaba '(' tras nombre del constructor");
             // Usar parse_param() (no parse_type_node directo) para reconocer un
@@ -6469,7 +6464,7 @@ void Parser::parse_struct_body_(ast::StructDecl &sd, MemberBodyOwner owner) {
             if (campo_dir != ParamDir::None)
                 diags_.diag(mloc, DiagLevel::ERR, "VXT010",
                             {m->name, param_dir_name(campo_dir)});
-            m->access = access;
+            m->visibility = access;
             m->is_static = is_static; // `static`: factoria/constructor sin this
             m->is_comptime = is_comptime_member; // `comptime` metodo
             m->is_virtual = annot_virtual; // `@Virtual`: dispatch dinamico
@@ -6515,6 +6510,7 @@ void Parser::parse_struct_body_(ast::StructDecl &sd, MemberBodyOwner owner) {
         f.dir = campo_dir;
         f.is_static = is_static; // `static <T> nombre;` -> storage por-tipo
         f.injection = injection; // `@No.Inject` (solo en un concepto)
+        f.visibility = access;
         f.is_comptime =
             is_comptime_member; // `comptime T campo` -> solo compile-time
         // Clon del tipo BASE (sin dims de array) para el multi-declarador C
@@ -6668,18 +6664,13 @@ void Parser::parse_struct_body_(ast::StructDecl &sd, MemberBodyOwner owner) {
         // (una sola por tipo).  El campo queda en s->fields con is_static para
         // que el type checker lo registre en static_fields y NO lo cuente en el
         // layout de instancia; `Struct.campo` resuelve a esta global.
-        if (f.is_static) {
-            auto gvar = std::make_unique<ast::GlobalVarDecl>();
-            gvar->loc = f.loc;
-            gvar->name = s->name + "__" + f.name;
-            gvar->type = vxgen::clone_type_with_subst(f.type.get());
-            // Y su valor inicial: sin el, `static i32 nivel = 3;` valia 0 y
-            // nadie lo decia.
-            if (f.default_init)
-                gvar->init = vxgen::clone_expr(f.default_init.get());
-            gvar->is_public = s->is_public;
-            pending_before_decls_.push_back(std::move(gvar));
-        }
+        if (f.is_static) synth_struct_static_global_(*s, f);
+        /* Lo que la linea entera dice de sus declaradores, para copiarlo a los
+         * de detras (`private static T a, b;`). */
+        const ast::Visibility line_visibility = f.visibility;
+        const ast::ConceptInjection line_injection = f.injection;
+        const ParamDir line_dir = f.dir;
+        const bool line_comptime = f.is_comptime;
         s->fields.push_back(std::move(f));
         // Multi-declarador C `T a, b, c;`: cada declarador extra reutiliza el
         // tipo BASE (clon), con sus propias dims de array y bit-width
@@ -6718,16 +6709,14 @@ void Parser::parse_struct_body_(ast::StructDecl &sd, MemberBodyOwner owner) {
                 (void)consume();
                 g.default_init = parse_expr();
             }
-            // `static` aplica a toda la linea del declarador.
+            // Lo de la linea aplica a todos sus declaradores: `static`, la
+            // visibilidad, la direccion, `comptime` y `@No.Inject`.
             g.is_static = is_static;
-            if (g.is_static) {
-                auto gvar = std::make_unique<ast::GlobalVarDecl>();
-                gvar->loc = g.loc;
-                gvar->name = s->name + "__" + g.name;
-                gvar->type = vxgen::clone_type_with_subst(g.type.get());
-                gvar->is_public = s->is_public;
-                pending_before_decls_.push_back(std::move(gvar));
-            }
+            g.visibility = line_visibility;
+            g.injection = line_injection;
+            g.dir = line_dir;
+            g.is_comptime = line_comptime;
+            if (g.is_static) synth_struct_static_global_(*s, g);
             s->fields.push_back(std::move(g));
         }
         (void)expect(TokenKind::SEMICOLON,
@@ -6809,7 +6798,7 @@ std::unique_ptr<ast::StructDecl> Parser::parse_struct_decl(bool is_overlay) {
 // -----------------------------------------------------------------
 
 std::unique_ptr<ast::ClassMethodDecl>
-Parser::parse_extension_method(uint8_t access) {
+Parser::parse_extension_method(ast::Visibility access) {
     if (!starts_type()) {
         error_here("se esperaba un tipo de retorno de metodo dentro de la "
                    "extension/impl");
@@ -6837,7 +6826,7 @@ Parser::parse_extension_method(uint8_t access) {
     m->loc = mloc;
     m->name = std::move(member_name);
     m->return_type = std::move(type_node);
-    m->access = access;
+    m->visibility = access;
     m->method_type_params = method_tparams;
     m->type_bounds = method_tbounds;
     (void)consume(); // '('
@@ -6878,12 +6867,9 @@ std::unique_ptr<ast::ExtensionDecl> Parser::parse_extension_decl() {
                  "se esperaba '{' al abrir el cuerpo de la extension");
     while (current_.kind != TokenKind::RBRACE &&
            current_.kind != TokenKind::END_OF_FILE) {
-        uint8_t access = 0;
-        if (current_.kind == TokenKind::KW_PUBLIC) {
-            (void)consume();
-        } else if (current_.kind == TokenKind::KW_PRIVATE) {
-            access = 1;
-            (void)consume();
+        ast::Visibility access = ast::Visibility::Unwritten;
+        bool saw_visibility = false;
+        while (parse_member_visibility_(access, saw_visibility)) {
         }
         auto m = parse_extension_method(access);
         if (!m) {
@@ -6957,12 +6943,9 @@ std::unique_ptr<ast::ImplDecl> Parser::parse_impl_decl() {
     (void)consume(); // '{'
     while (current_.kind != TokenKind::RBRACE &&
            current_.kind != TokenKind::END_OF_FILE) {
-        uint8_t access = 0;
-        if (current_.kind == TokenKind::KW_PUBLIC) {
-            (void)consume();
-        } else if (current_.kind == TokenKind::KW_PRIVATE) {
-            access = 1;
-            (void)consume();
+        ast::Visibility access = ast::Visibility::Unwritten;
+        bool saw_visibility = false;
+        while (parse_member_visibility_(access, saw_visibility)) {
         }
         auto m = parse_extension_method(access);
         if (!m) {
@@ -7147,28 +7130,15 @@ std::unique_ptr<ast::ClassDecl> Parser::parse_class_decl() {
         }
 
         // Parsear modificadores prefijos.
-        uint8_t access = 0; // 0 = default/public, 1 = private, 2 = protected
+        ast::Visibility access = ast::Visibility::Unwritten;
         bool is_static = false;
         /* `final i32 f()` y `@Final i32 f()` dicen lo mismo, como promete la
          * documentacion del lenguaje: la anotacion se leyo arriba. */
         bool is_final = annot_final;
         bool saw_access = false;
         for (;;) {
-            if (current_.kind == TokenKind::KW_PUBLIC) {
-                if (saw_access) error_here("modificador de acceso duplicado");
-                access = 0;
-                saw_access = true;
-                (void)consume();
-            } else if (current_.kind == TokenKind::KW_PRIVATE) {
-                if (saw_access) error_here("modificador de acceso duplicado");
-                access = 1;
-                saw_access = true;
-                (void)consume();
-            } else if (current_.kind == TokenKind::KW_PROTECTED) {
-                if (saw_access) error_here("modificador de acceso duplicado");
-                access = 2;
-                saw_access = true;
-                (void)consume();
+            if (parse_member_visibility_(access, saw_access)) {
+                continue;
             } else if (current_.kind == TokenKind::KW_STATIC) {
                 is_static = true;
                 (void)consume();
@@ -7200,7 +7170,7 @@ std::unique_ptr<ast::ClassDecl> Parser::parse_class_decl() {
             m->loc = sloc;
             m->name = std::string("set_") + prop;
             m->return_type = nullptr; // void implicito
-            m->access = access;
+            m->visibility = access;
             m->is_static = is_static;
             m->is_final = is_final;
             m->is_override = annot_override;
@@ -7251,7 +7221,7 @@ std::unique_ptr<ast::ClassDecl> Parser::parse_class_decl() {
             m->name = kDestructorMethod;
             m->is_destructor = true;
             m->return_type = nullptr; // void implicito
-            m->access = access;
+            m->visibility = access;
             m->is_static = false;
             m->is_final = is_final;
             m->is_override = annot_override;
@@ -7280,7 +7250,7 @@ std::unique_ptr<ast::ClassDecl> Parser::parse_class_decl() {
             m->name = consume().lexeme;
             m->is_constructor = true;
             m->return_type = nullptr; // void implicito
-            m->access = access;
+            m->visibility = access;
             m->is_static = is_static;
             m->is_final = is_final;
             m->is_override = annot_override;
@@ -7348,7 +7318,7 @@ std::unique_ptr<ast::ClassDecl> Parser::parse_class_decl() {
             if (campo_dir != ParamDir::None)
                 diags_.diag(mloc, DiagLevel::ERR, "VXT010",
                             {m->name, param_dir_name(campo_dir)});
-            m->access = access;
+            m->visibility = access;
             m->is_static = is_static;
             m->is_final = is_final;
             m->is_override = annot_override;
@@ -7394,7 +7364,7 @@ std::unique_ptr<ast::ClassDecl> Parser::parse_class_decl() {
             if (campo_dir != ParamDir::None)
                 diags_.diag(mloc, DiagLevel::ERR, "VXT010",
                             {m->name, param_dir_name(campo_dir)});
-            m->access = access;
+            m->visibility = access;
             m->is_static = is_static;
             m->is_final = is_final;
             m->is_override = annot_override;
@@ -7429,7 +7399,7 @@ std::unique_ptr<ast::ClassDecl> Parser::parse_class_decl() {
             f.dir = campo_dir;
             f.type = std::move(type_node);
             f.name = std::move(member_name);
-            f.access = access;
+            f.visibility = access;
             f.is_static = is_static;
             f.is_final = is_final;
             // Sprint lombok: propagar flags del field.
@@ -7531,7 +7501,7 @@ std::unique_ptr<ast::ClassDecl> Parser::parse_interface_decl() {
         m->loc = mloc;
         m->name = std::move(mname);
         m->return_type = std::move(rettype);
-        m->access = 0;
+        m->visibility = ast::Visibility::Public; // una interfaz es su API
         m->is_static = false;
         m->is_final = false;
         m->is_constructor = false;

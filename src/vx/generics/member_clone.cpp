@@ -45,7 +45,7 @@ clone_method_with_subst(const ast::ClassMethodDecl &m, const GenSubst &g,
     auto nm = std::make_unique<ast::ClassMethodDecl>();
     nm->loc = m.loc;
     nm->name = m.name;
-    nm->access = m.access;
+    nm->visibility = m.visibility;
     nm->is_static = m.is_static;
     nm->is_final = m.is_final;
     nm->is_override = m.is_override;
@@ -121,6 +121,7 @@ ast::StructFieldDecl clone_struct_field_with_subst(const ast::StructFieldDecl &f
     nf.is_comptime = f.is_comptime;
     nf.origin = f.origin;
     nf.injection = f.injection;
+    nf.visibility = f.visibility;
     return nf;
 }
 
@@ -132,7 +133,7 @@ ast::ClassFieldDecl clone_class_field_with_subst(const ast::ClassFieldDecl &f,
     nf.type = clone_type_with_subst(f.type.get(), g);
     nf.init = clone_expr(f.init.get(), g);
     nf.dir = f.dir;
-    nf.access = f.access;
+    nf.visibility = f.visibility;
     nf.is_static = f.is_static;
     nf.is_final = f.is_final;
     nf.lombok_getter = f.lombok_getter;

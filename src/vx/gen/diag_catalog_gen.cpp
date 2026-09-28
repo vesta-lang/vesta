@@ -139,7 +139,6 @@ const CatEntry kEntries[] = {
     {"VX2084", {"the return value", "el valor de retorno"}},
     {"VX2085", {"'find_type' resolves the type at compile time, so its argument has to be a string literal: looking one up by a name computed at run time would need a resolver that walks the table, and there is none", "'find_type' resuelve el tipo al compilar, asi que su argumento tiene que ser un literal de cadena: buscarlo por un nombre calculado en ejecucion pediria un resolutor que recorra la tabla, y no lo hay"}},
     {"VX2086", {"no function '{0}' is declared, and the {1} '{2}' -- the type of the first argument -- has no member '{0}' either: `{0}(x, ...)` is `x.{0}(...)` written the other way", "no hay ninguna funcion '{0}' declarada, y el {1} '{2}' -- el tipo del primer argumento -- tampoco tiene un miembro '{0}': `{0}(x, ...)` es `x.{0}(...)` escrita del otro modo"}},
-    {"VX2087", {"method '{0}' of class '{1}' is private: it is not reachable from outside the class", "el metodo '{0}' de la clase '{1}' es privado: no se alcanza desde fuera de la clase"}},
     {"VX2088", {"'{1}' cannot be deduced in '{0}': it appears in no parameter, so there is nothing to read it from.  Write it: {0}<...>(...)", "'{1}' no se puede deducir en '{0}': no aparece en ningun parametro, asi que no hay de donde leerlo.  Escribelo: {0}<...>(...)"}},
     {"VX2089", {"'{1}' could not be deduced in '{0}' from these arguments: the type passed does not match the declared shape.  Write it: {0}<...>(...)", "'{1}' no se dedujo en '{0}' con estos argumentos: el tipo que se paso no encaja con la forma declarada.  Escribelo: {0}<...>(...)"}},
     {"VX2090", {"no generic '{0}' fits these arguments: several are declared with that name, and none of them binds its type variables to what was passed.  Write the type arguments to say which one: {0}<...>(...)", "ninguna generica '{0}' encaja con estos argumentos: hay varias declaradas con ese nombre y ninguna liga sus variables de tipo con lo que se le paso.  Escribe los argumentos de tipo para decir cual: {0}<...>(...)"}},
@@ -216,6 +215,11 @@ const CatEntry kEntries[] = {
     {"VX2161", {"'{0}' adds methods to '{1}', and '{1}' is not a known struct or class", "'{0}' anyade metodos a '{1}', y '{1}' no es un struct ni una clase conocidos"}},
     {"VX2162", {"'{1}' has the shape of '{2}', which gives '{0}', but '{3}' cannot be deduced from its members: declare it, `: {2}<...>`, to say which", "'{1}' tiene la forma de '{2}', que da '{0}', pero '{3}' no se deduce de sus miembros: declaralo, `: {2}<...>`, para decir cual"}},
     {"VX2163", {"'{0}' on '{1}' is ambiguous: it is a default method of several concepts it satisfies ({2}); declare the one you mean, or write '{0}' in the type", "'{0}' sobre '{1}' es ambiguo: es metodo por defecto de varios conceptos que cumple ({2}); declara el que quieres, o escribe '{0}' en el tipo"}},
+    {"VX2164", {"{0} '{1}' is private to '{2}': only the code of '{2}' can use it", "{0} '{1}' es privado de '{2}': solo lo usa el codigo de '{2}'"}},
+    {"VX2165", {"{0} '{1}' is protected in '{2}': only the code of '{2}' and of the types that derive from it can use it", "{0} '{1}' es protegido en '{2}': solo lo usa el codigo de '{2}' y el de los tipos que derivan de el"}},
+    {"VX2166", {"the field", "el campo"}},
+    {"VX2167", {"the method", "el metodo"}},
+    {"VX2168", {"the constructor", "el constructor"}},
     {"VX3001", {"{0} of {1} bytes is outside {2}: the object reserves [0, {3}) and the access is [{4}, {5})", "{0} de {1} bytes fuera de {2}: el objeto reserva [0, {3}) y el acceso es [{4}, {5})"}},
     {"VX3002", {"write", "escritura"}},
     {"VX3003", {"read", "lectura"}},
@@ -614,6 +618,7 @@ const CatEntry kEntries[] = {
     {"VXP095", {"a bare slot name only means something in '&f(.a, .b)', which says which overload is meant: here there are arguments, so this one needs its '= value'", "un nombre de ranura a secas solo significa algo en '&f(.a, .b)', que dice a que sobrecarga se apunta: aqui hay argumentos, asi que este necesita su '= valor'"}},
     {"VXP096", {"'&f(.a, .b)' names slots and nothing else: they do not mix with arguments, because nobody is being called", "'&f(.a, .b)' nombra ranuras y ya esta: no se mezclan con argumentos, porque no se esta llamando a nadie"}},
     {"VXP097", {"'..=' includes its upper bound, and none is written: say up to where with 'x[a..=b]', or leave the range open with 'x[a..]' to go to the end", "'..=' incluye su limite superior, y no se escribio ninguno: di hasta donde con 'x[a..=b]', o deja el rango abierto con 'x[a..]' para ir hasta el final"}},
+    {"VXP098", {"'{0}' is a second visibility on the same member: a member has one (`public`, `internal`, `protected` or `private`, or none for the module)", "'{0}' es una segunda visibilidad sobre el mismo miembro: un miembro tiene una (`public`, `internal`, `protected` o `private`, o ninguna para el modulo)"}},
     {"VXT001", {"literal {0} does not fit in {1} ({2}); write a cast if the truncation is intended", "el literal {0} no cabe en {1} ({2}); escribe un cast si la truncacion es intencionada"}},
     {"VXT002", {"literal {0} does not fit in its own suffix '{1}' ({2})", "el literal {0} no cabe en su propio sufijo '{1}' ({2})"}},
     {"VXT003", {"'{0}' is imported from two places and they are not the same function ({1} and {2}); qualify it with its namespace or rename one with 'as'", "'{0}' llega de dos sitios y no son la misma funcion ({1} y {2}); cualificala con su namespace o renombra una con 'as'"}},
@@ -898,7 +903,7 @@ const CatEntry kEntries[] = {
     {"use_def.unused", {"'{2}' is never used", "'{2}' no se usa en ningun sitio"}},
     {"value_shape.none", {"it has no values with components", "no tiene valores con componentes"}},
 };
-const int kEntryCount = 877;
+const int kEntryCount = 882;
 
 } // namespace
 

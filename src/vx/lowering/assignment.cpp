@@ -19,6 +19,7 @@
  */
 #include "vx/lowering.h"
 #include "ir/ir_type_info.h" // vocabulario UNICO de anchura/clase de un IrType
+#include "ir/synthetic_symbols.h" // la global de un estatico de struct
 #include "util/scoped_assign.h" // una bandera mientras se baja un valor
 #include <algorithm>
 #include <functional>
@@ -150,7 +151,7 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
             auto *bid = static_cast<ast::IdentExpr *>(fa->base.get());
             auto gid = std::make_unique<ast::IdentExpr>();
             gid->loc = fa->loc;
-            gid->name = bid->name + "__" + fa->field_name;
+            gid->name = ir::struct_static_symbol(bid->name, fa->field_name);
             gid->result_type = fa->result_type;
             e->target = std::move(gid);
         }

@@ -489,6 +489,15 @@ void check_alignment() {
     check(bloque.find("i32            total    = 0_i32;") != std::string::npos,
           "y el nombre tambien, para que el = quede en columna");
 
+    /* El `=` de un LITERAL es de un campo del literal, no de la sentencia: no
+     * se alinea con el de la linea de al lado. */
+    const std::string literal = fmt("P f() {\n"
+                                    "P.n = P.n + 1;\n"
+                                    "return {.a = 0, .b = 1};\n"
+                                    "}\n");
+    check(literal.find("return {.a = 0, .b = 1};") != std::string::npos,
+          "el `=` de dentro de un literal no se alinea");
+
     /* `R83`: una linea en blanco ROMPE el bloque.  Es lo que le da el control a
      * quien escribe: para que dos cosas no se alineen, se separan. */
     const std::string roto = fmt("i32 f() {\n"

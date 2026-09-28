@@ -2419,7 +2419,7 @@ void Lowering::lower_global_storage(ir::IrModule &out_module) {
             for (const auto &fld : cd->fields) {
                 if (!fld.is_static) continue;
                 const uint64_t slot = get_or_create_runtime_global_slot(
-                    "__static_" + cd->name + "_" + fld.name, 8);
+                    ir::class_static_slot(cd->name, fld.name), 8);
                 if (!fld.init) continue;
                 uint64_t cval = 0;
                 bool have = false;

@@ -3151,6 +3151,12 @@ es = "'@{0}' no es una anotacion del lenguaje.  Querias decir '@{1}'?"
 en = "'..=' includes its upper bound, and none is written: say up to where with 'x[a..=b]', or leave the range open with 'x[a..]' to go to the end"
 es = "'..=' incluye su limite superior, y no se escribio ninguno: di hasta donde con 'x[a..=b]', o deja el rango abierto con 'x[a..]' para ir hasta el final"
 
+# Dos palabras de visibilidad sobre el mismo miembro (`public private i64 x`).
+# {0} la segunda.
+[VXP098]
+en = "'{0}' is a second visibility on the same member: a member has one (`public`, `internal`, `protected` or `private`, or none for the module)"
+es = "'{0}' es una segunda visibilidad sobre el mismo miembro: un miembro tiene una (`public`, `internal`, `protected` o `private`, o ninguna para el modulo)"
+
 [VXP093]
 en = "'@{0}' is not an annotation of the language.  What is written after the '@' has to be one of the ones it knows: an unknown name used to be dropped without a word, and the annotation simply did nothing"
 es = "'@{0}' no es una anotacion del lenguaje.  Lo que va tras el '@' tiene que ser una de las que conoce: un nombre desconocido se descartaba sin una palabra, y la anotacion no hacia nada"
@@ -4053,14 +4059,33 @@ es = "'find_type' resuelve el tipo al compilar, asi que su argumento tiene que s
 en = "no function '{0}' is declared, and the {1} '{2}' -- the type of the first argument -- has no member '{0}' either: `{0}(x, ...)` is `x.{0}(...)` written the other way"
 es = "no hay ninguna funcion '{0}' declarada, y el {1} '{2}' -- el tipo del primer argumento -- tampoco tiene un miembro '{0}': `{0}(x, ...)` es `x.{0}(...)` escrita del otro modo"
 
-# Un metodo `private` no se alcanza desde fuera de su clase, y da igual la
-# grafia: `c.oculto()` y `oculto(c)` son la misma llamada, asi que la segunda
-# se reescribe a la primera y pasa por esta misma comprobacion.  {0} el nombre
-# del metodo, {1} la clase, ESCRITA como se escribe y no como la dejo el
-# aplanado.
-["VX2087"]
-en = "method '{0}' of class '{1}' is private: it is not reachable from outside the class"
-es = "el metodo '{0}' de la clase '{1}' es privado: no se alcanza desde fuera de la clase"
+# Un miembro `private` solo lo usa el codigo del tipo que lo ESCRIBIO: ni sus
+# derivados ni un `impl` escrito desde fuera.  Da igual la grafia: `c.oculto()`
+# y `oculto(c)` son la misma llamada y pasan por la misma comprobacion.  {0} la
+# palabra del miembro (VX2166 / VX2167), {1} su nombre, {2} el tipo que lo
+# escribio, como se escribe.
+["VX2164"]
+en = "{0} '{1}' is private to '{2}': only the code of '{2}' can use it"
+es = "{0} '{1}' es privado de '{2}': solo lo usa el codigo de '{2}'"
+
+# Un miembro `protected`: el tipo que lo escribio y los que derivan de el.  Un
+# `impl` sobre el tipo es codigo de fuera.  Mismos argumentos que VX2164.
+["VX2165"]
+en = "{0} '{1}' is protected in '{2}': only the code of '{2}' and of the types that derive from it can use it"
+es = "{0} '{1}' es protegido en '{2}': solo lo usa el codigo de '{2}' y el de los tipos que derivan de el"
+
+# Las palabras de los miembros, que entran DENTRO de VX2164 / VX2165.
+["VX2166"]
+en = "the field"
+es = "el campo"
+
+["VX2167"]
+en = "the method"
+es = "el metodo"
+
+["VX2168"]
+en = "the constructor"
+es = "el constructor"
 
 # La variable de tipo no aparece en NINGUN parametro, asi que no hay de donde
 # deducirla -- solo del retorno, o de ningun sitio --.  Es un rasgo de la FIRMA,

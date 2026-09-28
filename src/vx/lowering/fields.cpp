@@ -24,6 +24,7 @@
 #include "vx/lowering.h"
 #include "util/os/thread_slot.h" // el estado por hilo NO va en thread_local
 #include "ir/ir_type_info.h" // vocabulario UNICO de anchura/clase de un IrType
+#include "ir/synthetic_symbols.h" // la ranura de un estatico de clase
 #include <algorithm>
 #include <functional>
 #include <map>
@@ -600,7 +601,7 @@ ir::IrValueId Lowering::lower_class_field_load(ast::FieldAccessExpr *e) {
         // mas abajo si el SSA val se usa como ancho menor (semantica heredada).
         ir::IrValueId v_val =
             emit_getstatic(v_cls, static_cast<uint64_t>(s_off), e->loc.line,
-                           "__static_" + base_id->name + "_" + e->field_name);
+                           ir::class_static_slot(base_id->name, e->field_name));
         // Cast al tipo logico del field si difiere de I64.
         if (ir_t != ir::IrType::I64) {
             v_val = cast_if_needed(v_val, ir::IrType::I64, ir_t, e->loc.line,
@@ -876,12 +877,12 @@ ir::IrValueId Lowering::lower_class_field_store(ast::FieldAccessExpr *target,
         if (s_typ.kind == PrimitiveKind::SHARED_PTR) {
             const ir::IrValueId v_old = emit_getstatic(
                 v_cls, static_cast<uint64_t>(s_off), loc.line,
-                "__static_" + base_id->name + "_" + target->field_name);
+                ir::class_static_slot(base_id->name, target->field_name));
             emit_shared_refcount_dec_ctrl(v_old, loc.line);
             const ir::IrValueId v_ctrl = emit_load_host_ptr(rhs, loc.line);
             emit_setstatic(
                 v_cls, v_ctrl, static_cast<uint64_t>(s_off), loc.line,
-                "__static_" + base_id->name + "_" + target->field_name);
+                ir::class_static_slot(base_id->name, target->field_name));
             emit_shared_refcount_inc_ctrl(v_ctrl, loc.line);
             return rhs;
         }
@@ -893,7 +894,7 @@ ir::IrValueId Lowering::lower_class_field_store(ast::FieldAccessExpr *target,
                                        /*is_explicit=*/true);
         }
         emit_setstatic(v_cls, v_val_i64, static_cast<uint64_t>(s_off), loc.line,
-                       "__static_" + base_id->name + "_" + target->field_name);
+                       ir::class_static_slot(base_id->name, target->field_name));
         return rhs_cast;
     }
 

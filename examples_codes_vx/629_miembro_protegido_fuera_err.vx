@@ -1,0 +1,20 @@
+namespace ejemplos.miembro_protegido_fuera_err;
+
+// `protected` lo usan el tipo y los que derivan de el; desde fuera no se
+// alcanza (VX2165).
+class Base {
+	protected i64 n;
+
+	public Base() { this.n = 1; }
+	protected i64 doble() => this.n * 2;
+}
+
+class Derivada : Base {
+	public Derivada() { super(); }
+	public i64 usa() => this.doble(); // la derivada si lo alcanza
+}
+
+i32 main() {
+	Derivada d = new Derivada();
+	return (i32)d.doble(); // desde fuera, no
+}

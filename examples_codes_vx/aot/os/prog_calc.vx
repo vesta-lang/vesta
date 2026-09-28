@@ -21,7 +21,7 @@ u64 g_cp = 0_u64;
 i64 parse_expr();
 
 void skip_sp() {
-	char*                 s      = (char*)g_cs;
+	char* s = (char*)g_cs;
 	while (s[g_cp] == 32) { g_cp = g_cp + 1; }
 }
 

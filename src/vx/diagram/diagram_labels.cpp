@@ -546,16 +546,38 @@ std::string fmt_class_summary(const ast::ClassDecl &cd) {
     return s;
 }
 
-/// La palabra del acceso, que siempre se escribe.
-static TokenKind access_keyword(uint8_t access) {
-    return access == 1   ? TokenKind::KW_PRIVATE
-           : access == 2 ? TokenKind::KW_PROTECTED
-                         : TokenKind::KW_PUBLIC;
+const char *uml_visibility_symbol(ast::Visibility v) {
+    switch (v) {
+    case ast::Visibility::Public: return "+";
+    case ast::Visibility::Private: return "-";
+    case ast::Visibility::Protected: return "#";
+    case ast::Visibility::Internal:
+    case ast::Visibility::Unwritten: return "~";
+    }
+    return "~";
+}
+
+/**
+ * @brief Anade la palabra de la visibilidad, si se escribio: sin palabra no
+ *        se inventa ninguna (es el nivel del modulo, no `public`).
+ * @param s Donde se escribe.
+ * @param v La visibilidad.
+ */
+static void add_visibility(std::string &s, ast::Visibility v) {
+    switch (v) {
+    case ast::Visibility::Public: add_keyword(s, TokenKind::KW_PUBLIC); break;
+    case ast::Visibility::Private: add_keyword(s, TokenKind::KW_PRIVATE); break;
+    case ast::Visibility::Protected:
+        add_keyword(s, TokenKind::KW_PROTECTED);
+        break;
+    case ast::Visibility::Internal: s += "internal "; break;
+    case ast::Visibility::Unwritten: break;
+    }
 }
 
 std::string fmt_field_line(const ast::ClassFieldDecl &f) {
     std::string s;
-    add_keyword(s, access_keyword(f.access));
+    add_visibility(s, f.visibility);
     if (f.is_static) add_keyword(s, TokenKind::KW_STATIC);
     if (f.is_final) add_keyword(s, TokenKind::KW_FINAL);
     s += fmt_type(f.type.get());
@@ -566,7 +588,7 @@ std::string fmt_field_line(const ast::ClassFieldDecl &f) {
 
 std::string fmt_method_signature(const ast::ClassMethodDecl &m) {
     std::string s;
-    add_keyword(s, access_keyword(m.access));
+    add_visibility(s, m.visibility);
     if (m.is_static) add_keyword(s, TokenKind::KW_STATIC);
     if (m.is_final) add_keyword(s, TokenKind::KW_FINAL);
     if (m.is_override) add_annotation(s, ann::kOverride);

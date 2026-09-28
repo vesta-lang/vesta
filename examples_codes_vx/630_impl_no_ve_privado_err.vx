@@ -1,0 +1,16 @@
+namespace ejemplos.impl_no_ve_privado_err;
+
+// Un `impl` sobre un tipo es codigo de FUERA del tipo: no ve sus `private`
+// (VX2164).  Lo que necesite, a traves de lo que el tipo publica.
+struct Punto {
+	private i64 x;
+
+	public static Punto en(i64 x) => {.x = x};
+	public i64 leer() => this.x;
+}
+
+impl Punto {
+	i64 doble() => this.x * 2;
+}
+
+i32 main() => (i32)Punto.en(3).doble();

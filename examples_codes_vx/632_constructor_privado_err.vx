@@ -1,0 +1,16 @@
+namespace ejemplos.constructor_privado_err;
+
+// Un constructor `private` decide QUIEN construye: solo el propio tipo, aqui
+// a traves de su factoria (VX2164 al usarlo desde fuera).
+class Unico {
+	i64 v;
+
+	private Unico(i64 v) { this.v = v; }
+	public static Unico crear() => new Unico(42);
+}
+
+i32 main() {
+	Unico bien = Unico.crear();
+	Unico mal  = new Unico(1);
+	return (i32)(bien.v + mal.v);
+}

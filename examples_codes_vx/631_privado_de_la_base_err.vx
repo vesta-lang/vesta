@@ -1,0 +1,18 @@
+namespace ejemplos.privado_de_la_base_err;
+
+// Un `private` es del tipo que lo ESCRIBE: un struct derivado hereda el campo
+// (ocupa sitio en el), pero su codigo no lo usa (VX2164).  Para eso esta
+// `protected`.
+struct Base {
+	private   i64 oculto;
+	protected i64 visible;
+}
+
+struct Derivada : Base {
+	public i64 suma() => this.visible + this.oculto;
+}
+
+i32 main() {
+	Derivada d;
+	return (i32)d.suma();
+}

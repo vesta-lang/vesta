@@ -226,6 +226,17 @@ std::string fmt_class_title(const ast::ClassDecl &cd);
 std::string fmt_class_summary(const ast::ClassDecl &cd);
 
 /**
+ * @brief El simbolo UML de una visibilidad: `+` public, `-` private, `#`
+ *        protected, `~` paquete (sin palabra e `internal`).
+ *
+ * Lo usan los diagramas de mermaid y de graphviz; cada uno tenia su copia.
+ *
+ * @param v La visibilidad.
+ * @return El simbolo.
+ */
+const char *uml_visibility_symbol(ast::Visibility v);
+
+/**
  * @brief Linea de un campo de clase: `private static final i32 x`.
  *
  * @param f El campo.

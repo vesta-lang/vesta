@@ -400,6 +400,35 @@ inline std::string static_local_done_slot(const std::string &slot) {
     return slot + "$done";
 }
 
+/**
+ * @brief La global de un campo `static` de STRUCT: `<Struct>__<campo>`.
+ *
+ * El struct es el que DECLARA el campo: un derivado que lo hereda usa el
+ * mismo almacen que su base, no uno propio.  Lo crea el parser y lo nombran
+ * la lectura y la escritura; estaba escrito a mano en los cuatro sitios.
+ *
+ * @param owner El struct que declara el campo.
+ * @param field El campo.
+ * @return El nombre de la global.
+ */
+inline std::string struct_static_symbol(const std::string &owner,
+                                        const std::string &field) {
+    return owner + "__" + field;
+}
+
+/**
+ * @brief La ranura nativa de un campo `static` de CLASE:
+ *        `__static_<Clase>_<campo>` (en nativo los estaticos de clase son
+ *        globales planas).
+ * @param cls   La clase que declara el campo.
+ * @param field El campo.
+ * @return La clave de la ranura.
+ */
+inline std::string class_static_slot(const std::string &cls,
+                                     const std::string &field) {
+    return "__static_" + cls + "_" + field;
+}
+
 // ===========================================================================
 // La pregunta de conjunto
 // ===========================================================================

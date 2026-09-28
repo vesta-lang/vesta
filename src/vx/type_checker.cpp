@@ -1209,15 +1209,8 @@ bool TypeChecker::struct_ptr_upcast_ok(const Type &target,
         target.pointee->kind != PrimitiveKind::STRUCT ||
         value.pointee->kind != PrimitiveKind::STRUCT)
         return false;
-    std::string cur = value.pointee->struct_name;
-    int guard = 0;
-    while (!cur.empty() && guard++ < 64) {
-        if (cur == target.pointee->struct_name) return true;
-        auto it = struct_layouts_.find(cur);
-        if (it == struct_layouts_.end()) break;
-        cur = it->second.super_name;
-    }
-    return false;
+    return struct_derives_from(value.pointee->struct_name,
+                               target.pointee->struct_name);
 }
 
 
@@ -1231,6 +1224,28 @@ bool TypeChecker::struct_ptr_upcast_ok(const Type &target,
  * @param base     El struct del que se copia.
  * @param original Donde esta escrito el miembro en la base.
  */
+static void mark_inherited(ast::MemberOrigin &origin,
+                           const ast::StructDecl &base,
+                           const SourceLoc &original);
+
+/**
+ * @brief Lo que la ficha de un campo sabe de QUIEN es: de donde viene, quien
+ *        lo ve y que tipo lo escribio (contra el que se mide un `private`).
+ * @tparam FieldDecl @c ast::StructFieldDecl o @c ast::ClassFieldDecl.
+ * @param fi    La ficha.
+ * @param f     La declaracion.
+ * @param owner El tipo cuyo layout se monta.
+ */
+template <class FieldDecl>
+static void stamp_field_owner(StructFieldInfo &fi, const FieldDecl &f,
+                              const std::string &owner) {
+    fi.origin = f.origin;
+    fi.visibility = f.visibility;
+    fi.declared_in = f.origin.kind == ast::MemberOriginKind::Inherited
+                         ? f.origin.via.name.str()
+                         : owner;
+}
+
 static void mark_inherited(ast::MemberOrigin &origin,
                            const ast::StructDecl &base,
                            const SourceLoc &original) {
@@ -2057,7 +2072,7 @@ void TypeChecker::apply_class_field_defaults_to_ctors() {
                     ctor->loc = cd->loc;
                     ctor->name = cd->name;
                     ctor->is_constructor = true;
-                    ctor->access = 0; // public
+                    ctor->visibility = ast::Visibility::Public;
                     ctor->body = std::make_unique<ast::BlockStmt>();
                     ctor->body->loc = cd->loc;
                     ctors.push_back(ctor.get());
@@ -5052,6 +5067,7 @@ void TypeChecker::collect_globals() {
                     StructFieldInfo sfi;
                     sfi.name = f.name;
                     sfi.type = type_from_node(f.type.get());
+                    stamp_field_owner(sfi, f, s->name);
                     layout.static_fields.push_back(std::move(sfi));
                     continue;
                 }
@@ -5065,7 +5081,7 @@ void TypeChecker::collect_globals() {
                     cfi.name = f.name;
                     cfi.type = type_from_node(f.type.get());
                     cfi.is_comptime = true;
-                    cfi.origin = f.origin;
+                    stamp_field_owner(cfi, f, s->name);
                     if (f.default_init) cfi.default_init = f.default_init.get();
                     layout.comptime_fields.push_back(std::move(cfi));
                     continue;
@@ -5104,6 +5120,10 @@ void TypeChecker::collect_globals() {
                         StructFieldInfo fi =
                             inf; // copia (nombre + tipo + size)
                         fi.offset = (s->is_union ? 0 : abase) + inf.offset;
+                        // Aplanado: es un campo de este tipo, con la
+                        // visibilidad del miembro anonimo que lo trae.
+                        fi.declared_in = s->name;
+                        fi.visibility = f.visibility;
                         layout.fields.push_back(std::move(fi));
                     }
                     if (s->is_union) {
@@ -5291,7 +5311,7 @@ void TypeChecker::collect_globals() {
                     fi.bit_offset = bf_used;
                     fi.bit_width = bw;
                     fi.default_init = f.default_init.get();
-                    fi.origin = f.origin;
+                    stamp_field_owner(fi, f, s->name);
                     // Overlay: un bitfield puede llevar @offset dinamico
                     // (`u8 mod : 2 @offset { ... }`).  Sin copiar el resolver,
                     // la direccion del BYTE contenedor caeria al offset
@@ -5368,7 +5388,7 @@ void TypeChecker::collect_globals() {
                 fi.default_init = f.default_init.get();
                 fi.overlaps_with = f.overlaps_with;
                 fi.loc = f.loc;
-                fi.origin = f.origin;
+                stamp_field_owner(fi, f, s->name);
                 layout.fields.push_back(std::move(fi));
 
                 if (s->is_union) {
@@ -6105,7 +6125,7 @@ void TypeChecker::collect_globals() {
                 StructFieldInfo fi;
                 fi.name = f.name;
                 fi.type = ft;
-                fi.origin = f.origin;
+                stamp_field_owner(fi, f, c->name);
                 fi.size = 8; // todos los slots de instancia ocupan 8 bytes
                 if (f.is_static) {
                     fi.offset = off_stat;
@@ -6526,7 +6546,7 @@ void TypeChecker::collect_globals() {
         dtor->loc = sd->loc;
         dtor->name = kDestructorMethod;
         dtor->is_destructor = true;
-        dtor->access = 0;
+        dtor->visibility = ast::Visibility::Public;
         dtor->body = std::make_unique<ast::BlockStmt>();
         dtor->body->loc = sd->loc;
         /* En que hueco del layout acaba, igual que cualquier otro metodo: quien
@@ -6640,7 +6660,7 @@ void TypeChecker::collect_globals() {
         dtor->loc = cd->loc;
         dtor->name = kDestructorMethod;
         dtor->is_destructor = true;
-        dtor->access = 0;
+        dtor->visibility = ast::Visibility::Public;
         dtor->body = std::make_unique<ast::BlockStmt>();
         dtor->body->loc = cd->loc;
         /* En que hueco del layout acaba: quien EMITE el cuerpo llega al
@@ -7586,6 +7606,7 @@ ClassMethodInfo TypeChecker::make_method_info(const ast::ClassMethodDecl &m,
     mi.is_comptime = m.is_comptime;
     mi.defining_class = class_name;
     mi.origin = m.origin;
+    mi.visibility = m.visibility;
     mi.source_file = m.loc.file();
     mi.source_line = m.loc.line;
     mi.return_type = m.return_type ? type_from_node(m.return_type.get())
@@ -8089,6 +8110,10 @@ void TypeChecker::check_functions() {
         if (host.key.empty()) continue; // ya dicho al registrarlos
         const std::string &key = host.key;
         const bool is_class_target = host.kind == PrimitiveKind::CLASS;
+        /* Un `impl` se escribe desde FUERA del tipo: sus cuerpos no ven los
+         * `private` ni los `protected` del tipo. */
+        const util::ScopedAssign<MemberCodeSite> site_scope(
+            member_code_site_, MemberCodeSite::ImplBody);
         if (!is_class_target) {
             auto it = struct_layouts_.find(key);
             const std::string saved = current_struct_;
@@ -8445,6 +8470,10 @@ void TypeChecker::check_class_method(const ClassLayout &cls,
      * uniforme no probaba `<ns>__f` y no veia las libres del namespace. */
     const util::ScopedAssign<util::InternedName> ns_scope(
         current_ns_prefix_, ns_prefix_of(cls.name));
+    /* Y es codigo de la clase (o de la base de la que lo hereda): contra ella
+     * se miden sus `private` y `protected`. */
+    const util::ScopedAssign<PooledName> owner_scope(
+        member_code_owner_, method_code_owner(*m, cls.name));
 
     const bool saved_static = current_method_is_static_;
     current_method_is_static_ = m->is_static;
@@ -8526,6 +8555,10 @@ void TypeChecker::check_struct_method(const StructLayout &lay,
     /* El cuerpo esta en el namespace de su STRUCT (ver check_class_method). */
     const util::ScopedAssign<util::InternedName> ns_scope(
         current_ns_prefix_, ns_prefix_of(lay.name));
+    /* Y es codigo del struct que lo ESCRIBIO: un metodo heredado se comprueba
+     * aqui, en el derivado, pero sus `private` son los de la base. */
+    const util::ScopedAssign<PooledName> owner_scope(
+        member_code_owner_, method_code_owner(*m, lay.name));
     const bool saved_static = current_method_is_static_;
     current_method_is_static_ = false;
 
@@ -11293,6 +11326,8 @@ Type TypeChecker::check_new(ast::NewExpr *e) {
                                      " argumentos");
         }
     } else {
+        // Un constructor `private` o `protected` tambien decide quien construye.
+        (void)check_member_visible(*ctor, e->loc);
         // Verificar tipos de cada argumento contra el constructor.
         /* Los de delante del variadico van contra su parametro; los que sobran,
          * contra el tipo del ELEMENTO -- el parametro es ya el array. */
@@ -12257,6 +12292,7 @@ Type TypeChecker::check_field_access(ast::FieldAccessExpr *e) {
             const ClassLayout &lay = it_cls_static->second;
             for (const auto &f : lay.static_fields) {
                 if (f.name == e->field_name) {
+                    (void)check_member_visible(f, e->loc);
                     e->property_kind = 3; // marca para el lowering
                     e->result_type = f.type;
                     return f.type;
@@ -12278,6 +12314,7 @@ Type TypeChecker::check_field_access(ast::FieldAccessExpr *e) {
             if (it_str_static != struct_layouts_.end()) {
                 for (const auto &f : it_str_static->second.static_fields) {
                     if (f.name == e->field_name) {
+                        (void)check_member_visible(f, e->loc);
                         e->property_kind = 8;
                         e->result_type = f.type;
                         return f.type;
@@ -12479,7 +12516,9 @@ Type TypeChecker::check_field_access(ast::FieldAccessExpr *e) {
         }
         const StructLayout &lay = it->second;
         for (const auto &f : lay.fields) {
-            if (f.name == e->field_name) return field_type_with_abi(f);
+            if (f.name != e->field_name) continue;
+            (void)check_member_visible(f, e->loc);
+            return field_type_with_abi(f);
         }
         // Campo `comptime` (solo-compile-time, p.ej. `comptime char* name`
         // para calcular un hash): no vive en el layout de instancia pero SI
@@ -12505,45 +12544,18 @@ Type TypeChecker::check_field_access(ast::FieldAccessExpr *e) {
             return Type{};
         }
         const ClassLayout &lay = it->second;
-        // Buscar el campo y aplicar enforcement de visibilidad.  Los
-        // campos privados solo se pueden acceder desde la propia
-        // clase; los protegidos desde la propia o subclases.
-        // Aqui solo distinguimos private vs publico/protegido porque
-        // sin herencia protected actua como public.
-        // Enforcement de visibilidad: si el campo es privado y se
-        // accede desde fuera de la clase contenedora, error.  Como
-        // StructFieldInfo no lleva el flag access, lo localizamos en
-        // el AST original via @c find_class_field_access_flag.
-        uint8_t access_flag = 0; // 0 = public/default
-        const ast::ClassDecl *cd_orig = nullptr;
-        for (auto &d : mod_.decls) {
-            if (!d || d->kind != ast::NodeKind::ClassDecl) continue;
-            auto *cdp = static_cast<const ast::ClassDecl *>(d.get());
-            if (cdp->name == bt.struct_name) {
-                cd_orig = cdp;
-                break;
-            }
-        }
-        if (cd_orig) {
-            for (const auto &fd : cd_orig->fields) {
-                if (fd.name == e->field_name) {
-                    access_flag = fd.access;
-                    break;
-                }
-            }
-        }
-        const bool inside_same_class = (current_class_ == bt.struct_name);
-        if (access_flag == 1 /*private*/ && !inside_same_class) {
-            diags_.error(e->loc,
-                         "campo privado '" + e->field_name + "' de la clase '" +
-                             bt.struct_name +
-                             "' no es accesible desde fuera de la clase");
-        }
+        /* La visibilidad la lleva la ficha del campo, con el tipo que lo
+         * escribio: vale para los heredados y para los importados, que no
+         * tienen arbol en este modulo. */
         for (const auto &f : lay.fields) {
-            if (f.name == e->field_name) return f.type;
+            if (f.name != e->field_name) continue;
+            (void)check_member_visible(f, e->loc);
+            return f.type;
         }
         for (const auto &f : lay.static_fields) {
-            if (f.name == e->field_name) return f.type;
+            if (f.name != e->field_name) continue;
+            (void)check_member_visible(f, e->loc);
+            return f.type;
         }
         // Si no hay campo con ese nombre, buscar getter de propiedad
         // `get_<field_name>`.  Si existe, marcar como acceso de
@@ -13249,6 +13261,8 @@ Type TypeChecker::check_static_method_call(ast::CallExpr *e,
                                            const ClassMethodInfo &smtd,
                                            const std::string &donde,
                                            uint8_t marca) {
+    // Un estatico tambien tiene visibilidad: la misma regla que el resto.
+    (void)check_member_visible(smtd, e->loc);
     if (e->args.size() != smtd.param_types.size()) {
         diags_.error(e->loc,
                      donde + ": numero de argumentos incorrecto (esperado " +
@@ -17103,6 +17117,7 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
             if (!e->arg_names.empty() &&
                 !normalize_named_args(e, smtd->param_names, fa->field_name))
                 return Type{PrimitiveKind::COUNT};
+            (void)check_member_visible(*smtd, e->loc);
             check_method_args(e, *smtd, fa->field_name);
             fa->result_type = smtd->return_type;
             return smtd->return_type;
@@ -17168,25 +17183,8 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
         if (!e->arg_names.empty() &&
             !normalize_named_args(e, mtd->param_names, fa->field_name))
             return Type{PrimitiveKind::COUNT};
-        // Enforcement de visibilidad en metodos (private = solo dentro
-        // de la misma clase).  Buscamos el ClassMethodDecl original
-        // en el AST para consultar el flag access.
-        for (auto &d : mod_.decls) {
-            if (!d || d->kind != ast::NodeKind::ClassDecl) continue;
-            auto *cdp = static_cast<const ast::ClassDecl *>(d.get());
-            if (cdp->name != bt.struct_name) continue;
-            for (auto &mm : cdp->methods) {
-                if (mm && !mm->is_constructor && mm->name == fa->field_name) {
-                    if (mm->access == 1 /*private*/
-                        && current_class_ != bt.struct_name) {
-                        diags_.diag(e->loc, DiagLevel::ERR, "VX2087",
-                                    {fa->field_name, written_type_name(bt)});
-                    }
-                    break;
-                }
-            }
-            break;
-        }
+        // Y quien lo puede llamar: lo lleva la ficha del ELEGIDO.
+        (void)check_member_visible(*mtd, e->loc);
         check_method_args(e, *mtd, fa->field_name);
         // Anotar el tipo del FieldAccessExpr como el tipo de retorno
         // (util para que el lowering tenga el target_type listo).

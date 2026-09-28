@@ -535,7 +535,7 @@ class Parser {
     /// body) para el cuerpo de una extension/impl.  @p target_tparams son los
     /// type params del tipo destino (para reconocer casts).  nullptr si error.
     std::unique_ptr<ast::ClassMethodDecl>
-    parse_extension_method(uint8_t access);
+    parse_extension_method(ast::Visibility access);
 
     /// @brief Registra @p names como type-aliases temporales para que
     /// `(T)x` se reconozca como cast dentro de un body generico (los
@@ -1151,6 +1151,24 @@ class Parser {
      * @return La posicion tras el miembro, o 0 si no tiene forma de miembro.
      */
     [[nodiscard]] size_t peek_skip_concept_member_(size_t at) const;
+
+    /**
+     * @brief Lee la visibilidad escrita delante de un miembro, si la hay:
+     *        `public`, `internal`, `protected` o `private`.
+     * @param out  Recibe la leida.
+     * @param seen [in,out] Si ya se leyo una: una segunda es VXP098.
+     * @return Cierto si consumio una.
+     */
+    bool parse_member_visibility_(ast::Visibility &out, bool &seen);
+
+    /**
+     * @brief Crea la global que guarda un campo `static` de struct (una por
+     *        tipo, con su valor inicial).
+     * @param s El struct que lo declara.
+     * @param f El campo.
+     */
+    void synth_struct_static_global_(const ast::StructDecl &s,
+                                     const ast::StructFieldDecl &f);
 
     /**
      * @brief Lee el nombre de una anotacion (con @c current_ en el primer

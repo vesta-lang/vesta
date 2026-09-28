@@ -3693,7 +3693,13 @@ fails_case("gen224", "constraint violada (Punto no es Numeric)", "224_conceptos_
 fails_case("inst618", "struct generico `: Da<i64>` cuya INSTANCIA no lo cumple (antes la instancia no heredaba la clausula)", "618_instancia_no_cumple_err.vx", "VX2160", line=3673)
 fails_case("clase619", "clase `: Da<i64>` que no lo cumple: concepto estatico tras `:` en una clase", "619_clase_no_cumple_err.vx", "VX2160", line=3673)
 fails_case("impl620", "`impl Da<i64> for X` que no lo cumple: el error cita Da<i64>", "620_impl_con_argumentos_err.vx", "Da<i64>", line=3673)
-fails_case("noinject626", "un campo `@No.Inject` del concepto lo tiene que escribir quien lo declara", "626_no_inject_campo_falta_err.vx", "VX2160", line=3673)
+fails_case("privstruct628", "un campo `private` de un struct no se usa desde fuera", "628_campo_privado_struct_err.vx", "VX2164", line=3673)
+fails_case("protegido629", "un miembro `protected` no se usa desde fuera", "629_miembro_protegido_fuera_err.vx", "VX2165", line=3673)
+fails_case("implpriv630", "un `impl` es codigo de fuera: no ve los `private` del tipo", "630_impl_no_ve_privado_err.vx", "VX2164", line=3673)
+fails_case("privbase631", "un struct derivado no usa el `private` de su base", "631_privado_de_la_base_err.vx", "VX2164", line=3673)
+fails_case("litpriv633", "un literal `{...}` no da valor a un campo `private` desde fuera", "633_literal_campo_privado_err.vx", "VX2164", line=3673)
+fails_case("ctorpriv632","un constructor `private` solo lo usa el propio tipo", "632_constructor_privado_err.vx", "VX2164", line=3673)
+fails_case("noinject626","un campo `@No.Inject` del concepto lo tiene que escribir quien lo declara", "626_no_inject_campo_falta_err.vx", "VX2160", line=3673)
 fails_case("noinject627", "`@No.Inject` fuera de un concepto: existe pero ese sitio no la admite", "627_no_inject_fuera_de_concepto_err.vx", "VXP094", line=3673)
 fails_case("sindeducir624","metodo por defecto para quien cumple por forma, con un argumento del concepto que no sale de sus miembros", "624_concepto_argumento_sin_deducir_err.vx", "VX2162", line=3673)
 fails_case("ambiguo625", "dos conceptos que el tipo cumple por forma dan el mismo metodo por defecto", "625_metodo_por_defecto_ambiguo_err.vx", "VX2163", line=3673)
@@ -6548,7 +6554,7 @@ fails_case("ufcs_inverso_sin_nada",
 # una segunda puerta por la que colarse.
 fails_case("ufcs_inverso_privado",
            "un metodo privado no se alcanza desde fuera, tampoco escrito como llamada libre",
-           "567_ufcs_inverso_err.vx", "VX2087")
+           "567_ufcs_inverso_err.vx", "VX2164")
 
 # Dos hermanas que solo se distinguen por como se llaman sus ranuras: DECLARARLAS
 # vale, y lo que no vale es una llamada posicional que no diga cual.  Se citan

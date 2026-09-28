@@ -381,6 +381,11 @@ struct StructFieldInfo {
     bool is_comptime = false;
     /// De donde viene si el tipo no lo escribio (base o concepto).
     ast::MemberOrigin origin;
+    /// Quien lo ve.
+    ast::Visibility visibility = ast::Visibility::Unwritten;
+    /// El tipo que lo ESCRIBIO: el propio, o la base de la que se hereda.
+    /// Es contra quien se mide un `private` o un `protected`.
+    PooledName declared_in;
     /// Valor por defecto del campo (`u8 a = 0x10;`), no-owning al AST (vive
     /// durante toda la compilacion).  null = sin default (zero-init).  Lo usa
     /// el lowering para `= {}`, campos no listados en el init y `default()`.
@@ -568,6 +573,8 @@ struct ClassMethodInfo {
      * el `__add__` de `Wide128` aunque sea una copia.
      */
     ast::MemberOrigin origin;
+    /// Quien lo ve.
+    ast::Visibility visibility = ast::Visibility::Unwritten;
     /**
      * @brief Hay mas metodos con este nombre en el mismo tipo.
      *
@@ -3870,6 +3877,61 @@ class TypeChecker {
                            const std::string &super) const noexcept;
 
     /**
+     * @brief El struct @p sub es @p base o deriva de el (herencia estatica
+     *        de structs, `struct D : B`).
+     * @param sub  El struct de partida.
+     * @param base El que se busca en su cadena.
+     * @return Cierto si se llega.
+     */
+    [[nodiscard]] bool struct_derives_from(const std::string &sub,
+                                           const std::string &base) const;
+
+    /**
+     * @brief El tipo que ESCRIBIO un metodo: la base de la que se hereda, o el
+     *        tipo que lo define.
+     * @param m La ficha del metodo.
+     * @return El nombre.
+     */
+    [[nodiscard]] static const std::string &
+    member_declared_in(const ClassMethodInfo &m);
+
+    /**
+     * @brief El tipo DUENO del cuerpo de un metodo que se va a comprobar: la
+     *        base de la que se heredo, o el tipo cuyo layout se comprueba.
+     * @param m      El metodo.
+     * @param layout El tipo que se comprueba.
+     * @return El dueno.
+     */
+    [[nodiscard]] static PooledName
+    method_code_owner(const ast::ClassMethodDecl &m, const std::string &layout);
+
+    /**
+     * @brief Puede el codigo que se comprueba ahora usar un miembro con esta
+     *        visibilidad, escrito por @p declared_in?
+     * @param v           La visibilidad del miembro.
+     * @param declared_in El tipo que lo escribio.
+     * @return Cierto si lo alcanza.
+     */
+    [[nodiscard]] bool member_reachable(ast::Visibility v,
+                                        const std::string &declared_in) const;
+
+    /**
+     * @brief Comprueba que se puede usar un CAMPO aqui; si no, lo dice.
+     * @param f   Su ficha.
+     * @param loc El uso.
+     * @return Cierto si se puede.
+     */
+    bool check_member_visible(const StructFieldInfo &f, const SourceLoc &loc);
+
+    /**
+     * @brief Comprueba que se puede llamar a un METODO aqui; si no, lo dice.
+     * @param m   Su ficha.
+     * @param loc La llamada.
+     * @return Cierto si se puede.
+     */
+    bool check_member_visible(const ClassMethodInfo &m, const SourceLoc &loc);
+
+    /**
      * @brief Como esta puesto en memoria un `Optional<T>`.
      *
      * Unica respuesta a cuanto ocupa, donde tiene el valor y si lleva marca
@@ -5309,6 +5371,23 @@ class TypeChecker {
     /// Si ya corrio @ref inject_concept_defaults (las instancias que nacen
     /// despues se inyectan al crearse).
     ConceptDefaultsPass concept_defaults_pass_ = ConceptDefaultsPass::Pending;
+
+    /**
+     * @enum MemberCodeSite
+     * @brief Si el cuerpo que se comprueba es codigo DEL tipo o un `impl`
+     *        escrito desde fuera sobre el.
+     */
+    enum class MemberCodeSite : uint8_t {
+        TypeBody, ///< un miembro del tipo (escrito, heredado o inyectado)
+        ImplBody, ///< un `impl` sobre el tipo: codigo de fuera
+    };
+    /// Que tipo ESCRIBIO el cuerpo que se esta comprobando: contra el se mide
+    /// un `private` o un `protected`.  No es el tipo que se comprueba: el
+    /// metodo que un struct hereda se comprueba en el derivado, pero lo
+    /// escribio la base.  Vacio fuera de un metodo y en un `impl`.
+    PooledName member_code_owner_;
+    /// Donde se esta comprobando codigo ahora (ver @ref MemberCodeSite).
+    MemberCodeSite member_code_site_ = MemberCodeSite::TypeBody;
     /// #cross-module-generics: nombres de plantillas/conceptos ya inyectados
     /// desde un `.vxi` importado (dedup de re-parse + evita doble inyeccion
     /// si varios imports los traen).

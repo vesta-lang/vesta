@@ -151,7 +151,7 @@ lk_make_getter(const ast::ClassFieldDecl &f) {
     m->loc = f.loc;
     m->name = "get_" + f.name;
     m->return_type = lk_clone_type(f.type.get());
-    m->access = 0;        // public
+    m->visibility = ast::Visibility::Public; // generado: API del tipo
     m->property_kind = 1; // getter
     m->is_static = false;
     m->body = std::make_unique<ast::BlockStmt>();
@@ -177,7 +177,7 @@ lk_make_setter(const ast::ClassFieldDecl &f) {
     void_t->loc = f.loc;
     void_t->prim = PrimitiveKind::VOID;
     m->return_type = std::move(void_t);
-    m->access = 0;
+    m->visibility = ast::Visibility::Public;
     m->property_kind = 2;
     m->is_static = false;
     auto p = std::make_unique<ast::ParamDecl>();
@@ -222,7 +222,7 @@ lk_make_ctor(const std::string &class_name,
     m->loc = loc;
     m->name = class_name;
     m->return_type = nullptr; // ctor no devuelve nada
-    m->access = 0;
+    m->visibility = ast::Visibility::Public;
     m->is_constructor = true;
     m->is_static = false;
     m->body = std::make_unique<ast::BlockStmt>();
@@ -271,7 +271,7 @@ lk_make_with(const ast::ClassDecl &cls, const ast::ClassFieldDecl &target) {
     rt->loc = target.loc;
     rt->name = cls.name;
     m->return_type = std::move(rt);
-    m->access = 0;
+    m->visibility = ast::Visibility::Public;
     m->is_static = false;
     auto p = std::make_unique<ast::ParamDecl>();
     p->loc = target.loc;
@@ -319,7 +319,7 @@ lk_make_tostring(const ast::ClassDecl &cls) {
     rt->loc = cls.loc;
     rt->prim = PrimitiveKind::STRING;
     m->return_type = std::move(rt);
-    m->access = 0;
+    m->visibility = ast::Visibility::Public;
     m->is_static = false;
     m->body = std::make_unique<ast::BlockStmt>();
     m->body->loc = cls.loc;
@@ -371,7 +371,7 @@ lk_make_equals(const ast::ClassDecl &cls) {
     rt->loc = cls.loc;
     rt->prim = PrimitiveKind::BOOL;
     m->return_type = std::move(rt);
-    m->access = 0;
+    m->visibility = ast::Visibility::Public;
     m->is_static = false;
     auto p = std::make_unique<ast::ParamDecl>();
     p->loc = cls.loc;
@@ -445,7 +445,7 @@ lk_make_hashcode(const ast::ClassDecl &cls) {
     rt->loc = cls.loc;
     rt->prim = PrimitiveKind::U64;
     m->return_type = std::move(rt);
-    m->access = 0;
+    m->visibility = ast::Visibility::Public;
     m->is_static = false;
     m->body = std::make_unique<ast::BlockStmt>();
     m->body->loc = cls.loc;
