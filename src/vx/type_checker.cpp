@@ -9318,11 +9318,7 @@ void TypeChecker::check_stmt(ast::Stmt *s, const Type &fn_return_type) {
             // Mismo principio que Rust con #[must_use].
             if (t.kind == PrimitiveKind::RESULT &&
                 es->expr->kind == ast::NodeKind::CallExpr) {
-                diags_.error(es->loc,
-                             "el valor de tipo Result<...> debe ser manejado: "
-                             "asigna a una variable y comprueba con "
-                             "isOk()/value()/error(), "
-                             "o usa unwrap() para propagar el error");
+                diags_.diag(es->loc, DiagLevel::ERR, "VX2155", {});
             }
         }
         return;
@@ -11682,7 +11678,9 @@ Type TypeChecker::check_index(ast::IndexExpr *e) {
                 auto it = struct_layouts_.find(ovt.struct_name);
                 if (it != struct_layouts_.end() && it->second.is_overlay) {
                     for (const auto &fi : it->second.fields) {
-                        if (fi.name == fa->field_name &&
+                        // Un rango no es un elemento: lo rechaza el camino
+                        // general, mas abajo.
+                        if (fi.name == fa->field_name && !e->is_range &&
                             (fi.array_stride || fi.element_block)) {
                             if (e->index) {
                                 Type idt = check_expr(e->index.get());
@@ -11700,6 +11698,14 @@ Type TypeChecker::check_index(ast::IndexExpr *e) {
     }
     const Type bt = check_expr(e->base.get());
     if (e->index) (void)check_expr(e->index.get());
+    /* Un rango solo lo admite quien sabe cortar.  Antes se ignoraba en todo lo
+     * que no fuera `string`: `arr[1..3]` era `arr[1]`, y un `__index__(i)`
+     * recibia `1` -- otro resultado sin una palabra. */
+    if (e->is_range && bt.kind != PrimitiveKind::STRING) {
+        if (e->range_hi) (void)check_expr(e->range_hi.get());
+        diags_.diag(e->loc, DiagLevel::ERR, "VX2154", {written_type_name(bt)});
+        return Type{};
+    }
     // Operator overloading C-2: `base[i]` (LECTURA) -> base.__index__(i)
     // cuando @c bt es CLASS o STRUCT y declara @c __index__ cuya firma
     // unaria acepta el tipo del indice.  El resultado es el return type
@@ -16074,8 +16080,8 @@ Type TypeChecker::check_assign_impl(ast::AssignExpr *e) {
         // check_index porque check_index marcaria @c __index__ (lectura) y
         // resolveria el tipo del elemento al return type del getter, no al
         // tipo del value.  Validamos los tipos de los 2 parametros y, si
-        // matchea, marcamos @c ix->index_set_method y devolvemos el tipo
-        // del value.  Si NO existe el dunder y @c base es CLASS/STRUCT
+        // matchea, marcamos @c ix->index_set_method y devolvemos lo que
+        // DEVUELVE el metodo.  Si NO existe el dunder y @c base es CLASS/STRUCT
         // (no array/ptr/string nativo), emitimos un error claro.
         if (ix->base && !ix->is_range) {
             use_judged_by_parent_ = ix->base.get(); // destino, no lectura
@@ -16122,8 +16128,14 @@ Type TypeChecker::check_assign_impl(ast::AssignExpr *e) {
                 }
                 if (setter) {
                     ix->index_set_method = kIndexSetMethod;
+                    /* El ELEMENTO escrito es el segundo parametro; lo que la
+                     * asignacion VALE es lo que devuelva el operador, que lo
+                     * decide quien lo implementa -- `void`, si escribio, el
+                     * valor anterior... --.  Fijarlo al tipo del valor limitaba
+                     * los operadores y ademas mentia: el bajado ya da el valor
+                     * de la LLAMADA. */
                     ix->result_type = setter->param_types[1];
-                    return setter->param_types[1];
+                    return setter->return_type;
                 }
                 // No hay __index_set__ aplicable: para CLASS/STRUCT no hay
                 // forma clasica de escribir un slot subscript, asi que es
@@ -17425,7 +17437,7 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
             /* Tenerlo no cierra la pregunta: si ademas hay una libre que toma
              * este receptor, hay dos candidatos y no se elige en silencio. */
             if (report_ufcs_clash(bt, fa->field_name, written_type_name(bt),
-                                  e->loc))
+                                  e->loc, e->args.size() + 1))
                 return Type{PrimitiveKind::COUNT}; // ya se dijo que fallaba
             /* Que el nombre este sobrecargado lo dice el propio candidato: una
              * rama sobre un bit que ya se tiene en la mano, sin tabla. */
@@ -17487,7 +17499,7 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
         }
         // Y como en el struct: tenerlo no cierra la pregunta.
         if (report_ufcs_clash(bt, fa->field_name, written_type_name(bt),
-                              e->loc))
+                              e->loc, e->args.size() + 1))
             return Type{PrimitiveKind::COUNT}; // ya se dijo que fallaba
         // Igual que en el struct: la marca viaja en el candidato.
         if (mtd->is_overloaded)

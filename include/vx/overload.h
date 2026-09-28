@@ -138,6 +138,22 @@ struct Candidate {
 using AcceptsFn = bool (*)(void *ctx, const Type &param, const Type &arg);
 
 /**
+ * @brief Admite @p c una llamada con @p n argumentos, solo por su numero?
+ *
+ * La mitad de "esta candidata vale" que no mira tipos.  Va aparte porque la
+ * pregunta tambien la hace quien no elige -- la regla del choque entre un
+ * metodo y una libre --, y una libre que no admite ese numero de argumentos no
+ * es candidata de nada: contarla por su nombre era gritar un choque que no
+ * existe.
+ *
+ * @param c La candidata.
+ * @param n Cuantos argumentos lleva la llamada (el receptor incluido si lo hay).
+ * @return @c true si una cerrada tiene exactamente @p n parametros, o una
+ *         abierta al menos sus fijos.
+ */
+bool arity_fits(const Candidate &c, size_t n) noexcept;
+
+/**
  * @brief La que piden estos argumentos.
  *
  * @par El orden de preferencia, y por que es este

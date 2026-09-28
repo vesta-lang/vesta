@@ -324,10 +324,7 @@ ir::IrValueId Lowering::lower_index(ast::IndexExpr *e) {
             // ASCII / UTF-8 de 1 byte el byte coincide con el codepoint.  El
             // slice `s[a..b]` sigue solo en AOT (requiere copiar un substring).
             if (e->is_range) {
-                error_at(
-                    e->loc,
-                    "slice de string s[a..b] solo soportado en compilacion "
-                    "nativa (AOT) por ahora; usa substr(s, a, len)");
+                diags_.diag(e->loc, DiagLevel::ERR, "VX2156", {});
                 return ir::IR_NO_VALUE;
             }
             if (!e->index) {

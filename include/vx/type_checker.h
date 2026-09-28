@@ -3014,18 +3014,21 @@ class TypeChecker {
      * @brief El tipo TIENE el metodo, y ademas hay una libre que lo tomaria.
      *
      * Dos candidatos para el mismo receptor no se deciden en silencio: se
-     * cita a los dos y lo arregla quien escribio el segundo.  Solo mira el
-     * INDICE -- una consulta, sin comprobar argumentos --, asi que un metodo
-     * cuyo nombre no comparte ninguna libre no paga nada.
+     * cita a los dos y lo arregla quien escribio el segundo.  Mira el INDICE y
+     * la ARIDAD de lo que encuentra -- sin comprobar tipos --: una libre que no
+     * admite ese numero de argumentos no es candidata, y un metodo cuyo nombre
+     * no comparte ninguna libre no paga mas que una sonda.
      *
-     * @param recv El tipo del receptor.
-     * @param name El nombre escrito tras el punto.
-     * @param owner Como nombrar al duenyo del metodo en el diagnostico.
-     * @param loc  Donde se escribio la llamada.
+     * @param recv   El tipo del receptor.
+     * @param name   El nombre escrito tras el punto.
+     * @param owner  Como nombrar al duenyo del metodo en el diagnostico.
+     * @param loc    Donde se escribio la llamada.
+     * @param n_args Cuantos argumentos lleva la llamada CONTANDO el receptor.
      * @return true si se reporto el choque.
      */
     bool report_ufcs_clash(const Type &recv, const std::string &name,
-                           const std::string &owner, const SourceLoc &loc);
+                           const std::string &owner, const SourceLoc &loc,
+                           size_t n_args);
 
     /**
      * @brief La candidata existe, pero pide OTRO receptor -- y se llega con un

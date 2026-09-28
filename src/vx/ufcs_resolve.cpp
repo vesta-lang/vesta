@@ -54,6 +54,34 @@
 
 namespace vx {
 
+namespace {
+/**
+ * @brief La candidata de sobrecarga de una firma de la tabla.
+ *
+ * Un solo sitio para leer de una firma lo que la regla de sobrecarga mira --
+ * parametros, nombres, variadica, por referencia --: lo usan quien ELIGE y
+ * quien comprueba el CHOQUE entre un metodo y una libre, y si cada uno la
+ * armara a su manera podrian ver dos aridades distintas para la misma firma.
+ *
+ * @param sig  La firma.
+ * @param slot Su indice en la tabla, que es como la reconoce quien elige.
+ * @return La candidata; apunta dentro de @p sig, que tiene que seguir viva.
+ */
+overload::Candidate candidate_of_sig(const FunctionSig &sig, uint32_t slot) {
+    overload::Candidate c;
+    c.params = &sig.param_types;
+    c.param_names = &sig.param_names;
+    c.needs_names = sig.overload_needs_names;
+    c.slot = slot;
+    c.by_ref_mask = sig.param_by_ref_mask;
+    if (sig.is_raw_variadic)
+        c.raw_variadic = true;
+    else if (sig.is_variadic)
+        c.variadic_elem = &sig.variadic_elem;
+    return c;
+}
+} // namespace
+
 bool TypeChecker::base_denotes_type(const ast::Expr *base) const {
     if (base == nullptr) return false;
     /* Un nombre a secas: `Punto.f()`.  Que no sea ademas una VARIABLE es lo
@@ -159,16 +187,27 @@ Type TypeChecker::ufcs_key_type(const Type &t) const {
 
 bool TypeChecker::report_ufcs_clash(const Type &recv, const std::string &name,
                                     const std::string &owner,
-                                    const SourceLoc &loc) {
-    /* Solo el INDICE: la pregunta es si ALGUIEN declaro una libre con ese
-     * nombre para esta cabeza de tipo, no cual de ellas ganaria.  Es una sonda
-     * en una tabla, asi que el metodo cuyo nombre no comparte ninguna libre --
-     * que son casi todos -- no paga por esta regla. */
-    if (ufcs_.find(ufcs_key_type(recv), name, current_ns_prefix_.str()) ==
-        nullptr)
-        return false;
-    diags_.diag(loc, DiagLevel::ERR, "VX2068", {name, owner});
-    return true;
+                                    const SourceLoc &loc, size_t n_args) {
+    /* Primero el INDICE: si nadie declaro una libre con ese nombre para esta
+     * cabeza de tipo -- que es lo de casi todos los metodos --, esta regla no
+     * cuesta mas que una sonda. */
+    const ufcs::Candidates *free_fns =
+        ufcs_.find(ufcs_key_type(recv), name, current_ns_prefix_.str());
+    if (free_fns == nullptr) return false;
+    /* Y de las que hay, solo las que ADMITEN esta llamada por su numero de
+     * argumentos.  Contarlas por el nombre hacia que una generica de la
+     * biblioteca -- `with<T, U, F>(x, y, f)`, que vale para cualquier receptor
+     * -- chocara con el `with(x)` de cualquier struct del programa, aunque no
+     * pudiera recibir esa llamada nunca. */
+    for (uint32_t idx : *free_fns) {
+        if (idx >= function_sigs_.size()) continue;
+        if (!overload::arity_fits(candidate_of_sig(function_sigs_[idx], idx),
+                                  n_args))
+            continue;
+        diags_.diag(loc, DiagLevel::ERR, "VX2068", {name, owner});
+        return true;
+    }
+    return false;
 }
 
 bool TypeChecker::report_ufcs_cast_hint(const Type &recv,
@@ -631,18 +670,7 @@ bool TypeChecker::try_ufcs_call(ast::CallExpr *e, ast::FieldAccessExpr *fa,
     util::SmallVector<overload::Candidate, 4> cands;
     for (uint32_t idx : *cand_slots) {
         if (idx >= function_sigs_.size()) continue;
-        const FunctionSig &sig = function_sigs_[idx];
-        overload::Candidate c;
-        c.params = &sig.param_types;
-        c.param_names = &sig.param_names;
-        c.needs_names = sig.overload_needs_names;
-        c.slot = idx;
-        c.by_ref_mask = sig.param_by_ref_mask;
-        if (sig.is_raw_variadic)
-            c.raw_variadic = true;
-        else if (sig.is_variadic)
-            c.variadic_elem = &sig.variadic_elem;
-        cands.push_back(c);
+        cands.push_back(candidate_of_sig(function_sigs_[idx], idx));
     }
     const uint32_t pick =
         overload::select(cands.data(), cands.size(), arg_types,
@@ -931,7 +959,8 @@ bool TypeChecker::report_ufcs_reverse_clash(ast::CallExpr *e,
         return false;
     /* Y el choque lo declara la MISMA funcion que lo declara desde el punto,
      * con el mismo mensaje: es una regla, no dos. */
-    return report_ufcs_clash(norm, member, owner, e->loc);
+    // Aqui el receptor ya va entre los argumentos: `f(x, a)`.
+    return report_ufcs_clash(norm, member, owner, e->loc, e->args.size());
 }
 
 bool TypeChecker::try_ufcs_reverse_over_free(ast::CallExpr *e,

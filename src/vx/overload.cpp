@@ -115,18 +115,34 @@ static bool reorder_named(const Candidate &c, const std::vector<Type> &args,
  *             AMPLIARSE (ver @c is_lossless_conversion) y lo demas se
  *             convierte como siempre; 2 = cualquier conversion admitida.
  */
+/**
+ * @brief Cuantos parametros FIJOS tiene @p c.
+ *
+ * La aridad de una abierta es un MINIMO, no un numero.  Cuantos son los fijos
+ * depende de cual de las dos es: en un `T... xs` el ultimo parametro ES el
+ * array y no cuenta; en un `...` crudo no hay parametro que anyadir, asi que
+ * cuentan todos.  Restar uno a este ultimo se comia un parametro de verdad.
+ *
+ * @param c La candidata.
+ * @return Sus parametros fijos.
+ */
+static size_t fixed_params(const Candidate &c) noexcept {
+    const size_t np = c.params != nullptr ? c.params->size() : 0;
+    return (c.variadic_elem != nullptr && np > 0) ? np - 1 : np;
+}
+
+bool arity_fits(const Candidate &c, size_t n) noexcept {
+    const bool open = c.variadic_elem != nullptr || c.raw_variadic;
+    const size_t fixed = fixed_params(c);
+    return open ? n >= fixed : n == fixed;
+}
+
 static bool candidate_fits(const Candidate &c, const std::vector<Type> &args,
                            int pass, AcceptsFn accepts, void *ctx) {
     const std::vector<Type> &p = *c.params;
     const Type *elem = c.variadic_elem;
-    const bool open = elem != nullptr || c.raw_variadic;
-    /* La aridad de una abierta es un MINIMO, no un numero.  Cuantos son los
-     * FIJOS depende de cual de las dos es: en un `T... xs` el ultimo parametro
-     * ES el array y no cuenta; en un `...` crudo no hay parametro que anyadir,
-     * asi que cuentan todos.  Restar uno a este ultimo se comia un parametro de
-     * verdad. */
-    const size_t fixed = (elem != nullptr) ? p.size() - 1 : p.size();
-    if (open ? (args.size() < fixed) : (args.size() != fixed)) return false;
+    const size_t fixed = fixed_params(c);
+    if (!arity_fits(c, args.size())) return false;
     for (size_t k = 0; k < args.size(); ++k) {
         // Un argumento que no se pudo tipar no descarta a nadie: su error ya
         // esta dado, y descartar por el solo anyadiria un segundo mensaje sobre

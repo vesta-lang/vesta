@@ -65,6 +65,19 @@ struct Vec2 {
 	public bool __eq__(Vec2 o) => this.x == o.x && this.y == o.y;
 	/// `v[0]` / `v[1]` -> componente.
 	public i64 __index__(i64 i) { if (i == 0) { return this.x; } return this.y; }
+	/// `v[i] = k`.  Lo que DEVUELVE el operador lo decide quien lo escribe --
+	/// aqui, si escribio --, y es lo que vale la asignacion.
+	public bool __index_set__(i64 i, i64 k) {
+		if (i == 0) {
+			this.x = k;
+			return true;
+		}
+		if (i == 1) {
+			this.y = k;
+			return true;
+		}
+		return false;
+	}
 	/// `v` es "verdad" si no es el vector cero.
 	public bool __bool__() => this.x != 0 || this.y != 0;
 }
@@ -135,6 +148,14 @@ i32 main() {
 	i64  sum =  f[0] + f[1];     // 14      -- __index__
 	Vec2 neg = -a;               // (-3,-4) -- __neg__
 	sum      =  sum + (-neg[0]); // 14 + 3 = 17
+
+	// La escritura por indice vale lo que devuelva `__index_set__`.
+	Vec2 g;
+	g.x         = 0;
+	g.y         = 0;
+	bool dentro = (g[1] = 9); // escribe y: true
+	bool fuera  = (g[5] = 1); // no hay componente 5: false, y no escribe
+	if (!dentro || fuera || g[1] != 9 || g[0] != 0) return 1;
 
 	// 4. Igualdad: `!=` se deriva negando `__eq__`.
 	if (a == d) { sum = sum + 10; } // (3,4) == (3,4) -> 27

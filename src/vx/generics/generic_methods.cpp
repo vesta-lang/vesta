@@ -240,7 +240,8 @@ TypeChecker::GenericMethodCall TypeChecker::try_monomorphize_method_call(
      * Faltaba justo aqui, y por eso el choque dependia de si el metodo era
      * GENERICO: con uno normal la llamada no compilaba, y con uno generico
      * ganaba el metodo callando y la libre se quedaba sin llamar nunca. */
-    if (report_ufcs_clash(bt, fa->field_name, written_type_name(bt), e->loc))
+    if (report_ufcs_clash(bt, fa->field_name, written_type_name(bt), e->loc,
+                          e->args.size() + 1))
         return GenericMethodCall::Failed; // ya se dijo; no se instancia nada
 
     // Resolver los type-args: explicitos (`obj.m<U>()`) o inferidos del
