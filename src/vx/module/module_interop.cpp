@@ -42,24 +42,6 @@
 
 namespace vx {
 
-/// Cualifica @p name con @p ns_path (`a.b` + `T` -> `a__b__T`), pero SOLO si
-/// no lo estaba ya.
-///
-/// La cualificacion tiene que ser IDEMPOTENTE: por una cadena de re-exports el
-/// mismo nombre pasa por varios modulos, y prefijarlo en cada salto produce
-/// `std__syscall__std__syscall__windows__std__ntwindows__std__types__uintptr`
-/// -- un prefijo por eslabon -- con lo que el tipo deja de unificar consigo
-/// mismo.
-///
-/// El criterio es el propio invariante del formato: un nombre PUBLICO corto
-/// nunca lleva `__`, porque el exportador siempre lo parte en (ns_path, nombre
-/// corto).  Asi que si ya lo lleva, es que viene cualificado y se respeta.
-static std::string qualify_once_(const std::string &ns_path,
-                                 const std::string &name) {
-    if (name.find(kSymbolPathSeparator) != std::string::npos)
-        return name; // ya cualificado
-    return namespace_member_symbol(ns_path, name);
-}
 
 /**
  * @brief Copia a una firma los nombres de ranura que traia el `.vxi`.
@@ -1853,7 +1835,7 @@ static EnumLayout enum_layout_from_vxi_(TypeChecker &tc, const VxiSymbol &s,
                                         bool with_payloads);
 
 void inject_generic_templates_from_vxi(
-    TypeChecker &tc, const VxiModule &mod,
+    TypeChecker &tc, const VxiModule &mod, const ImportOrigin &origin,
     const std::unordered_set<std::string> &wanted, const std::string &ns_prefix,
     const std::unordered_set<std::string> &alias_unqualified,
     const std::vector<const VxiModule *> &alias_sources) {
@@ -1911,7 +1893,7 @@ void inject_generic_templates_from_vxi(
              * cuerpo de la plantilla escribe el corto, y las firmas
              * serializadas de sus ayudantes lo referencian por el canonico.
              * Con una sola, la que falta resuelve a vacio. */
-            const std::string canon = qualify_once_(sym.ns_path, sym.name);
+            const std::string canon = imported_symbol(origin, sym.ns_path, sym.name);
             EnumLayout L =
                 enum_layout_from_vxi_(tc, sym, canon, /*with_payloads=*/true);
             if (canon != sym.name) tc.register_imported_enum(sym.name, L);
@@ -1974,7 +1956,7 @@ void inject_generic_templates_from_vxi(
             if (!comptime_is_primitive(
                     tc.resolve_type_string(sym.underlying_type)))
                 continue;
-            register_vxi_typedef_(tc, sym, qualify_once_(sym.ns_path, sym.name),
+            register_vxi_typedef_(tc, sym, imported_symbol(origin, sym.ns_path, sym.name),
                                   sym.name);
         }
     }
@@ -2001,7 +1983,7 @@ void inject_generic_templates_from_vxi(
             const std::string label =
                 !sym.mangled_label.empty()
                     ? sym.mangled_label
-                    : qualify_once_(sym.ns_path, sym.name);
+                    : imported_symbol(origin, sym.ns_path, sym.name);
             if (label.empty()) continue;
             /* Se apunta SIEMPRE, aunque el label sea el mismo nombre.
              *
@@ -2026,7 +2008,7 @@ void inject_generic_templates_from_vxi(
                 const std::string label =
                     !sym.mangled_label.empty()
                         ? sym.mangled_label
-                        : qualify_once_(sym.ns_path, sym.name);
+                        : imported_symbol(origin, sym.ns_path, sym.name);
                 if (label.empty()) continue;
                 auto it = fn_renames.find(sym.name);
                 const std::string &target =
@@ -2065,8 +2047,8 @@ void inject_generic_templates_from_vxi(
             // El nombre solo tiene que ser unico y que nadie lo escriba: una
             // `comptime const` se inlinea en el uso, no enlaza contra nada, asi
             // que no hace falta que coincida con el mangling real del modulo.
-            const std::string mangled =
-                ir::template_symbol(qualified_symbol(ns_prefix, sym.name));
+            const std::string mangled = ir::template_symbol(
+                imported_symbol(origin, sym.ns_path, sym.name));
             TypeChecker::ComptimeConst c;
             c.type = tc.resolve_type_string(sym.underlying_type);
             if (sym.has_blob_ref) {
@@ -2129,7 +2111,7 @@ void inject_generic_templates_from_vxi(
             const std::string label =
                 !sym.mangled_label.empty()
                     ? sym.mangled_label
-                    : qualify_once_(sym.ns_path, sym.name);
+                    : imported_symbol(origin, sym.ns_path, sym.name);
             if (label.empty()) continue;
             Type t = tc.resolve_type_string(sym.underlying_type);
             tc.register_imported_global(label, std::move(t), /*is_const=*/false,
@@ -2152,9 +2134,8 @@ void inject_generic_templates_from_vxi(
     std::unordered_map<std::string, std::string> helper_tpl_names;
     for (const auto &g : mod.generic_templates) {
         if (!g.helper_only) continue;
-        helper_tpl_names.emplace(
-            g.name, !g.ns_path.empty() ? namespace_member_symbol(g.ns_path, g.name)
-                                       : qualified_symbol(ns_prefix, g.name));
+        helper_tpl_names.emplace(g.name,
+                                 imported_symbol(origin, g.ns_path, g.name));
     }
     if (!helper_tpl_names.empty())
         for (auto &decl : parsed->decls)
@@ -2301,10 +2282,6 @@ void inject_generic_templates_from_vxi(
             }
             if (!found) continue;
         }
-        // NS.2: si la plantilla/concepto declaraba un namespace en el dep,
-        // registrarla bajo el nombre ns-mangled (`mat__X`) para que el acceso
-        // cualificado `mat.X` resuelva (misma convencion `.`->`__`).  Si no,
-        // usar el prefijo del modulo con punto (comportamiento previo).
         std::string tpl_ns;
         for (const auto &g : mod.generic_templates)
             if (g.name == nm) {
@@ -2313,26 +2290,55 @@ void inject_generic_templates_from_vxi(
             }
         if (is_helper) {
             // Ya tiene su nombre, y no se publica.
-        } else if (!tpl_ns.empty()) {
-            const std::string mangled_full = namespace_member_symbol(tpl_ns, nm);
-            set_decl_name(decl.get(), mangled_full);
-            // El nombre corto tiene que seguir llevando a la plantilla: un
-            // `import std.numeric;` mete `add` en el scope, y sin este puente
-            // `add<i64>(...)` no se reconocia como generica.
-            if (decl->kind == ast::NodeKind::FunctionDecl)
-                tc.register_generic_fn_alias(nm, mangled_full);
-            // NS.2: registrar el template bajo su namespace DECLARADO para que
-            // el acceso cualificado resuelva (`geo.doble<i64>()` / `geo.Caja`).
-            // El concepto usa la ruta comptime_eval_concept (`.`->`__`), pero
-            // registrarlo aqui tambien es inocuo.  Para fn el kind=0, tipos=2.
-            const uint32_t tns_idx =
-                tc.register_imported_namespace(tpl_ns, tpl_ns);
-            TypeChecker::ImportedNamespace::Sym nsym;
-            nsym.mangled_label = mangled_full;
-            nsym.kind = (decl->kind == ast::NodeKind::FunctionDecl) ? 0 : 2;
-            tc.register_namespace_symbol(tns_idx, nm, std::move(nsym));
-        } else if (!ns_prefix.empty() && !nm.empty()) {
-            set_decl_name(decl.get(), ns_prefix + "." + nm);
+        } else if (decl->kind == ast::NodeKind::ConceptDecl && tpl_ns.empty()) {
+            /* Un concepto no emite codigo ni simbolo -- es un predicado que se
+             * evalua al compilar --, asi que no puede chocar en la fusion.  Sin
+             * namespace conserva el nombre por el que lo buscan sus
+             * restricciones. */
+            if (!ns_prefix.empty() && !nm.empty())
+                set_decl_name(decl.get(), ns_prefix + "." + nm);
+        } else {
+            /* La plantilla se NOMBRA por su origen -- el namespace que declara
+             * o, si no, su modulo --, con la misma regla que un simbolo
+             * importado.  Su instancia tiene entonces UN simbolo, se importe
+             * como se importe.  Antes, sin namespace, se nombraba por lo que
+             * escribio quien importaba (`lib.f`, `L.f`) o por nada (`f` con
+             * `only`): dos librerias con la misma generica daban la misma
+             * instancia `f_i64`, y la fusion ejecutaba la de la otra. */
+            const std::string symbol = imported_symbol(origin, tpl_ns, nm);
+            set_decl_name(decl.get(), symbol);
+            const bool is_fn = decl->kind == ast::NodeKind::FunctionDecl;
+            const uint8_t ns_kind = is_fn ? 0 : 2; // funcion / tipo
+            /* El nombre CORTO lleva a la plantilla con `only` (sin prefijo) y
+             * cuando declara namespace: un `import std.numeric;` mete `add` en
+             * el scope, y sin este puente `add<i64>(...)` no se reconocia como
+             * generica. */
+            if (!tpl_ns.empty() || ns_prefix.empty()) {
+                if (is_fn)
+                    tc.register_generic_fn_alias(nm, symbol);
+                else
+                    tc.register_generic_type_alias(nm, symbol);
+            }
+            /* Y el CUALIFICADO: bajo el namespace que declara (`geo.doble`) y
+             * bajo el nombre local del import (`lib.doble`, `L.doble`).  Lo que
+             * escribe quien importa sirve para ENCONTRARLA, no para nombrarla.
+             */
+            if (!tpl_ns.empty()) {
+                const uint32_t tns_idx =
+                    tc.register_imported_namespace(tpl_ns, tpl_ns);
+                TypeChecker::ImportedNamespace::Sym nsym;
+                nsym.mangled_label = symbol;
+                nsym.kind = ns_kind;
+                tc.register_namespace_symbol(tns_idx, nm, std::move(nsym));
+            }
+            if (!ns_prefix.empty() && ns_prefix != tpl_ns && !nm.empty()) {
+                const uint32_t lns_idx =
+                    tc.register_imported_namespace(ns_prefix, ns_prefix);
+                TypeChecker::ImportedNamespace::Sym nsym;
+                nsym.mangled_label = symbol;
+                nsym.kind = ns_kind;
+                tc.register_namespace_symbol(lns_idx, nm, std::move(nsym));
+            }
         }
         /* only-import de una comptime/macro fn: registrar tambien el nombre SIN
          * cualificar (`nm`) apuntando al decl, para que la invocacion suelta

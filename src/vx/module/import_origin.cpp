@@ -27,7 +27,12 @@ std::string imported_symbol(const ImportOrigin &origin,
                             const std::string &ns_path,
                             const std::string &name) {
     /* Ya calificado: la cadena de re-exports lo trae con su identidad
-     * original, y volver a prefijarlo daria una identidad por eslabon. */
+     * original, y volver a prefijarlo daria una identidad por eslabon
+     * (`std__syscall__std__syscall__windows__std__ntwindows__std__types__
+     * uintptr`), con la que el tipo deja de unificar consigo mismo.  El
+     * criterio es el invariante del formato: un nombre publico corto nunca
+     * lleva `__`, porque el exportador lo parte siempre en (namespace,
+     * nombre corto). */
     if (name.find(kSymbolPathSeparator) != std::string::npos) return name;
     if (!ns_path.empty()) return namespace_member_symbol(ns_path, name);
     return qualified_symbol(origin.module.str(), name);

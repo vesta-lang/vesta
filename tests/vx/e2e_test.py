@@ -5580,6 +5580,23 @@ def main():
         else:
             steps += 1
 
+    # Y lo que llega de otro modulo tiene UNA identidad: la misma plantilla da
+    # el mismo simbolo se importe con `only`, llano o con alias, tenga su modulo
+    # namespace o no; dos genericas homonimas de librerias distintas no se
+    # confunden; y la misma instancia escrita de dos formas es el mismo tipo.
+    _ide = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        "test_identidad_importado.py")
+    if os.path.exists(_ide):
+        print("")
+        _r = _sp.run([sys.executable, _ide, args.build_dir], capture_output=True,
+                     text=True)
+        for _l in _r.stdout.splitlines():
+            print(_l)
+        if _r.returncode != 0:
+            failed.append("identidad-importado")
+        else:
+            steps += 1
+
     # -- Lo que se sale de lo normal, con contador PROPIO ------------------
     #
     # Un caso lento o glotón no es un fallo, pero tampoco es un caso corriente:

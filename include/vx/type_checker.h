@@ -1914,6 +1914,47 @@ class TypeChecker {
     }
 
     /**
+     * @brief Ata el nombre PUBLICO de una plantilla de TIPO importada (struct,
+     *        clase o enum generico) a su clave real.
+     *
+     * El mismo puente que @ref register_generic_fn_alias, para `Caja<i64>`: la
+     * plantilla se registra por su ORIGEN (`lib__Caja`) y el nombre corto solo
+     * sirve para encontrarla.  Antes se buscaba recorriendo el mapa entero por
+     * sufijo.
+     *
+     * @param public_name Nombre tal y como se escribe en el modulo de origen.
+     * @param key         Clave con la que la plantilla quedo registrada.
+     */
+    void register_generic_type_alias(const std::string &public_name,
+                                     const std::string &key);
+
+    /**
+     * @brief La clave con la que esta registrada la plantilla que se escribio
+     *        como @p written, en @p templates.
+     *
+     * Una plantilla tiene UNA clave -- la de su origen -- y se puede escribir
+     * de varias formas: `Caja` (con `only`), `lib.Caja` (import llano) o
+     * `L.Caja` (`import lib as L`).  El nombre de la instancia sale de la clave,
+     * no de lo escrito: si no, la misma instancia eran dos tipos distintos
+     * segun como la escribiera cada modulo.
+     *
+     * @param written   Como se escribio.
+     * @param templates Mapa de plantillas (de struct, de clase o de enum).
+     * @return La clave, o vacia si no hay plantilla con ese nombre.
+     */
+    [[nodiscard]] std::string generic_template_key(
+        const std::string &written,
+        const std::unordered_map<std::string, size_t> &templates) const;
+
+    /**
+     * @brief La clave de una plantilla de TIPO (struct, clase o enum)
+     *        escrita como @p written.
+     * @param written Como se escribio.
+     * @return La clave, o vacia si no es una plantilla de tipo.
+     */
+    [[nodiscard]] std::string generic_type_key(const std::string &written) const;
+
+    /**
      * @brief El camino de vuelta: con que nombre se ESCRIBE esta plantilla.
      *
      * Lo necesita el indice de la llamada uniforme.  El resto del comprobador
@@ -5347,6 +5388,11 @@ class TypeChecker {
     /// Nombre publico de una plantilla importada -> label con el que quedo
     /// registrada.  Ver @ref register_generic_fn_alias.
     std::unordered_map<std::string, std::string> generic_fn_public_names_;
+    /// Nombre publico de una plantilla de TIPO importada -> su clave.  Ver
+    /// @ref register_generic_type_alias.
+    std::unordered_map<util::InternedName, util::InternedName,
+                       util::InternedNameHash>
+        generic_type_public_names_;
 
     /**
      * El mismo puente al REVES, para quien recorre las declaraciones y tiene

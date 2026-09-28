@@ -299,6 +299,9 @@ add_library(vx_lib STATIC
     generics/generic_head.cpp
     # Plantillas genericas homonimas: cual encaja y como se nombra su instancia.
     generics/generic_homonyms.cpp
+    # De como se ESCRIBIO una plantilla a su clave: la instancia se nombra
+    # por ella, no por el texto.
+    generics/generic_template_key.cpp
     # Fase 0 interop C / ownership: clasificador is_c_representable / is_managed.
     type_classify.cpp
     # Que struct construye una lista `{...}` asignada o devuelta.

@@ -410,11 +410,52 @@ void test_import_origin_rule() {
           "import por namespace: el namespace, no el fichero que lo resolvio");
 }
 
+// ------------------------------------------------------------------
+// Test 8: una plantilla importada tiene UNA clave, se escriba como se
+// escriba.
+// ------------------------------------------------------------------
+void test_generic_template_key() {
+    std::cout << "\n[Test] clave de una plantilla importada\n";
+    auto lib = compile_to_typechecker("public i64 base() => 1;\n"
+                                      "public struct Caja<T> { public T v; }\n"
+                                      "i32 main() { return 0; }\n",
+                                      "lib8.vx");
+    CHECK(lib->tc != nullptr && !lib->diags.has_errors(), "lib compila");
+    if (!lib->tc) return;
+    vx::VxiModule vm;
+    vx::export_typechecker_to_vxi(*lib->tc, 0x88, vm);
+    auto bytes = vx::vxi_emit(vm);
+    auto parsed = vx::vxi_parse(bytes.data(), bytes.size());
+    CHECK(parsed.ok, "parse OK");
+    if (!parsed.ok) return;
+
+    /* Las plantillas se inyectan ANTES de `run()`, como en la compilacion de
+     * verdad: `run()` es quien las registra. */
+    CompiledModule m;
+    vx::Lexer lex("i32 main() { return 0; }\n", "main8.vx", m.diags);
+    vx::Parser parser(lex, m.diags);
+    m.ast = parser.parse_program();
+    CHECK(m.ast != nullptr, "main parsea");
+    if (!m.ast) return;
+    m.tc = std::make_unique<vx::TypeChecker>(*m.ast, m.diags);
+    vx::inject_generic_templates_from_vxi(*m.tc, parsed.module_,
+                                          vx::import_origin_of("lib8"),
+                                          /*wanted=*/{}, /*ns_prefix=*/"");
+    m.tc->run();
+
+    CHECK(m.tc->generic_type_key("Caja") == "lib8__Caja",
+          "nombre corto (`only`): lleva a la clave de su origen");
+    CHECK(m.tc->generic_type_key("lib8__Caja") == "lib8__Caja",
+          "la clave misma");
+    CHECK(m.tc->generic_type_key("Nada").empty(), "lo que no es plantilla");
+}
+
 } // namespace
 
 int main() {
     std::cout << "=== test_vx_module_interop:  M.2.d ===\n";
     test_import_origin_rule();
+    test_generic_template_key();
     test_typedef_roundtrip();
     test_struct_roundtrip();
     test_only_rename();

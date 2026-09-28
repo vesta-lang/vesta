@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <vector>
 
+#include "vx/module/import_origin.h" // de donde viene lo que se importa
 #include "vx/type_checker.h"
 
 namespace vx {
@@ -95,8 +96,11 @@ void register_namespace_for_import(TypeChecker &tc,
  * monomorphizar `Caja<i64>` cross-module.  Debe llamarse ANTES de @c run().
  * Si @p wanted no esta vacio, solo inyecta las plantillas con esos nombres
  * (import `only`); si esta vacio, inyecta todas (import plain/namespace).
- * @p ns_prefix: si no esta vacio, registra ademas el nombre cualificado
- * `<ns>.<Template>` como alias del template para los imports con namespace.
+ * @p origin: el modulo del que vienen.  Cada plantilla se NOMBRA por el
+ * namespace que declara o, si no declara ninguno, por su modulo, igual que un
+ * simbolo importado: su instancia tiene un simbolo, se importe como se importe.
+ * @p ns_prefix: el nombre local del import llano (`lib`, o `L` con `as L`);
+ * solo sirve para ENCONTRARLA (`lib.Caja<i64>`), no entra en su nombre.
  * @p alias_unqualified: nombres (originales) de comptime/macro fns que deben
  * quedar invocables SIN cualificar (import `only`).  Para cada uno se registra
  * su nombre suelto en comptime_fns_ apuntando al decl mangled -- consistente
@@ -110,7 +114,7 @@ void register_namespace_for_import(TypeChecker &tc,
  * Aqui se pasan los modulos de los que el suyo importa, para que resuelva.
  */
 void inject_generic_templates_from_vxi(
-    TypeChecker &tc, const VxiModule &mod,
+    TypeChecker &tc, const VxiModule &mod, const ImportOrigin &origin,
     const std::unordered_set<std::string> &wanted, const std::string &ns_prefix,
     const std::unordered_set<std::string> &alias_unqualified = {},
     const std::vector<const VxiModule *> &alias_sources = {});

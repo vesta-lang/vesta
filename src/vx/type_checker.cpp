@@ -431,45 +431,12 @@ static PrimitiveKind prim_kind_from_name(const std::string &n) {
     return PrimitiveKind::VOID;
 }
 
-// Resuelve la CLAVE real de un template generico referido de forma
-// CUALIFICADA.  El uso `col.Box<T>` llega como "col.Box" (dotted), pero segun
-// el origen el template esta registrado como: "col.Box" (import cross-module
-// con namespace), "col__Box" (MISMO fichero: el aplanador de namespaces
-// manglea con "__"), o "Box" (sin namespace).  Devuelve la clave que exista en
-// @p m, o "" si ninguna.  Reglas (mas especifica primero):
-//   1. nombre tal cual;  2. dotted -> mangled con "__";  3. si el nombre es
-//   SIMPLE (sin punto), unico key del mapa que termine en "__<name>".
-template <class MapT>
-static std::string resolve_generic_key(const std::string &name, const MapT &m) {
-    if (m.count(name)) return name;
-    if (name.find('.') != std::string::npos) {
-        const std::string dd = namespace_symbol_path(name);
-        if (m.count(dd)) return dd;
-    } else {
-        // Nombre simple `Box`: buscar un unico `<ns>__Box`
-        // (namespace-relativo).
-        const std::string suf = "__" + name;
-        std::string hit;
-        int n = 0;
-        for (const auto &kv : m) {
-            const std::string &k = kv.first;
-            if (k.size() > suf.size() &&
-                k.compare(k.size() - suf.size(), suf.size(), suf) == 0) {
-                hit = k;
-                if (++n > 1) break;
-            }
-        }
-        if (n == 1) return hit;
-    }
-    return {};
-}
-
 bool TypeChecker::is_generic_enum_template(const std::string &name) const {
-    return !resolve_generic_key(name, generic_enum_templates_).empty();
+    return !generic_template_key(name, generic_enum_templates_).empty();
 }
 
 bool TypeChecker::is_generic_struct_template(const std::string &name) const {
-    return !resolve_generic_key(name, generic_struct_templates_).empty();
+    return !generic_template_key(name, generic_struct_templates_).empty();
 }
 
 namespace {
@@ -833,12 +800,21 @@ std::string TypeChecker::monomorphize_class(const std::string &template_name,
     if (template_name.find('.') != std::string::npos)
         referenced_names_.insert(
             template_name.substr(0, template_name.find('.')));
-    const std::string mangled =
-        generic_instance_name(template_name, args);
-    if (monomorphized_.count(mangled)) return mangled;
-
+    /* La instancia se nombra por la CLAVE de la plantilla, no por como se
+     * escribio: `lib.Caja`, `L.Caja` y `Caja` son la misma plantilla y tienen
+     * que dar el mismo tipo. */
     const std::string gkey =
-        resolve_generic_key(template_name, generic_templates_);
+        generic_template_key(template_name, generic_templates_);
+    const std::string mangled =
+        generic_instance_name(gkey.empty() ? template_name : gkey, args);
+    if (monomorphized_.count(mangled)) return mangled;
+    // Ya llego hecha de otro modulo: la misma plantilla con los mismos
+    // argumentos es la misma instancia (ver monomorphize_struct).
+    if (class_layouts_.count(mangled) != 0) {
+        monomorphized_[mangled] = true;
+        return mangled;
+    }
+
     auto it =
         gkey.empty() ? generic_templates_.end() : generic_templates_.find(gkey);
     if (it == generic_templates_.end()) {
@@ -861,8 +837,10 @@ std::string TypeChecker::monomorphize_class(const std::string &template_name,
     // #7: elegir la especializacion de CLASE mas especifica que matchee.
     std::vector<std::string> spec_params;
     std::vector<Type> spec_args;
-    const ast::ClassDecl *spec = select_class_specialization(
-        template_name, args, spec_params, spec_args);
+    // Por la CLAVE: las especializaciones se registran con el nombre de su
+    // primaria, que es el de su origen, no el que se escribio.
+    const ast::ClassDecl *spec =
+        select_class_specialization(gkey, args, spec_params, spec_args);
     const ast::ClassDecl *src = spec ? spec : tmpl;
     GenSubst g = spec ? GenSubst{&spec_params, &spec_args}
                       : GenSubst{&tmpl->type_params, &args};
@@ -934,12 +912,18 @@ std::string TypeChecker::monomorphize_class(const std::string &template_name,
 std::string TypeChecker::monomorphize_enum(const std::string &template_name,
                                            const std::vector<Type> &args,
                                            const SourceLoc &loc) {
-    const std::string mangled =
-        generic_instance_name(template_name, args);
-    if (monomorphized_.count(mangled)) return mangled;
-
+    // Por la CLAVE de la plantilla, no por como se escribio.
     const std::string gkey =
-        resolve_generic_key(template_name, generic_enum_templates_);
+        generic_template_key(template_name, generic_enum_templates_);
+    const std::string mangled =
+        generic_instance_name(gkey.empty() ? template_name : gkey, args);
+    if (monomorphized_.count(mangled)) return mangled;
+    // Ya llego hecha de otro modulo (ver monomorphize_struct).
+    if (enum_layouts_.count(mangled) != 0) {
+        monomorphized_[mangled] = true;
+        return mangled;
+    }
+
     auto it = gkey.empty() ? generic_enum_templates_.end()
                            : generic_enum_templates_.find(gkey);
     if (it == generic_enum_templates_.end()) {
@@ -1021,12 +1005,22 @@ std::string TypeChecker::monomorphize_struct(const std::string &template_name,
     if (template_name.find('.') != std::string::npos) // marca el namespace
         referenced_names_.insert(
             template_name.substr(0, template_name.find('.')));
-    const std::string mangled =
-        generic_instance_name(template_name, args);
-    if (monomorphized_.count(mangled)) return mangled;
-
+    // Por la CLAVE de la plantilla, no por como se escribio.
     const std::string gkey =
-        resolve_generic_key(template_name, generic_struct_templates_);
+        generic_template_key(template_name, generic_struct_templates_);
+    const std::string mangled =
+        generic_instance_name(gkey.empty() ? template_name : gkey, args);
+    if (monomorphized_.count(mangled)) return mangled;
+    /* La MISMA instancia -- misma plantilla, mismos argumentos -- ya llego
+     * hecha de otro modulo, que la exporta porque su interfaz la nombra: se usa
+     * esa.  Ahora que el nombre sale de la clave de la plantilla y no de como
+     * se escribio, las dos se llaman igual, y clonarla otra vez chocaria con
+     * ella ("el nombre de tipo ya esta tomado"). */
+    if (struct_layouts_.count(mangled) != 0) {
+        monomorphized_[mangled] = true;
+        return mangled;
+    }
+
     auto it = gkey.empty() ? generic_struct_templates_.end()
                            : generic_struct_templates_.find(gkey);
     if (it == generic_struct_templates_.end()) {
@@ -1052,8 +1046,10 @@ std::string TypeChecker::monomorphize_struct(const std::string &template_name,
     // de sus params frescos; si no, el template primario con T -> args.
     std::vector<std::string> spec_params;
     std::vector<Type> spec_args;
-    const ast::StructDecl *spec = select_struct_specialization(
-        template_name, args, spec_params, spec_args);
+    // Por la CLAVE: las especializaciones se registran con el nombre de su
+    // primaria, que es el de su origen, no el que se escribio.
+    const ast::StructDecl *spec =
+        select_struct_specialization(gkey, args, spec_params, spec_args);
     const ast::StructDecl *src = spec ? spec : tmpl;
     GenSubst g = spec ? GenSubst{&spec_params, &spec_args}
                       : GenSubst{&tmpl->type_params, &args};
@@ -3989,11 +3985,11 @@ Type TypeChecker::type_from_node_impl(const ast::TypeNode *tn) const {
             for (auto &ta : nt->type_args) {
                 args.push_back(type_from_node(ta.get()));
             }
-            // #cross-module-generics: un template importado con namespace se
-            // registra con nombre cualificado `lib.Box` (con punto), pero su
-            // instancia se mangla dot-free (`lib_Box_i64`) para etiquetas
-            // validas.  Sanitizar aqui para que el lookup del layout coincida.
-            lookup = generic_instance_name(nt->name, args);
+            // La instancia se busca por la CLAVE de la plantilla, igual que la
+            // nombro la monomorfizacion: `lib.Caja<i64>` y `Caja<i64>` son el
+            // mismo tipo.
+            const std::string key = generic_type_key(nt->name);
+            lookup = generic_instance_name(key.empty() ? nt->name : key, args);
         }
         // 1) Alias resolution.
         auto it_a = type_aliases_.find(lookup);
@@ -11203,10 +11199,11 @@ Type TypeChecker::check_new(ast::NewExpr *e) {
         targs.reserve(e->type_args.size());
         for (auto &ta : e->type_args)
             targs.push_back(type_from_node(ta.get()));
-        // #cross-module-generics: sanitizar el punto del nombre cualificado
-        // (`lib.Box`) para que el mangled (`lib_Box_i64`) coincida con el
-        // layout y sea una etiqueta valida.
-        e->class_name = generic_instance_name(e->class_name, targs);
+        // Por la CLAVE de la plantilla, igual que la monomorfizacion.
+        const std::string key =
+            generic_template_key(e->class_name, generic_templates_);
+        e->class_name =
+            generic_instance_name(key.empty() ? e->class_name : key, targs);
         e->is_mangled = true;
     }
 

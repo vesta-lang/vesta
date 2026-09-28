@@ -140,8 +140,9 @@ void inject_plain_import(const UnitEnv &env, ProjectModuleWork &pm,
                                   dep_vxi);
     // #cross-module-generics: inyectar TODAS las plantillas del
     // dep bajo el namespace (`lib.Caja<i64>`).
-    inject_generic_templates_from_vxi(*pm.tc, dep_vxi, /*wanted=*/{},
-                                      req.local_name,
+    inject_generic_templates_from_vxi(*pm.tc, dep_vxi,
+                                      import_origin_of(req.module_name),
+                                      /*wanted=*/{}, req.local_name,
                                       /*alias_unqualified=*/{}, dep_alias_srcs);
     // Namespace PARCIAL: registrar tambien los simbolos de los
     // OTROS ficheros que declaran el mismo `namespace X;` (p.ej.
@@ -161,8 +162,8 @@ void inject_plain_import(const UnitEnv &env, ProjectModuleWork &pm,
             register_namespace_for_import(*pm.tc, req.local_name, other_mn,
                                           other_vxi);
             inject_generic_templates_from_vxi(
-                *pm.tc, other_vxi, /*wanted=*/{}, req.local_name,
-                /*alias_unqualified=*/{}, dep_alias_srcs);
+                *pm.tc, other_vxi, import_origin_of(other_mn), /*wanted=*/{},
+                req.local_name, /*alias_unqualified=*/{}, dep_alias_srcs);
         }
     }
     // M.reexport ext: para `public import "base";` (sin only),
@@ -254,6 +255,7 @@ bool inject_only_import(const UnitEnv &env, ProjectModuleWork &pm,
     for (const auto &os : req.only_symbols)
         only_alias.insert(os.name);
     inject_generic_templates_from_vxi(*pm.tc, dep_vxi,
+                                      import_origin_of(import_qualifier(req)),
                                       /*wanted=*/{},
                                       /*ns_prefix=*/"", only_alias,
                                       dep_alias_srcs);
