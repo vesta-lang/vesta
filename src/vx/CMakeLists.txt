@@ -445,6 +445,8 @@ add_library(vx_lib STATIC
     # el de una VISTA sobre bytes ajenos, donde el desplazamiento puede depender
     # de los campos anteriores y el orden de bytes no ser el de esta maquina.
     lowering/fields.cpp
+    # Donde vive un campo `static`: en el tipo que lo declara.
+    lowering/static_fields.cpp
     # Lo que ya se sabe al compilar: se baja su RESULTADO, no su calculo.  Va
     # con la introspeccion porque es lo mismo del otro lado: lo que el programa
     # puede preguntar de un tipo viaja como datos ya escritos en el binario.

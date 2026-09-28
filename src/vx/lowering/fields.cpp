@@ -550,30 +550,11 @@ ir::IrValueId Lowering::lower_class_field_load(ast::FieldAccessExpr *e) {
             return ir::IR_NO_VALUE;
         }
         auto *base_id = static_cast<ast::IdentExpr *>(e->base.get());
-        auto it_cls = tc_.class_layouts().find(base_id->name);
-        if (it_cls == tc_.class_layouts().end()) {
-            error_at(e->loc,
-                     "lowering: clase desconocida '" + base_id->name + "'");
-            return ir::IR_NO_VALUE;
-        }
-        const ClassLayout &lay_s = it_cls->second;
-        uint32_t s_off = 0;
-        Type s_typ = Type{PrimitiveKind::COUNT};
-        bool s_ok = false;
-        for (const auto &f : lay_s.static_fields) {
-            if (f.name == e->field_name) {
-                s_off = f.offset;
-                s_typ = f.type;
-                s_ok = true;
-                break;
-            }
-        }
-        if (!s_ok) {
-            error_at(e->loc, "lowering: static field '" + e->field_name +
-                                 "' no encontrado en la clase '" +
-                                 base_id->name + "'");
-            return ir::IR_NO_VALUE;
-        }
+        const ClassStaticField sf =
+            find_class_static_(base_id->name, e->field_name, e->loc);
+        if (sf.field == nullptr) return ir::IR_NO_VALUE;
+        const uint32_t s_off = sf.field->offset;
+        const Type s_typ = sf.field->type;
         /* Aqui ya no se decide a donde va el programa.
          *
          * Habia una rama que, para el camino nativo, bajaba el campo a un
@@ -587,8 +568,10 @@ ir::IrValueId Lowering::lower_class_field_load(ast::FieldAccessExpr *e) {
          * backend, como ya hacia el JIT: `aot/lower/statics.cpp` lo convierte
          * en el hueco global usando el nombre que la instruccion trae. */
         // 1) Sprint 5: findclass via IR ops (ALLOCA + STORE + FINDCLASS).
-        const uint64_t cname_idx = intern_class_name(*out_mod_, base_id->name);
-        const uint32_t cname_len = static_cast<uint32_t>(base_id->name.size());
+        /* La clase que DECLARA el campo: un estatico heredado es el de la
+         * base, el mismo almacen, no una copia. */
+        const uint64_t cname_idx = intern_class_name(*out_mod_, sf.owner);
+        const uint32_t cname_len = static_cast<uint32_t>(sf.owner.size());
         const ir::IrValueId v_cls =
             emit_findclass_by_name(cname_idx, cname_len, e->loc.line);
         // 2) getstatic {dst}, {src0}, offset_imm  -> v_val.
@@ -601,7 +584,7 @@ ir::IrValueId Lowering::lower_class_field_load(ast::FieldAccessExpr *e) {
         // mas abajo si el SSA val se usa como ancho menor (semantica heredada).
         ir::IrValueId v_val =
             emit_getstatic(v_cls, static_cast<uint64_t>(s_off), e->loc.line,
-                           ir::class_static_slot(base_id->name, e->field_name));
+                           ir::class_static_slot(sf.owner, e->field_name));
         // Cast al tipo logico del field si difiere de I64.
         if (ir_t != ir::IrType::I64) {
             v_val = cast_if_needed(v_val, ir::IrType::I64, ir_t, e->loc.line,
@@ -826,30 +809,11 @@ ir::IrValueId Lowering::lower_class_field_store(ast::FieldAccessExpr *target,
             return ir::IR_NO_VALUE;
         }
         auto *base_id = static_cast<ast::IdentExpr *>(target->base.get());
-        auto it_cls = tc_.class_layouts().find(base_id->name);
-        if (it_cls == tc_.class_layouts().end()) {
-            error_at(loc,
-                     "lowering: clase desconocida '" + base_id->name + "'");
-            return ir::IR_NO_VALUE;
-        }
-        const ClassLayout &lay_s = it_cls->second;
-        uint32_t s_off = 0;
-        Type s_typ = Type{PrimitiveKind::COUNT};
-        bool s_ok = false;
-        for (const auto &f : lay_s.static_fields) {
-            if (f.name == target->field_name) {
-                s_off = f.offset;
-                s_typ = f.type;
-                s_ok = true;
-                break;
-            }
-        }
-        if (!s_ok) {
-            error_at(loc, "lowering: static field '" + target->field_name +
-                              "' no encontrado en la clase '" + base_id->name +
-                              "'");
-            return ir::IR_NO_VALUE;
-        }
+        const ClassStaticField sf =
+            find_class_static_(base_id->name, target->field_name, loc);
+        if (sf.field == nullptr) return ir::IR_NO_VALUE;
+        const uint32_t s_off = sf.field->offset;
+        const Type s_typ = sf.field->type;
         // Coerce rhs al tipo del field si difieren.
         const ir::IrType field_ir = ir_type_from_primitive(s_typ.kind);
         const ir::IrValueId rhs_cast =
@@ -857,8 +821,9 @@ ir::IrValueId Lowering::lower_class_field_store(ast::FieldAccessExpr *target,
         // Escribir tampoco decide a donde va el programa: mismo motivo que en
         // la lectura, unas lineas mas arriba.
         // 1) Sprint 5: findclass via IR ops.
-        const uint64_t cname_idx = intern_class_name(*out_mod_, base_id->name);
-        const uint32_t cname_len = static_cast<uint32_t>(base_id->name.size());
+        // La clase que declara el campo (ver la lectura).
+        const uint64_t cname_idx = intern_class_name(*out_mod_, sf.owner);
+        const uint32_t cname_len = static_cast<uint32_t>(sf.owner.size());
         const ir::IrValueId v_cls =
             emit_findclass_by_name(cname_idx, cname_len, loc.line);
 
@@ -877,12 +842,12 @@ ir::IrValueId Lowering::lower_class_field_store(ast::FieldAccessExpr *target,
         if (s_typ.kind == PrimitiveKind::SHARED_PTR) {
             const ir::IrValueId v_old = emit_getstatic(
                 v_cls, static_cast<uint64_t>(s_off), loc.line,
-                ir::class_static_slot(base_id->name, target->field_name));
+                ir::class_static_slot(sf.owner, target->field_name));
             emit_shared_refcount_dec_ctrl(v_old, loc.line);
             const ir::IrValueId v_ctrl = emit_load_host_ptr(rhs, loc.line);
             emit_setstatic(
                 v_cls, v_ctrl, static_cast<uint64_t>(s_off), loc.line,
-                ir::class_static_slot(base_id->name, target->field_name));
+                ir::class_static_slot(sf.owner, target->field_name));
             emit_shared_refcount_inc_ctrl(v_ctrl, loc.line);
             return rhs;
         }
@@ -894,7 +859,7 @@ ir::IrValueId Lowering::lower_class_field_store(ast::FieldAccessExpr *target,
                                        /*is_explicit=*/true);
         }
         emit_setstatic(v_cls, v_val_i64, static_cast<uint64_t>(s_off), loc.line,
-                       ir::class_static_slot(base_id->name, target->field_name));
+                       ir::class_static_slot(sf.owner, target->field_name));
         return rhs_cast;
     }
 

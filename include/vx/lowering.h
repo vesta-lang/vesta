@@ -3091,6 +3091,42 @@ class Lowering {
     ir::IrValueId lower_this_expr(ast::ThisExpr *e);
 
     /**
+     * @struct ClassStaticField
+     * @brief Un campo `static` de clase ya localizado: su ficha y la clase que
+     *        lo DECLARA, que es donde vive su almacen.
+     */
+    struct ClassStaticField {
+        const StructFieldInfo *field = nullptr; ///< nulo si no se encontro
+        std::string owner; ///< la clase que lo declara (la base si se hereda)
+    };
+
+    /**
+     * @brief Localiza el estatico @p field escrito sobre la clase @p cls.
+     *
+     * Un estatico heredado es el MISMO que el de la base: se busca en la
+     * clase que lo declara, no en una copia del derivado.  La lectura y la
+     * escritura lo buscaban cada una por su cuenta.
+     *
+     * @param cls   La clase como se escribio en `Clase.campo`.
+     * @param field El campo.
+     * @param loc   El uso (para el error).
+     * @return El campo y su dueno; @c field nulo (y el error dicho) si no esta.
+     */
+    ClassStaticField find_class_static_(const std::string &cls,
+                                        const std::string &field,
+                                        const SourceLoc &loc);
+
+    /**
+     * @brief La global de un estatico de struct escrito como `S.campo`: la del
+     *        struct que DECLARA el campo (un derivado usa la de su base).
+     * @param st    El struct como se escribio.
+     * @param field El campo.
+     * @return El nombre de la global.
+     */
+    std::string struct_static_global_(const std::string &st,
+                                      const std::string &field) const;
+
+    /**
      * @brief Lower de @c obj.field (lectura) cuando @c obj es CLASS.
      *        Emite GETFIELD con el offset del ClassLayout.
      */

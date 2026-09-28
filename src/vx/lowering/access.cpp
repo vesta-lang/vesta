@@ -19,7 +19,6 @@
 #include "vx/lowering.h"
 #include "vx/ansi_names.h"   // los nombres de color que el lenguaje conoce
 #include "ir/ir_type_info.h" // vocabulario UNICO de anchura/clase de un IrType
-#include "ir/synthetic_symbols.h" // la global de un estatico de struct
 #include <algorithm>
 #include <functional>
 #include <map>
@@ -1021,7 +1020,7 @@ ir::IrValueId Lowering::lower_field_access(ast::FieldAccessExpr *e) {
         auto *base_id = static_cast<ast::IdentExpr *>(e->base.get());
         ast::IdentExpr gid;
         gid.loc = e->loc;
-        gid.name = ir::struct_static_symbol(base_id->name, e->field_name);
+        gid.name = struct_static_global_(base_id->name, e->field_name);
         gid.result_type = e->result_type;
         return lower_ident(&gid);
     }

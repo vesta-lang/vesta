@@ -23,6 +23,9 @@ class Cuenta {
 	private i32 saldo;
 	private i32 deudas;
 
+	// Un estatico de la base: la derivada ve EL MISMO, no una copia.
+	public static i32 abiertas;
+
 	public Cuenta(i32 inicial) {
 		this.saldo  = inicial;
 		this.deudas = 0;
@@ -41,6 +44,9 @@ class Cuenta {
 // Una derivada usa lo `protected` de su base, no lo `private`.
 class Ahorro : Cuenta {
 	protected i32 interes;
+
+	// Y uno PROPIO, detras de los heredados: no pisa a `abiertas`.
+	public static i32 propias;
 
 	public Ahorro(i32 inicial) {
 		super(inicial);
@@ -85,5 +91,13 @@ i32 main() {
 	ContadorDoble d = ContadorDoble.crear();
 	d.avanzar2();
 	if (d.valor() != 2) return 3;
+	// Los estaticos heredados son el MISMO almacen que el de la base.
+	ContadorDoble.minimo = 5;
+	if (Contador.minimo != 5) return 5;
+	Cuenta.abiertas = 2;
+	Ahorro.propias  = 7;
+	if (Ahorro.abiertas != 2 || Cuenta.abiertas != 2) return 6;
+	Ahorro.abiertas = 3;
+	if (Cuenta.abiertas != 3 || Ahorro.propias != 7) return 7;
 	return c.leerSaldo();
 }

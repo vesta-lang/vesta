@@ -6107,7 +6107,15 @@ void TypeChecker::collect_globals() {
                 off_inst +=
                     static_cast<uint32_t>(super_layout->fields.size()) * 8;
             }
-            uint32_t off_stat = 0;
+            /* Los estaticos PROPIOS van detras de los heredados, igual que los
+             * de instancia: es donde los pone el cargador al definir la clase
+             * (los heredados primero, los propios a continuacion).  Empezar en
+             * 0 hacia que el primero propio pisara al primero heredado. */
+            uint32_t off_stat =
+                super_layout != nullptr
+                    ? static_cast<uint32_t>(super_layout->static_fields.size()) *
+                          8
+                    : 0;
             for (const auto &f : c->fields) {
                 if (!seen_field.emplace(f.name, true).second) {
                     diags_.error(f.loc, "campo duplicado en clase '" + c->name +
