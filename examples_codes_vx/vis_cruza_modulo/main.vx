@@ -1,0 +1,25 @@
+namespace app;
+
+import banco;
+
+// Desde otro modulo se usa lo PUBLICO de un tipo importado, y lo privado solo
+// a traves de sus metodos publicos.  Los dos ficheros `*_err.vx` de esta
+// carpeta prueban que lo privado y lo protegido no se alcanzan directamente.
+
+i32 main() {
+	banco.Cuenta c;
+	c.abrir(10);
+	c.titular = 7;
+
+	i64 a = c.ver();   // lo privado, por su metodo publico     10
+	i64 b = c.doble(); // un publico que usa uno privado        20
+
+	banco.Ahorro h;
+	h.abrir(3);              // heredado de la base
+	i64 d = h.con_interes(); // 3 + 1                          4
+
+	println("a=${a} b=${b} t=${c.titular} d=${d}");
+
+	// 10 + 20 + 7 + 4 + 1 = 42
+	return (i32)(a + b + c.titular + d + 1);
+}

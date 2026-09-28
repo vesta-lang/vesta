@@ -51,19 +51,19 @@ PooledName TypeChecker::method_code_owner(const ast::ClassMethodDecl &m,
     return PooledName(layout);
 }
 
-bool TypeChecker::member_reachable(ast::Visibility v,
+bool TypeChecker::member_reachable(Visibility v,
                                    const std::string &declared_in) const {
     switch (v) {
-    case ast::Visibility::Public:
-    case ast::Visibility::Unwritten:
-    case ast::Visibility::Internal:
+    case Visibility::Public:
+    case Visibility::Unwritten:
+    case Visibility::Internal:
         /* El modulo y el paquete: lo que no sale de ahi no llega a otro
          * modulo por su interfaz. */
         return true;
-    case ast::Visibility::Private:
+    case Visibility::Private:
         return member_code_site_ == MemberCodeSite::TypeBody &&
                member_code_owner_ == declared_in;
-    case ast::Visibility::Protected: {
+    case Visibility::Protected: {
         if (member_code_site_ != MemberCodeSite::TypeBody ||
             member_code_owner_.empty())
             return false;
@@ -87,12 +87,12 @@ namespace {
  * @param declared_in El tipo que lo escribio, como se escribe.
  */
 void report_unreachable(Diagnostics &diags, const SourceLoc &loc,
-                        const char *kind_word, ast::Visibility v,
+                        const char *kind_word, Visibility v,
                         const std::string &name,
                         const std::string &declared_in) {
     const std::string word = diag::format(kind_word);
     diags.diag(loc, DiagLevel::ERR,
-               v == ast::Visibility::Protected ? "VX2165" : "VX2164",
+               v == Visibility::Protected ? "VX2165" : "VX2164",
                {word, name, declared_in});
 }
 

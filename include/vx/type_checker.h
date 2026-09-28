@@ -382,7 +382,7 @@ struct StructFieldInfo {
     /// De donde viene si el tipo no lo escribio (base o concepto).
     ast::MemberOrigin origin;
     /// Quien lo ve.
-    ast::Visibility visibility = ast::Visibility::Unwritten;
+    Visibility visibility = Visibility::Unwritten;
     /// El tipo que lo ESCRIBIO: el propio, o la base de la que se hereda.
     /// Es contra quien se mide un `private` o un `protected`.
     PooledName declared_in;
@@ -574,7 +574,7 @@ struct ClassMethodInfo {
      */
     ast::MemberOrigin origin;
     /// Quien lo ve.
-    ast::Visibility visibility = ast::Visibility::Unwritten;
+    Visibility visibility = Visibility::Unwritten;
     /**
      * @brief Hay mas metodos con este nombre en el mismo tipo.
      *
@@ -3912,7 +3912,7 @@ class TypeChecker {
      * @param declared_in El tipo que lo escribio.
      * @return Cierto si lo alcanza.
      */
-    [[nodiscard]] bool member_reachable(ast::Visibility v,
+    [[nodiscard]] bool member_reachable(Visibility v,
                                         const std::string &declared_in) const;
 
     /**
@@ -4999,12 +4999,14 @@ class TypeChecker {
     /// @brief NS.6-ext: re-apendea un metodo de extension importado (desde el
     /// .vxi de otro modulo) al layout del tipo destino en este consumidor, para
     /// que @c obj.metodo() resuelva (dispatch estatico al @p mangled_label).
+    /// @p visibility es la que escribio su `impl`.
     void inject_imported_ext_method(const std::string &target_key,
                                     bool target_is_class,
                                     const std::string &name,
                                     const std::string &return_type_str,
                                     const std::vector<std::string> &param_strs,
-                                    const std::string &mangled_label);
+                                    const std::string &mangled_label,
+                                    Visibility visibility);
 
     void point_namespace_alias(const std::string &alias, uint32_t ns_index) {
         ns_idx_by_local_name_[alias] = ns_index;

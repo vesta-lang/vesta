@@ -19,12 +19,12 @@
 
 namespace vx {
 
-bool Parser::parse_member_visibility_(ast::Visibility &out, bool &seen) {
-    ast::Visibility v = ast::Visibility::Unwritten;
+bool Parser::parse_member_visibility_(Visibility &out, bool &seen) {
+    Visibility v = Visibility::Unwritten;
     switch (current_.kind) {
-    case TokenKind::KW_PUBLIC: v = ast::Visibility::Public; break;
-    case TokenKind::KW_PRIVATE: v = ast::Visibility::Private; break;
-    case TokenKind::KW_PROTECTED: v = ast::Visibility::Protected; break;
+    case TokenKind::KW_PUBLIC: v = Visibility::Public; break;
+    case TokenKind::KW_PRIVATE: v = Visibility::Private; break;
+    case TokenKind::KW_PROTECTED: v = Visibility::Protected; break;
     case TokenKind::IDENTIFIER: {
         /* `internal` es contextual: no reserva el nombre.  Es visibilidad
          * solo si detras sigue un miembro, no si es el nombre de algo. */
@@ -34,7 +34,7 @@ bool Parser::parse_member_visibility_(ast::Visibility &out, bool &seen) {
             next == TokenKind::ASSIGN || next == TokenKind::COMMA ||
             next == TokenKind::DOT)
             return false;
-        v = ast::Visibility::Internal;
+        v = Visibility::Internal;
         break;
     }
     default: return false;

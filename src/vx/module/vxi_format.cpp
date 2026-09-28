@@ -65,6 +65,8 @@
 
 #include "util/fnv.h" // la semilla y el primo, en UN sitio
 #include "vx/module/vxi_format.h"
+#include "vx/module/vxi_io.h" // enteros, pozo de cadenas: en UN sitio
+#include "vx/module/vxi_member_attrs.h" // lo que un miembro dice de si
 #include "vx/parser.h" // el objetivo de @Target (get_aot_condcomp_target)
 #include "vx/types.h" // normalize_abi_regs: la forma canonica, en UN sitio
 
@@ -86,6 +88,8 @@
 #endif
 
 namespace vx {
+
+using namespace vxi_io;
 
 namespace {
 
@@ -252,96 +256,6 @@ uint64_t vxi_fnv1a(const void *data, size_t len) noexcept {
     return util::fnv_bytes(util::kFnvOffset, data, len);
 }
 
-// ===========================================================================
-// String pool builder con dedup.  Cada string se añade una sola vez;
-// segundo uso devuelve el mismo offset.
-// ===========================================================================
-class StringPoolBuilder {
-  public:
-    StringPoolBuilder() {
-        // Reservar primer slot para "string vacio" (offset 0, len 0).
-        // Esto permite usar offset=0 como sentinel "sin string" en
-        // campos opcionales (super_class de struct, etc.).
-        offsets_[""] = 0;
-    }
-
-    /// Devuelve el offset del string en el pool.  Si no estaba, lo añade.
-    uint32_t intern(const std::string &s) {
-        if (s.empty()) return 0;
-        auto it = offsets_.find(s);
-        if (it != offsets_.end()) return it->second;
-        const uint32_t off = static_cast<uint32_t>(buf_.size());
-        offsets_.emplace(s, off);
-        buf_.insert(buf_.end(), s.begin(), s.end());
-        return off;
-    }
-
-    const std::vector<uint8_t> &bytes() const noexcept { return buf_; }
-    size_t size() const noexcept { return buf_.size(); }
-
-  private:
-    std::vector<uint8_t> buf_;
-    std::unordered_map<std::string, uint32_t> offsets_;
-};
-
-// ---------------------------------------------------------------------------
-// Helpers de escritura little-endian a un buffer.
-// ---------------------------------------------------------------------------
-static inline void write_u8(std::vector<uint8_t> &b, uint8_t v) {
-    b.push_back(v);
-}
-static inline void write_u16(std::vector<uint8_t> &b, uint16_t v) {
-    b.push_back(static_cast<uint8_t>(v & 0xFFu));
-    b.push_back(static_cast<uint8_t>((v >> 8) & 0xFFu));
-}
-static inline void write_u32(std::vector<uint8_t> &b, uint32_t v) {
-    b.push_back(static_cast<uint8_t>(v & 0xFFu));
-    b.push_back(static_cast<uint8_t>((v >> 8) & 0xFFu));
-    b.push_back(static_cast<uint8_t>((v >> 16) & 0xFFu));
-    b.push_back(static_cast<uint8_t>((v >> 24) & 0xFFu));
-}
-static inline void write_u64(std::vector<uint8_t> &b, uint64_t v) {
-    write_u32(b, static_cast<uint32_t>(v & 0xFFFFFFFFull));
-    write_u32(b, static_cast<uint32_t>((v >> 32) & 0xFFFFFFFFull));
-}
-
-// ---------------------------------------------------------------------------
-// Helpers de lectura little-endian con bounds check.  Devuelven false si
-// el read excede el buffer.
-// ---------------------------------------------------------------------------
-static inline bool read_u8(const uint8_t *p, size_t cap, size_t &off,
-                           uint8_t &v) {
-    if (off + 1 > cap) return false;
-    v = p[off];
-    off += 1;
-    return true;
-}
-static inline bool read_u16(const uint8_t *p, size_t cap, size_t &off,
-                            uint16_t &v) {
-    if (off + 2 > cap) return false;
-    v = static_cast<uint16_t>(p[off]) |
-        (static_cast<uint16_t>(p[off + 1]) << 8);
-    off += 2;
-    return true;
-}
-static inline bool read_u32(const uint8_t *p, size_t cap, size_t &off,
-                            uint32_t &v) {
-    if (off + 4 > cap) return false;
-    v = static_cast<uint32_t>(p[off]) |
-        (static_cast<uint32_t>(p[off + 1]) << 8) |
-        (static_cast<uint32_t>(p[off + 2]) << 16) |
-        (static_cast<uint32_t>(p[off + 3]) << 24);
-    off += 4;
-    return true;
-}
-static inline bool read_u64(const uint8_t *p, size_t cap, size_t &off,
-                            uint64_t &v) {
-    uint32_t lo = 0, hi = 0;
-    if (!read_u32(p, cap, off, lo)) return false;
-    if (!read_u32(p, cap, off, hi)) return false;
-    v = static_cast<uint64_t>(lo) | (static_cast<uint64_t>(hi) << 32);
-    return true;
-}
 
 // ===========================================================================
 // Emitter: serializa VxiModule -> bytes.
@@ -533,6 +447,7 @@ static void emit_payload_for_struct_or_class(std::vector<uint8_t> &payload,
         write_u16(payload, static_cast<uint16_t>(f.size));
         write_u8(payload, f.bit_offset);
         write_u8(payload, f.bit_width);
+        vxi_emit_member_attrs(payload, pool, f.attrs); // v24
     }
     // InterfaceSlot: name_off+len (8 bytes c/u).
     for (const auto &iname : sym.interfaces) {
@@ -561,6 +476,7 @@ static void emit_payload_for_struct_or_class(std::vector<uint8_t> &payload,
             write_u32(payload, to);
             write_u32(payload, static_cast<uint32_t>(pt.size()));
         }
+        vxi_emit_member_attrs(payload, pool, m.attrs); // v24
     }
     // NS.2 (v8): ns_path del tipo al final del payload (off+len; vacio = nivel
     // de modulo).  Permite el round-trip cross-modulo de tipos namespaced.
@@ -836,7 +752,8 @@ std::vector<uint8_t> vxi_emit(const VxiModule &mod) {
     // Entrada variable: tk+nm+rt+ml (off+len c/u) + is_class(u8) + pad(3) +
     // param_count(u32) + params[param_count] (off+len c/u).
     const uint32_t ext_start = static_cast<uint32_t>(out.size());
-    for (const auto &eo : ext_offs) {
+    for (size_t ei = 0; ei < ext_offs.size(); ++ei) {
+        const ExtOff &eo = ext_offs[ei];
         write_u32(out, eo.tk_off);
         write_u32(out, eo.tk_len);
         write_u32(out, eo.nm_off);
@@ -854,6 +771,8 @@ std::vector<uint8_t> vxi_emit(const VxiModule &mod) {
             write_u32(out, pp.first);
             write_u32(out, pp.second);
         }
+        // v24: el pozo se escribe despues, asi que aun se puede internar.
+        vxi_emit_member_attrs(out, pool, mod.ext_methods[ei].attrs);
     }
 
     /* v18: las dos tablas del conjunto comptime (nombres y no-recogidos).
@@ -1078,15 +997,6 @@ uint64_t vxi_hash_de_simbolos(const VxiModule &m,
 // Parser: bytes -> VxiModule.
 // ===========================================================================
 
-static bool read_name(const uint8_t *data, size_t size, uint32_t name_off,
-                      uint32_t name_len, uint32_t pool_start,
-                      std::string &out) {
-    const size_t abs = static_cast<size_t>(pool_start) + name_off;
-    if (abs + name_len > size) return false;
-    out.assign(reinterpret_cast<const char *>(data) + abs, name_len);
-    return true;
-}
-
 static bool parse_payload_typedef(const uint8_t *data, size_t size,
                                   uint32_t payload_off, uint32_t payload_len,
                                   uint32_t pool_start, VxiSymbol &out) {
@@ -1303,10 +1213,32 @@ static bool parse_payload_function(const uint8_t *data, size_t size,
     return true;
 }
 
+/**
+ * @brief Lee el bloque de atributos de un miembro y, si falla, deja el motivo.
+ * @param data       El fichero.
+ * @param size       Su tamano.
+ * @param off        Posicion; avanza lo leido.
+ * @param pool_start Donde empieza el pozo.
+ * @param attrs      Destino.
+ * @param error      Donde se deja el motivo del fallo.
+ * @return Falso si el bloque no se pudo leer.
+ */
+static bool read_member_attrs_or_fail(const uint8_t *data, size_t size,
+                                      size_t &off, uint32_t pool_start,
+                                      VxiMemberAttrs &attrs,
+                                      std::string &error) {
+    const VxiMemberAttrsRead r =
+        vxi_read_member_attrs(data, size, off, pool_start, attrs);
+    if (r == VxiMemberAttrsRead::Ok) return true;
+    error = vxi_member_attrs_read_error(r);
+    return false;
+}
+
 static bool parse_payload_struct_or_class(const uint8_t *data, size_t size,
                                           uint32_t payload_off,
                                           uint32_t payload_len,
-                                          uint32_t pool_start, VxiSymbol &out) {
+                                          uint32_t pool_start, VxiSymbol &out,
+                                          std::string &error) {
     // Header fijo: super(off+len) + size + align + is_overlay(1) +
     // overlay_extent(4) + field_count + interface_count + method_count = 33
     // bytes.
@@ -1349,6 +1281,9 @@ static bool parse_payload_struct_or_class(const uint8_t *data, size_t size,
         if (!read_name(data, size, n_off, n_len, pool_start, fi.name))
             return false;
         if (!read_name(data, size, t_off, t_len, pool_start, fi.type_str))
+            return false;
+        if (!read_member_attrs_or_fail(data, size, off, pool_start, fi.attrs,
+                                       error))
             return false;
         out.fields.push_back(std::move(fi));
     }
@@ -1397,6 +1332,9 @@ static bool parse_payload_struct_or_class(const uint8_t *data, size_t size,
                 return false;
             m.param_types.push_back(std::move(pt));
         }
+        if (!read_member_attrs_or_fail(data, size, off, pool_start, m.attrs,
+                                       error))
+            return false;
         out.methods.push_back(std::move(m));
     }
     // NS.2 (v8): ns_path del tipo al final (off+len).  Guardado defensivo por
@@ -1664,7 +1602,8 @@ VxiParseResult vxi_parse(const uint8_t *data, size_t size) {
         case VxiSymbolKind::STRUCT:
         case VxiSymbolKind::CLASS:
             ok = parse_payload_struct_or_class(data, size, payload_off,
-                                               payload_len, pool_start, s);
+                                               payload_len, pool_start, s,
+                                               r.error_message);
             break;
         case VxiSymbolKind::ENUM:
             ok = parse_payload_enum(data, size, payload_off, payload_len,
@@ -1676,10 +1615,12 @@ VxiParseResult vxi_parse(const uint8_t *data, size_t size) {
             break;
         }
         if (!ok) {
-            if (r.error_message.empty()) {
-                r.error_message =
-                    "fallo parseando payload del simbolo '" + s.name + "'";
-            }
+            /* El simbolo SIEMPRE, y el motivo concreto si quien fallo lo
+             * dejo: un "no se pudo leer" sin mas no dice que arreglar. */
+            std::string msg =
+                "fallo parseando payload del simbolo '" + s.name + "'";
+            if (!r.error_message.empty()) msg += ": " + r.error_message;
+            r.error_message = std::move(msg);
             return r;
         }
         r.module_.symbols.push_back(std::move(s));
@@ -1849,6 +1790,12 @@ VxiParseResult vxi_parse(const uint8_t *data, size_t size) {
                 if (p_len > 0)
                     read_name(data, size, p_off, p_len, pool_start, pt);
                 em.param_types.push_back(std::move(pt));
+            }
+            std::string attrs_error;
+            if (!read_member_attrs_or_fail(data, size, e_off, pool_start,
+                                           em.attrs, attrs_error)) {
+                r.error_message = "ext_method '" + em.name + "': " + attrs_error;
+                return r;
             }
             r.module_.ext_methods.push_back(std::move(em));
         }

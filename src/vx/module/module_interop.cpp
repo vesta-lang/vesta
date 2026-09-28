@@ -31,6 +31,7 @@
 #include "vx/type_checker.h"
 #include "vx/types.h"
 #include "vx/module/vxi_format.h"
+#include "vx/module/vxi_members.h" // un miembro del .vxi, en UN sitio
 #include "vx/module/namespace_names.h" // la forma fisica de un nombre con ruta
 #include "vx/project/module_names.h"   // la de un miembro de un modulo
 #include "vx/diagnostic.h" // #cross-module-generics: re-parse de templates
@@ -166,6 +167,26 @@ static std::string canonical_typename_of(const Type &t) {
     //   i32, u64*, Optional<i32>, Result<i32, string>, fn(i32) -> i64,
     //   VirtualPtr<T>, struct_name (para STRUCT), nominal_name (newtype).
     return type_to_string(t);
+}
+
+/**
+ * @brief La ranura del `.vxi` de un campo exportado.  Una para struct y clase:
+ *        eran dos copias.
+ * @param f        El campo.
+ * @param type_key La clave del tipo que lo exporta.
+ * @return La ranura.
+ */
+static VxiSymbol::FieldInfo vxi_field_of(const StructFieldInfo &f,
+                                         const std::string &type_key) {
+    VxiSymbol::FieldInfo fi;
+    fi.name = f.name;
+    fi.type_str = canonical_typename_of(f.type);
+    fi.offset = f.offset;
+    fi.size = f.size;
+    fi.bit_offset = f.bit_offset;
+    fi.bit_width = f.bit_width;
+    fi.attrs = vxi_member_attrs_of(f.visibility, f.declared_in, type_key);
+    return fi;
 }
 
 } // namespace vx
@@ -605,7 +626,7 @@ void TypeChecker::inject_imported_ext_method(
     const std::string &target_key, bool target_is_class,
     const std::string &name, const std::string &return_type_str,
     const std::vector<std::string> &param_strs,
-    const std::string &mangled_label) {
+    const std::string &mangled_label, Visibility visibility) {
     std::vector<ClassMethodInfo> *dst = nullptr;
     if (target_is_class) {
         auto it = class_layouts_.find(target_key);
@@ -623,6 +644,7 @@ void TypeChecker::inject_imported_ext_method(
     mi.name = name;
     mi.defining_class = target_key; // label = target_key__name
     mi.is_extension = true;
+    mi.visibility = visibility;
     mi.return_type = resolve_type_string(return_type_str);
     for (const auto &ps : param_strs)
         mi.param_types.push_back(resolve_type_string(ps));
@@ -1026,16 +1048,8 @@ void export_typechecker_to_vxi(const TypeChecker &tc, uint64_t source_hash,
         s.is_overlay = layout.is_overlay;
         s.overlay_extent = layout.overlay_extent;
         s.fields.reserve(layout.fields.size());
-        for (const auto &f : layout.fields) {
-            VxiSymbol::FieldInfo fi;
-            fi.name = f.name;
-            fi.type_str = canonical_typename_of(f.type);
-            fi.offset = f.offset;
-            fi.size = f.size;
-            fi.bit_offset = f.bit_offset;
-            fi.bit_width = f.bit_width;
-            s.fields.push_back(std::move(fi));
-        }
+        for (const auto &f : layout.fields)
+            s.fields.push_back(vxi_field_of(f, name));
         s.super_class = layout.super_name;
         // Metodos del struct: incluye los HEREDADOS ya aplanados por el flatten
         // de la herencia (con Self resuelto al derivado) y los operadores.  Sin
@@ -1051,13 +1065,15 @@ void export_typechecker_to_vxi(const TypeChecker &tc, uint64_t source_hash,
             mi.return_type = canonical_typename_of(m.return_type);
             mi.vtable_index = m.vtable_index;
             mi.flags = 0;
-            if (m.is_static) mi.flags |= 0x01;
-            if (m.is_constructor) mi.flags |= 0x02;
+            if (m.is_static) mi.flags |= VxiSymbol::kMethodStatic;
+            if (m.is_constructor) mi.flags |= VxiSymbol::kMethodConstructor;
             // Un constructor `comptime` se resuelve de otra manera que uno
             // normal: si la marca no cruza el modulo, al importarlo parece un
             // constructor corriente y la llamada se rechaza con "ninguna
             // sobrecarga coincide".
-            if (m.is_comptime) mi.flags |= 0x08;
+            if (m.is_comptime) mi.flags |= VxiSymbol::kMethodComptime;
+            mi.attrs = vxi_member_attrs_of(
+                m.visibility, TypeChecker::member_declared_in(m), name);
             /* La etiqueta se LEE de la ficha.  Armarla aqui como
              * `<Tipo>__<metodo>` daba, para un constructor -- que se llama como
              * el tipo --, `t__p__P__P`: un simbolo que el modulo de origen no
@@ -1101,16 +1117,8 @@ void export_typechecker_to_vxi(const TypeChecker &tc, uint64_t source_hash,
         s.align_bytes = 8; // las instancias se alinean a 8 (ObjectHeader)
         s.interfaces = layout.interface_names;
         s.fields.reserve(layout.fields.size());
-        for (const auto &f : layout.fields) {
-            VxiSymbol::FieldInfo fi;
-            fi.name = f.name;
-            fi.type_str = canonical_typename_of(f.type);
-            fi.offset = f.offset;
-            fi.size = f.size;
-            fi.bit_offset = f.bit_offset;
-            fi.bit_width = f.bit_width;
-            s.fields.push_back(std::move(fi));
-        }
+        for (const auto &f : layout.fields)
+            s.fields.push_back(vxi_field_of(f, name));
         //  M6.b L.6: emitir methods con firmas + vtable_index +
         // mangled_label para que el consumer pueda emitir CALLVIRT
         // correcto cross-module.
@@ -1121,16 +1129,18 @@ void export_typechecker_to_vxi(const TypeChecker &tc, uint64_t source_hash,
             mi.return_type = canonical_typename_of(m.return_type);
             mi.vtable_index = m.vtable_index;
             mi.flags = 0;
-            if (m.is_static) mi.flags |= 0x01;
-            if (m.is_constructor) mi.flags |= 0x02;
+            if (m.is_static) mi.flags |= VxiSymbol::kMethodStatic;
+            if (m.is_constructor) mi.flags |= VxiSymbol::kMethodConstructor;
             // Un constructor `comptime` se resuelve de otra manera que uno
             // normal: si la marca no cruza el modulo, al importarlo parece un
             // constructor corriente y la llamada se rechaza con "ninguna
             // sobrecarga coincide".
-            if (m.is_comptime) mi.flags |= 0x08;
+            if (m.is_comptime) mi.flags |= VxiSymbol::kMethodComptime;
             // Todos los metodos de instancia son virtuales por defecto
             // en Vesta (mismo despacho que Java).
-            if (!m.is_static) mi.flags |= 0x04;
+            if (!m.is_static) mi.flags |= VxiSymbol::kMethodVirtual;
+            mi.attrs = vxi_member_attrs_of(
+                m.visibility, TypeChecker::member_declared_in(m), name);
             // El label real en el .vel, LEIDO de la ficha: lo calculo el
             // comprobador al cerrar el layout, con el mangleado de la clase
             // dentro y -- si el nombre esta sobrecargado -- su discriminante.
@@ -1709,6 +1719,7 @@ void export_typechecker_to_vxi(const TypeChecker &tc, uint64_t source_hash,
             em.return_type = canonical_typename_of(mi.return_type);
             em.mangled_label = method_symbol_of(mi);
             em.target_is_class = is_class;
+            em.attrs = vxi_member_attrs_of(mi.visibility, key, key);
             for (const auto &pt : mi.param_types)
                 em.param_types.push_back(canonical_typename_of(pt));
             out.ext_methods.push_back(std::move(em));
@@ -2670,38 +2681,18 @@ void import_vxi_into_typechecker(
             // reconozca la construccion `Tipo(ptr)` del overlay importado.
             L.is_overlay = s.is_overlay;
             L.overlay_extent = s.overlay_extent;
+            const TypeStringResolver resolve_plain{tc};
             L.fields.reserve(s.fields.size());
-            for (const auto &fi : s.fields) {
-                StructFieldInfo sfi;
-                sfi.name = fi.name;
-                sfi.type = tc.resolve_type_string(fi.type_str);
-                sfi.offset = fi.offset;
-                sfi.size = fi.size;
-                sfi.bit_offset = fi.bit_offset;
-                sfi.bit_width = fi.bit_width;
-                L.fields.push_back(std::move(sfi));
-            }
+            for (const auto &fi : s.fields)
+                L.fields.push_back(field_from_vxi(fi, resolve_plain, canon));
             L.super_name = s.super_class;
             // Metodos del struct importado (propios + heredados aplanados +
             // operadores).  El lowering del consumidor los usa para resolver
             // `a.metodo(...)` y los operadores (`a / b` -> __div__)
             // cross-module.
             L.methods.reserve(s.methods.size());
-            for (const auto &mi : s.methods) {
-                ClassMethodInfo cmi;
-                cmi.name = mi.name;
-                cmi.return_type = resolve_imported(mi.return_type);
-                cmi.vtable_index = mi.vtable_index;
-                cmi.is_static = (mi.flags & 0x01) != 0;
-                cmi.is_constructor = (mi.flags & 0x02) != 0;
-                cmi.is_comptime = (mi.flags & 0x08) != 0;
-                cmi.defining_class = canon;
-                cmi.link_name = mi.mangled_label;
-                cmi.param_types.reserve(mi.param_types.size());
-                for (const auto &pt : mi.param_types)
-                    cmi.param_types.push_back(resolve_imported(pt));
-                L.methods.push_back(std::move(cmi));
-            }
+            for (const auto &mi : s.methods)
+                L.methods.push_back(method_from_vxi(mi, resolve_imported, canon));
             // Bug M: UNA identidad (`L.name` = canonica) accesible por DOS
             // claves.  Las firmas de los .vxi referencian el tipo por su nombre
             // mangled (`std__ntwindows__PROCESSOR_NUMBER`) y el codigo del
@@ -2726,38 +2717,17 @@ void import_vxi_into_typechecker(
             L.name = canon;
             L.super_name = s.super_class;
             L.size_bytes = s.size_bytes;
+            const TypeStringResolver resolve_plain{tc};
             L.fields.reserve(s.fields.size());
-            for (const auto &fi : s.fields) {
-                StructFieldInfo cfi;
-                cfi.name = fi.name;
-                cfi.type = tc.resolve_type_string(fi.type_str);
-                cfi.offset = fi.offset;
-                cfi.size = fi.size;
-                cfi.bit_offset = fi.bit_offset;
-                cfi.bit_width = fi.bit_width;
-                L.fields.push_back(std::move(cfi));
-            }
+            for (const auto &fi : s.fields)
+                L.fields.push_back(field_from_vxi(fi, resolve_plain, canon));
             L.interface_names = s.interfaces;
             //  M6.b L.6: inyectar methods con sus firmas.  El
             // lowering de `obj.method(args)` en el consumidor podra
             // usar `vtable_index` para emitir CALLVIRT correcto.
             L.methods.reserve(s.methods.size());
-            for (const auto &mi : s.methods) {
-                ClassMethodInfo cmi;
-                cmi.name = mi.name;
-                cmi.return_type = resolve_imported(mi.return_type);
-                cmi.vtable_index = mi.vtable_index;
-                cmi.is_static = (mi.flags & 0x01) != 0;
-                cmi.is_constructor = (mi.flags & 0x02) != 0;
-                cmi.is_comptime = (mi.flags & 0x08) != 0;
-                cmi.defining_class = canon;
-                cmi.link_name = mi.mangled_label;
-                cmi.param_types.reserve(mi.param_types.size());
-                for (const auto &pt : mi.param_types) {
-                    cmi.param_types.push_back(resolve_imported(pt));
-                }
-                L.methods.push_back(std::move(cmi));
-            }
+            for (const auto &mi : s.methods)
+                L.methods.push_back(method_from_vxi(mi, resolve_imported, canon));
             if (canon != local_name) tc.register_imported_class(local_name, L);
             tc.register_imported_class(canon, std::move(L));
             break;
@@ -3039,22 +3009,14 @@ void register_namespace_for_import(TypeChecker &tc,
             L.name = mangled;
             L.size_bytes = s.size_bytes;
             L.align_bytes = s.align_bytes;
+            //  M.fix-classfield: fallback al mangled del dep para campos con
+            // tipo CLASS/STRUCT/ENUM del mismo modulo dep.  El .vxi guarda
+            // type_str unmangled ("EditorTab") pero el consumer registra
+            // mangled ("tabs__EditorTab"); el fallback lo encuentra.
             L.fields.reserve(s.fields.size());
-            for (const auto &fi : s.fields) {
-                StructFieldInfo sfi;
-                sfi.name = fi.name;
-                //  M.fix-classfield: fallback al mangled del dep
-                // para campos con tipo CLASS/STRUCT/ENUM del mismo
-                // modulo dep.  El .vxi guarda type_str unmangled
-                // ("EditorTab") pero el consumer registra mangled
-                // ("tabs__EditorTab"); el fallback lo encuentra.
-                sfi.type = resolve_with_mangled_fallback(fi.type_str);
-                sfi.offset = fi.offset;
-                sfi.size = fi.size;
-                sfi.bit_offset = fi.bit_offset;
-                sfi.bit_width = fi.bit_width;
-                L.fields.push_back(std::move(sfi));
-            }
+            for (const auto &fi : s.fields)
+                L.fields.push_back(
+                    field_from_vxi(fi, resolve_with_mangled_fallback, mangled));
             L.super_name = s.super_class;
             /* Y sus METODOS, igual que la otra ruta de registro.
              *
@@ -3070,22 +3032,9 @@ void register_namespace_for_import(TypeChecker &tc,
              * lo habia visto porque la stdlib expone estos tipos con funciones
              * libres (`mutex_lock(m)`) o se importa con `only`. */
             L.methods.reserve(s.methods.size());
-            for (const auto &mi : s.methods) {
-                ClassMethodInfo cmi;
-                cmi.name = mi.name;
-                cmi.return_type = resolve_with_mangled_fallback(mi.return_type);
-                cmi.vtable_index = mi.vtable_index;
-                cmi.is_static = (mi.flags & 0x01) != 0;
-                cmi.is_constructor = (mi.flags & 0x02) != 0;
-                cmi.is_comptime = (mi.flags & 0x08) != 0;
-                cmi.defining_class = mangled;
-                cmi.link_name = mi.mangled_label;
-                cmi.param_types.reserve(mi.param_types.size());
-                for (const auto &pt : mi.param_types)
-                    cmi.param_types.push_back(
-                        resolve_with_mangled_fallback(pt));
-                L.methods.push_back(std::move(cmi));
-            }
+            for (const auto &mi : s.methods)
+                L.methods.push_back(
+                    method_from_vxi(mi, resolve_with_mangled_fallback, mangled));
             tc.register_imported_struct(mangled, std::move(L));
             break;
         }
@@ -3098,34 +3047,14 @@ void register_namespace_for_import(TypeChecker &tc,
             L.super_name = s.super_class;
             L.size_bytes = s.size_bytes;
             L.fields.reserve(s.fields.size());
-            for (const auto &fi : s.fields) {
-                StructFieldInfo cfi;
-                cfi.name = fi.name;
-                cfi.type = resolve_with_mangled_fallback(fi.type_str);
-                cfi.offset = fi.offset;
-                cfi.size = fi.size;
-                cfi.bit_offset = fi.bit_offset;
-                cfi.bit_width = fi.bit_width;
-                L.fields.push_back(std::move(cfi));
-            }
+            for (const auto &fi : s.fields)
+                L.fields.push_back(
+                    field_from_vxi(fi, resolve_with_mangled_fallback, mangled));
             L.interface_names = s.interfaces;
             L.methods.reserve(s.methods.size());
-            for (const auto &mi : s.methods) {
-                ClassMethodInfo cmi;
-                cmi.name = mi.name;
-                cmi.return_type = resolve_with_mangled_fallback(mi.return_type);
-                cmi.vtable_index = mi.vtable_index;
-                cmi.is_static = (mi.flags & 0x01) != 0;
-                cmi.is_constructor = (mi.flags & 0x02) != 0;
-                cmi.is_comptime = (mi.flags & 0x08) != 0;
-                cmi.defining_class = mangled;
-                cmi.param_types.reserve(mi.param_types.size());
-                for (const auto &pt : mi.param_types) {
-                    cmi.param_types.push_back(
-                        resolve_with_mangled_fallback(pt));
-                }
-                L.methods.push_back(std::move(cmi));
-            }
+            for (const auto &mi : s.methods)
+                L.methods.push_back(
+                    method_from_vxi(mi, resolve_with_mangled_fallback, mangled));
             tc.register_imported_class(mangled, std::move(L));
             break;
         }

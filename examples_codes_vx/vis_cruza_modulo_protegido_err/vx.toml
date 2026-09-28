@@ -1,0 +1,9 @@
+[package]
+name    = "vis_cruza_modulo_protegido_err"
+version = "1.0.0"
+edition = 1
+
+# El modulo `banco` es el del ejemplo `vis_cruza_modulo`: se toma de alli en
+# vez de copiarlo.
+[dependencies]
+banco = { path = "../vis_cruza_modulo" }

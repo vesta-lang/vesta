@@ -234,7 +234,7 @@ std::string fmt_class_summary(const ast::ClassDecl &cd);
  * @param v La visibilidad.
  * @return El simbolo.
  */
-const char *uml_visibility_symbol(ast::Visibility v);
+const char *uml_visibility_symbol(Visibility v);
 
 /**
  * @brief Linea de un campo de clase: `private static final i32 x`.

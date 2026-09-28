@@ -1,0 +1,13 @@
+namespace app_privado;
+
+import banco;
+
+// Un campo `private` de un tipo importado no se usa desde otro modulo
+// (VX2164), y tampoco el heredado por una derivada: sigue siendo del tipo que
+// lo escribio.
+
+i32 main() {
+	banco.Ahorro h;
+	h.abrir(5);
+	return (i32)h.saldo;
+}

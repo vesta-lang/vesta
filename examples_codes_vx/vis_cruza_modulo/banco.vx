@@ -1,0 +1,28 @@
+namespace banco;
+
+// Lo que un tipo esconde tiene que seguir escondido cuando se usa desde OTRO
+// modulo.  La interfaz del modulo (`.vxi`) no llevaba la visibilidad de los
+// miembros, asi que un `private` de un tipo importado se usaba desde fuera
+// como uno publico.
+public struct Cuenta {
+	private   i64 saldo;
+	protected i64 sucursal;
+	public    i64 titular;
+
+	public void abrir(i64 s) {
+		this.saldo    = s;
+		this.sucursal = 3;
+	}
+
+	public i64 ver() => this.saldo;
+
+	public i64 doble() => this.secreto(); // uno publico que usa uno privado
+
+	private i64 secreto() => this.saldo * 2;
+}
+
+// Lo HEREDADO recuerda quien lo escribio: el `private` de `Cuenta` sigue
+// siendo de `Cuenta` visto desde la derivada, y desde fuera.
+public struct Ahorro : Cuenta {
+	public i64 con_interes() => this.ver() + 1;
+}

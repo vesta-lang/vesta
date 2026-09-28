@@ -2072,7 +2072,7 @@ void TypeChecker::apply_class_field_defaults_to_ctors() {
                     ctor->loc = cd->loc;
                     ctor->name = cd->name;
                     ctor->is_constructor = true;
-                    ctor->visibility = ast::Visibility::Public;
+                    ctor->visibility = Visibility::Public;
                     ctor->body = std::make_unique<ast::BlockStmt>();
                     ctor->body->loc = cd->loc;
                     ctors.push_back(ctor.get());
@@ -6554,7 +6554,7 @@ void TypeChecker::collect_globals() {
         dtor->loc = sd->loc;
         dtor->name = kDestructorMethod;
         dtor->is_destructor = true;
-        dtor->visibility = ast::Visibility::Public;
+        dtor->visibility = Visibility::Public;
         dtor->body = std::make_unique<ast::BlockStmt>();
         dtor->body->loc = sd->loc;
         /* En que hueco del layout acaba, igual que cualquier otro metodo: quien
@@ -6668,7 +6668,7 @@ void TypeChecker::collect_globals() {
         dtor->loc = cd->loc;
         dtor->name = kDestructorMethod;
         dtor->is_destructor = true;
-        dtor->visibility = ast::Visibility::Public;
+        dtor->visibility = Visibility::Public;
         dtor->body = std::make_unique<ast::BlockStmt>();
         dtor->body->loc = cd->loc;
         /* En que hueco del layout acaba: quien EMITE el cuerpo llega al

@@ -6240,7 +6240,7 @@ void Parser::parse_struct_body_(ast::StructDecl &sd, MemberBodyOwner owner) {
         // Modificadores opcionales en el miembro: su visibilidad (la misma
         // que en una clase) y `static` (campos por tipo, y metodos que no
         // toman `this`: factorias `Box.zero()`).
-        ast::Visibility access = ast::Visibility::Unwritten;
+        Visibility access = Visibility::Unwritten;
         bool saw_visibility = false;
         bool is_static = false;
         bool is_comptime_member = false;
@@ -6667,7 +6667,7 @@ void Parser::parse_struct_body_(ast::StructDecl &sd, MemberBodyOwner owner) {
         if (f.is_static) synth_struct_static_global_(*s, f);
         /* Lo que la linea entera dice de sus declaradores, para copiarlo a los
          * de detras (`private static T a, b;`). */
-        const ast::Visibility line_visibility = f.visibility;
+        const Visibility line_visibility = f.visibility;
         const ast::ConceptInjection line_injection = f.injection;
         const ParamDir line_dir = f.dir;
         const bool line_comptime = f.is_comptime;
@@ -6798,7 +6798,7 @@ std::unique_ptr<ast::StructDecl> Parser::parse_struct_decl(bool is_overlay) {
 // -----------------------------------------------------------------
 
 std::unique_ptr<ast::ClassMethodDecl>
-Parser::parse_extension_method(ast::Visibility access) {
+Parser::parse_extension_method(Visibility access) {
     if (!starts_type()) {
         error_here("se esperaba un tipo de retorno de metodo dentro de la "
                    "extension/impl");
@@ -6867,7 +6867,7 @@ std::unique_ptr<ast::ExtensionDecl> Parser::parse_extension_decl() {
                  "se esperaba '{' al abrir el cuerpo de la extension");
     while (current_.kind != TokenKind::RBRACE &&
            current_.kind != TokenKind::END_OF_FILE) {
-        ast::Visibility access = ast::Visibility::Unwritten;
+        Visibility access = Visibility::Unwritten;
         bool saw_visibility = false;
         while (parse_member_visibility_(access, saw_visibility)) {
         }
@@ -6943,7 +6943,7 @@ std::unique_ptr<ast::ImplDecl> Parser::parse_impl_decl() {
     (void)consume(); // '{'
     while (current_.kind != TokenKind::RBRACE &&
            current_.kind != TokenKind::END_OF_FILE) {
-        ast::Visibility access = ast::Visibility::Unwritten;
+        Visibility access = Visibility::Unwritten;
         bool saw_visibility = false;
         while (parse_member_visibility_(access, saw_visibility)) {
         }
@@ -7130,7 +7130,7 @@ std::unique_ptr<ast::ClassDecl> Parser::parse_class_decl() {
         }
 
         // Parsear modificadores prefijos.
-        ast::Visibility access = ast::Visibility::Unwritten;
+        Visibility access = Visibility::Unwritten;
         bool is_static = false;
         /* `final i32 f()` y `@Final i32 f()` dicen lo mismo, como promete la
          * documentacion del lenguaje: la anotacion se leyo arriba. */
@@ -7501,7 +7501,7 @@ std::unique_ptr<ast::ClassDecl> Parser::parse_interface_decl() {
         m->loc = mloc;
         m->name = std::move(mname);
         m->return_type = std::move(rettype);
-        m->visibility = ast::Visibility::Public; // una interfaz es su API
+        m->visibility = Visibility::Public; // una interfaz es su API
         m->is_static = false;
         m->is_final = false;
         m->is_constructor = false;

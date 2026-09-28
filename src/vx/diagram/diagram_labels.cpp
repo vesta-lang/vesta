@@ -546,13 +546,13 @@ std::string fmt_class_summary(const ast::ClassDecl &cd) {
     return s;
 }
 
-const char *uml_visibility_symbol(ast::Visibility v) {
+const char *uml_visibility_symbol(Visibility v) {
     switch (v) {
-    case ast::Visibility::Public: return "+";
-    case ast::Visibility::Private: return "-";
-    case ast::Visibility::Protected: return "#";
-    case ast::Visibility::Internal:
-    case ast::Visibility::Unwritten: return "~";
+    case Visibility::Public: return "+";
+    case Visibility::Private: return "-";
+    case Visibility::Protected: return "#";
+    case Visibility::Internal:
+    case Visibility::Unwritten: return "~";
     }
     return "~";
 }
@@ -563,15 +563,15 @@ const char *uml_visibility_symbol(ast::Visibility v) {
  * @param s Donde se escribe.
  * @param v La visibilidad.
  */
-static void add_visibility(std::string &s, ast::Visibility v) {
+static void add_visibility(std::string &s, Visibility v) {
     switch (v) {
-    case ast::Visibility::Public: add_keyword(s, TokenKind::KW_PUBLIC); break;
-    case ast::Visibility::Private: add_keyword(s, TokenKind::KW_PRIVATE); break;
-    case ast::Visibility::Protected:
+    case Visibility::Public: add_keyword(s, TokenKind::KW_PUBLIC); break;
+    case Visibility::Private: add_keyword(s, TokenKind::KW_PRIVATE); break;
+    case Visibility::Protected:
         add_keyword(s, TokenKind::KW_PROTECTED);
         break;
-    case ast::Visibility::Internal: s += "internal "; break;
-    case ast::Visibility::Unwritten: break;
+    case Visibility::Internal: s += "internal "; break;
+    case Visibility::Unwritten: break;
     }
 }
 

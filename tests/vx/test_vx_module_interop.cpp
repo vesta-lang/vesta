@@ -21,6 +21,7 @@
 
 #include "vx/module/module_interop.h"
 #include "vx/module/vxi_format.h"
+#include "vx/module/vxi_members.h" // un miembro del .vxi
 #include "vx/type_checker.h"
 #include "vx/diagnostic.h"
 #include "vx/lexer.h"
@@ -255,6 +256,131 @@ void test_empty_only_no_inject() {
     CHECK(before == after, "only vacio no cambio nada");
 }
 
+/**
+ * @brief Busca un campo por nombre en un layout.
+ * @param L    El layout.
+ * @param name El campo.
+ * @return El campo, o nulo.
+ */
+const vx::StructFieldInfo *field_named(const vx::StructLayout &L,
+                                       const std::string &name) {
+    for (const auto &f : L.fields)
+        if (f.name == name) return &f;
+    return nullptr;
+}
+
+/**
+ * @brief Busca un metodo por nombre en un layout.
+ * @param L    El layout.
+ * @param name El metodo.
+ * @return El metodo, o nulo.
+ */
+const vx::ClassMethodInfo *method_named(const vx::StructLayout &L,
+                                        const std::string &name) {
+    for (const auto &m : L.methods)
+        if (m.name == name) return &m;
+    return nullptr;
+}
+
+// ------------------------------------------------------------------
+// Test 5: la visibilidad de los miembros y el tipo que los escribio cruzan
+// el .vxi, tambien para lo heredado.
+// ------------------------------------------------------------------
+void test_member_visibility_roundtrip() {
+    std::cout << "\n[Test] visibilidad de miembros (lib -> .vxi -> main)\n";
+
+    auto lib = compile_to_typechecker(
+        "public struct Base {\n"
+        "    private i64 a;\n"
+        "    protected i64 b;\n"
+        "    public i64 c;\n"
+        "    public i64 get() => this.a;\n"
+        "    private i64 hid() => 1;\n"
+        "}\n"
+        "public struct Der : Base { public i64 d; }\n"
+        "i32 main() { return 0; }\n",
+        "lib5.vx");
+    CHECK(lib->tc != nullptr && !lib->diags.has_errors(), "lib compila");
+    if (!lib->tc) return;
+
+    vx::VxiModule vm;
+    vx::export_typechecker_to_vxi(*lib->tc, 0x55, vm);
+    auto bytes = vx::vxi_emit(vm);
+    auto parsed = vx::vxi_parse(bytes.data(), bytes.size());
+    CHECK(parsed.ok, "parse OK");
+    if (!parsed.ok) return;
+
+    auto mainmod =
+        compile_to_typechecker("i32 main() { return 0; }\n", "main5.vx");
+    std::vector<vx::TypeChecker::VxiOnlyEntry> only = {{"Base", ""},
+                                                       {"Der", ""}};
+    vx::import_vxi_into_typechecker(*mainmod->tc, parsed.module_, only, "lib5");
+
+    const auto &structs = mainmod->tc->struct_layouts();
+    const auto base = structs.find("Base");
+    const auto der = structs.find("Der");
+    CHECK(base != structs.end() && der != structs.end(),
+          "main conoce Base y Der");
+    if (base == structs.end() || der == structs.end()) return;
+    const std::string base_key = base->second.name;
+
+    const auto *a = field_named(base->second, "a");
+    const auto *b = field_named(base->second, "b");
+    const auto *c = field_named(base->second, "c");
+    CHECK(a && a->visibility == vx::Visibility::Private, "Base.a privado");
+    CHECK(b && b->visibility == vx::Visibility::Protected, "Base.b protegido");
+    CHECK(c && c->visibility == vx::Visibility::Public, "Base.c publico");
+    CHECK(a && a->declared_in == base_key, "Base.a lo escribio Base");
+
+    const auto *da = field_named(der->second, "a");
+    const auto *dd = field_named(der->second, "d");
+    CHECK(da && da->visibility == vx::Visibility::Private,
+          "Der.a heredado: sigue privado");
+    CHECK(da && da->declared_in == base_key,
+          "Der.a heredado: lo escribio Base, con el nombre de quien importa");
+    CHECK(dd && dd->declared_in == der->second.name, "Der.d lo escribio Der");
+
+    const auto *hid = method_named(base->second, "hid");
+    const auto *get = method_named(base->second, "get");
+    CHECK(hid && hid->visibility == vx::Visibility::Private,
+          "Base.hid privado");
+    CHECK(get && get->visibility == vx::Visibility::Public, "Base.get publico");
+    const auto *dhid = method_named(der->second, "hid");
+    CHECK(dhid && vx::TypeChecker::member_declared_in(*dhid) == base_key,
+          "Der.hid heredado: lo escribio Base");
+}
+
+// ------------------------------------------------------------------
+// Test 6: las reglas sueltas de la traduccion de un miembro importado.
+// ------------------------------------------------------------------
+void test_member_attr_rules() {
+    std::cout << "\n[Test] reglas de los atributos de miembro\n";
+    const auto own = vx::vxi_member_attrs_of(vx::Visibility::Private, "T", "T");
+    CHECK(own.declared_in.empty(), "lo escrito por el propio tipo no se apunta");
+    const auto inh = vx::vxi_member_attrs_of(vx::Visibility::Public, "B", "T");
+    CHECK(inh.declared_in.str() == "B", "lo heredado dice quien lo escribio");
+
+    CHECK(vx::imported_declared_in(util::InternedName(), vx::Type{}, "m__T") ==
+              "m__T",
+          "vacio = el propio tipo importado");
+    CHECK(vx::imported_declared_in(util::InternedName::intern("B"),
+                                   vx::Type{vx::PrimitiveKind::STRUCT, "m__B"},
+                                   "m__T") == "m__B",
+          "resuelto: el nombre de quien importa");
+    CHECK(vx::imported_declared_in(util::InternedName::intern("B"), vx::Type{},
+                                   "m__T") == "m__T",
+          "base no exportada: se mide contra el tipo importado");
+
+    vx::ClassMethodInfo m;
+    m.defining_class = "m__T";
+    vx::stamp_imported_method_owner(m, "m__T", "m__T");
+    CHECK(m.origin.kind == vx::ast::MemberOriginKind::Written,
+          "propio: sigue escrito por el tipo");
+    vx::stamp_imported_method_owner(m, "m__B", "m__T");
+    CHECK(vx::TypeChecker::member_declared_in(m) == "m__B",
+          "heredado: lo escribio la base");
+}
+
 } // namespace
 
 int main() {
@@ -263,6 +389,8 @@ int main() {
     test_struct_roundtrip();
     test_only_rename();
     test_empty_only_no_inject();
+    test_member_visibility_roundtrip();
+    test_member_attr_rules();
     std::cout << "\n=== Resultado: " << g_pass << " PASS, " << g_fail
               << " FAIL ===\n";
     return (g_fail == 0) ? 0 : 1;

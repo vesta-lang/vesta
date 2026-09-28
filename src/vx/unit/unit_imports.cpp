@@ -507,7 +507,7 @@ bool inject_unit_imports(const UnitEnv &env, size_t i,
         for (const auto &em : work[dep].vxi.ext_methods) {
             pm.tc->inject_imported_ext_method(
                 em.target_key, em.target_is_class, em.name, em.return_type,
-                em.param_types, em.mangled_label);
+                em.param_types, em.mangled_label, em.attrs.visibility);
         }
     }
     return true;

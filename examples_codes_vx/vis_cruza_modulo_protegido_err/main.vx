@@ -1,0 +1,12 @@
+namespace app_protegido;
+
+import banco;
+
+// Un miembro `protected` de un tipo importado no se usa desde fuera del tipo
+// y de los que derivan de el (VX2165).
+
+i32 main() {
+	banco.Cuenta c;
+	c.abrir(5);
+	return (i32)c.sucursal;
+}

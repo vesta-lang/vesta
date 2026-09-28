@@ -599,6 +599,8 @@ add_library(vx_lib STATIC
     # Sistema de modulos.
     module/module_resolver.cpp
     module/module_interop.cpp
+    # Un campo o un metodo de un tipo importado: del .vxi a la ficha.
+    module/vxi_members.cpp
     module/namespace_flatten.cpp
     # El nombre fisico de lo declarado en un namespace (`a.b.f` -> `a__b__f`):
     # una representacion, en un solo sitio.
@@ -611,6 +613,8 @@ add_library(vx_lib STATIC
     # Driver incremental granular: claves Merkle + CAS + plan_rebuild.
     incremental.cpp
     module/vxi_format.cpp
+    # Lo que un miembro dice de si en el .vxi (visibilidad, quien lo escribio).
+    module/vxi_member_attrs.cpp
     project_cache.cpp
     velb_signature.cpp
     # comptime_vm.cpp vive en src/runtime/ (depende del runtime VM).

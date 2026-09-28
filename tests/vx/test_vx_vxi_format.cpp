@@ -13,6 +13,7 @@
  */
 
 #include "vx/module/vxi_format.h"
+#include "vx/module/vxi_io.h" // bloques escritos a mano
 
 #include <cstdio>
 #include <iostream>
@@ -382,6 +383,184 @@ void test_typedef_new_explicit_conversions() {
     CHECK(S.to_conversions[0].is_public, "to[0].is_public");
 }
 
+/**
+ * @brief Un modulo con un struct cuyos miembros llevan visibilidad y tipo que
+ *        los escribio, y un metodo de extension privado.
+ * @param field_vis La visibilidad del primer campo.
+ * @return El modulo.
+ */
+vx::VxiModule make_module_with_member_attrs(vx::Visibility field_vis) {
+    vx::VxiModule m;
+    vx::VxiSymbol s;
+    s.kind = vx::VxiSymbolKind::STRUCT;
+    s.name = "Ahorro";
+    s.super_class = "Cuenta";
+    s.size_bytes = 16;
+    s.align_bytes = 8;
+    vx::VxiSymbol::FieldInfo saldo{"saldo", "i64", 0, 8, 0, 0, {}};
+    saldo.attrs.visibility = field_vis;
+    saldo.attrs.declared_in = util::InternedName::intern("Cuenta");
+    vx::VxiSymbol::FieldInfo titular{"titular", "i64", 8, 8, 0, 0, {}};
+    titular.attrs.visibility = vx::Visibility::Public;
+    s.fields = {saldo, titular};
+    vx::VxiSymbol::MethodInfo ver;
+    ver.name = "ver";
+    ver.return_type = "i64";
+    ver.mangled_label = "Ahorro__ver";
+    ver.attrs.visibility = vx::Visibility::Protected;
+    vx::VxiSymbol::MethodInfo abrir;
+    abrir.name = "abrir";
+    abrir.return_type = "void";
+    abrir.param_types = {"i64"};
+    abrir.mangled_label = "Ahorro__abrir";
+    s.methods = {ver, abrir};
+    m.symbols.push_back(std::move(s));
+    vx::VxiModule::ExtMethod em;
+    em.target_key = "Ahorro";
+    em.name = "oculto";
+    em.return_type = "i64";
+    em.mangled_label = "Ahorro__oculto";
+    em.attrs.visibility = vx::Visibility::Private;
+    m.ext_methods.push_back(std::move(em));
+    return m;
+}
+
+// v24: lo que un miembro dice de si mismo cruza el `.vxi` entero.
+void test_member_attrs_roundtrip() {
+    std::cout << "\n[Test] atributos de miembro (v24)\n";
+    const auto orig = make_module_with_member_attrs(vx::Visibility::Private);
+    const auto b = vx::vxi_emit(orig);
+    const auto r = vx::vxi_parse(b.data(), b.size());
+    CHECK(r.ok, "parse con atributos de miembro");
+    if (!r.ok || r.module_.symbols.size() != 1) return;
+    const auto &S = r.module_.symbols[0];
+    CHECK(S.fields.size() == 2 && S.methods.size() == 2, "miembros enteros");
+    if (S.fields.size() != 2 || S.methods.size() != 2) return;
+    CHECK(S.fields[0].attrs.visibility == vx::Visibility::Private,
+          "campo privado");
+    CHECK(S.fields[0].attrs.declared_in == util::InternedName::intern("Cuenta"),
+          "campo heredado: dice quien lo escribio (internado)");
+    CHECK(S.fields[1].attrs.visibility == vx::Visibility::Public,
+          "campo publico");
+    CHECK(S.fields[1].attrs.declared_in.empty(),
+          "campo propio: sin tipo escrito");
+    CHECK(S.fields[1].name == "titular" && S.fields[1].offset == 8,
+          "el campo tras el bloque se lee en su sitio");
+    CHECK(S.methods[0].attrs.visibility == vx::Visibility::Protected,
+          "metodo protegido");
+    CHECK(S.methods[1].attrs.visibility == vx::Visibility::Unwritten,
+          "metodo sin palabra");
+    CHECK(S.methods[1].param_types.size() == 1 &&
+              S.methods[1].mangled_label == "Ahorro__abrir",
+          "el metodo tras el bloque se lee en su sitio");
+    CHECK(r.module_.ext_methods.size() == 1 &&
+              r.module_.ext_methods[0].attrs.visibility ==
+                  vx::Visibility::Private,
+          "metodo de extension privado");
+}
+
+// Cambiar la visibilidad de un miembro cambia la interfaz: quien importa el
+// modulo tiene que enterarse (y recompilarse).
+void test_member_attrs_change_abi_hash() {
+    std::cout << "\n[Test] la visibilidad entra en el abi_hash\n";
+    const auto b1 =
+        vx::vxi_emit(make_module_with_member_attrs(vx::Visibility::Private));
+    const auto b2 =
+        vx::vxi_emit(make_module_with_member_attrs(vx::Visibility::Public));
+    const auto r1 = vx::vxi_parse(b1.data(), b1.size());
+    const auto r2 = vx::vxi_parse(b2.data(), b2.size());
+    CHECK(r1.ok && r2.ok, "ambos parseos OK");
+    CHECK(r1.module_.abi_hash != r2.module_.abi_hash,
+          "private -> public cambia el abi_hash");
+}
+
+/**
+ * @brief Un bloque de atributos escrito a mano, para lo que el escritor no
+ *        produce: etiquetas desconocidas y valores rotos.
+ * @param buf     Donde se escribe.
+ * @param tag     Etiqueta del unico atributo.
+ * @param len     Longitud declarada.
+ * @param payload Bytes de datos.
+ */
+void write_attr_block(std::vector<uint8_t> &buf, uint16_t tag, uint16_t len,
+                      const std::vector<uint8_t> &payload) {
+    vx::vxi_io::write_u16(buf, 1);
+    vx::vxi_io::write_u16(buf, tag);
+    vx::vxi_io::write_u16(buf, len);
+    buf.insert(buf.end(), payload.begin(), payload.end());
+}
+
+// El lector salta lo que no conoce y grita lo que no puede ser.
+void test_member_attrs_reader() {
+    std::cout << "\n[Test] lector del bloque de atributos\n";
+    {
+        // Una etiqueta de un escritor mas nuevo y, detras, la visibilidad.
+        std::vector<uint8_t> buf;
+        vx::vxi_io::write_u16(buf, 2);
+        vx::vxi_io::write_u16(buf, 0x7777);
+        vx::vxi_io::write_u16(buf, 3);
+        buf.insert(buf.end(), {0xAA, 0xBB, 0xCC});
+        vx::vxi_io::write_u16(buf,
+                              static_cast<uint16_t>(vx::VxiMemberAttr::Visibility));
+        vx::vxi_io::write_u16(buf, 1);
+        buf.push_back(static_cast<uint8_t>(vx::Visibility::Protected));
+        size_t off = 0;
+        vx::VxiMemberAttrs a;
+        const auto st = vx::vxi_read_member_attrs(buf.data(), buf.size(), off,
+                                                  0, a);
+        CHECK(st == vx::VxiMemberAttrsRead::Ok, "etiqueta desconocida saltada");
+        CHECK(a.visibility == vx::Visibility::Protected,
+              "lo de detras se lee igual");
+        CHECK(off == buf.size(), "consume el bloque entero");
+    }
+    {
+        std::vector<uint8_t> buf;
+        write_attr_block(buf,
+                         static_cast<uint16_t>(vx::VxiMemberAttr::Visibility), 1,
+                         {static_cast<uint8_t>(vx::kVisibilityMax + 1)});
+        size_t off = 0;
+        vx::VxiMemberAttrs a;
+        CHECK(vx::vxi_read_member_attrs(buf.data(), buf.size(), off, 0, a) ==
+                  vx::VxiMemberAttrsRead::BadVisibility,
+              "visibilidad fuera de rango: error, no 'sin palabra'");
+    }
+    {
+        std::vector<uint8_t> buf;
+        write_attr_block(buf,
+                         static_cast<uint16_t>(vx::VxiMemberAttr::Visibility), 2,
+                         {1, 0});
+        size_t off = 0;
+        vx::VxiMemberAttrs a;
+        CHECK(vx::vxi_read_member_attrs(buf.data(), buf.size(), off, 0, a) ==
+                  vx::VxiMemberAttrsRead::BadLength,
+              "longitud que no es la de su etiqueta: error");
+    }
+    {
+        std::vector<uint8_t> buf;
+        write_attr_block(buf,
+                         static_cast<uint16_t>(vx::VxiMemberAttr::DeclaredIn), 8,
+                         {0, 0});
+        size_t off = 0;
+        vx::VxiMemberAttrs a;
+        CHECK(vx::vxi_read_member_attrs(buf.data(), buf.size(), off, 0, a) ==
+                  vx::VxiMemberAttrsRead::Truncated,
+              "bloque cortado: error");
+    }
+}
+
+// Un `.vxi` de la version anterior no se lee a medias: se rechaza, y quien lo
+// sirve lo regenera desde el fuente.
+void test_version_anterior_rechazada() {
+    std::cout << "\n[Test] .vxi de la version anterior\n";
+    auto b = vx::vxi_emit(make_module_with_member_attrs(vx::Visibility::Private));
+    const uint16_t prev = static_cast<uint16_t>(vx::VXI_FORMAT_VERSION - 1);
+    b[4] = static_cast<uint8_t>(prev & 0xFFu);
+    b[5] = static_cast<uint8_t>(prev >> 8);
+    const auto r = vx::vxi_parse(b.data(), b.size());
+    CHECK(!r.ok, "version anterior rechazada");
+    CHECK(!r.error_message.empty(), "con su motivo");
+}
+
 } // namespace
 
 int main() {
@@ -396,6 +575,10 @@ int main() {
     test_dep_table_roundtrip();
     test_global_var_init_value();
     test_typedef_new_explicit_conversions();
+    test_member_attrs_roundtrip();
+    test_member_attrs_change_abi_hash();
+    test_member_attrs_reader();
+    test_version_anterior_rechazada();
 
     std::cout << "\n=== Resultado: " << g_pass << " PASS, " << g_fail
               << " FAIL ===\n";

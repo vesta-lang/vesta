@@ -54,6 +54,7 @@
 #include <vector>
 
 #include "util/name_pool.h"    // nombres internados (conceptos de una cota)
+#include "vx/visibility.h"     // quien ve un miembro (tambien viaja en el .vxi)
 #include "vx/builtin_names.h" // `@Provides(<builtin>)` guarda el VALOR
 #include "vx/diagnostic.h"
 #include "vx/types.h"
@@ -2016,31 +2017,6 @@ enum class MemberOriginKind : uint8_t {
     Written,   ///< lo escribe el propio tipo
     Inherited, ///< copia del de un struct base (aplanado de la herencia)
     Concept,   ///< inyectado desde un concepto que el tipo declara cumplir
-};
-
-/**
- * @enum Visibility
- * @brief Quien puede ver un miembro (o una declaracion).
- *
- * UN solo sistema para todo lo que se declara: campos y metodos de struct,
- * overlay, clase, `impl` y concepto.  De menos a mas:
- *
- * | nivel       | quien lo ve                          |
- * | :---------- | :----------------------------------- |
- * | `private`   | solo el tipo que lo escribe          |
- * | `protected` | el tipo y sus derivados              |
- * | sin palabra | el propio modulo                     |
- * | `internal`  | los modulos del mismo paquete        |
- * | `public`    | todos                                |
- *
- * Un `impl` sobre un tipo es codigo de FUERA del tipo: no ve sus privados.
- */
-enum class Visibility : uint8_t {
-    Unwritten, ///< sin palabra: el propio modulo
-    Public,    ///< `public`
-    Internal,  ///< `internal`: el paquete
-    Protected, ///< `protected`: el tipo y sus derivados
-    Private,   ///< `private`: solo el tipo
 };
 
 /**

@@ -2230,6 +2230,15 @@ modulo_case("mod_ns_interpolation", "ns_interpolation", 42)
 modulo_case("mod_ns_xmod_comptime", "ns_xmod_comptime", 42)
 modulo_case("mod_ns_xmod_concept", "ns_xmod_concept", 42)
 modulo_case("mod_generic_fn_infer", "generic_fn_infer", 42)
+# La visibilidad de los miembros cruza el modulo.  La interfaz no la llevaba, asi
+# que un `private` de un tipo importado se usaba desde fuera como uno publico.  El
+# modulo `banco` es el mismo para los tres casos: los de error lo toman por su
+# `vx.toml` en vez de copiarlo.
+modulo_case("mod_vis_cruza_modulo", "vis_cruza_modulo", 42)
+fails_case("mod_vis_privado", "un `private` de un tipo importado no se usa desde otro modulo (tampoco heredado)",
+           "vis_cruza_modulo_privado_err/main.vx", "VX2164")
+fails_case("mod_vis_protegido", "un `protected` de un tipo importado no se usa desde otro modulo",
+           "vis_cruza_modulo_protegido_err/main.vx", "VX2165")
 
 
 def _resumen_unitarios(salida):

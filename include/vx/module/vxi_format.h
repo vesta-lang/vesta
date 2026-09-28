@@ -35,6 +35,7 @@
 #include <vector>
 
 #include "vx/comptime/comptime_unit_names.h" // los nombres del conjunto comptime
+#include "vx/module/vxi_member_attrs.h" // lo que un miembro dice de si
 
 namespace vx {
 
@@ -81,7 +82,11 @@ inline constexpr uint32_t VXI_MAGIC = 0x49584556u;
  * @ref kGenTplHelperOnly del campo `kind`).  Una plantilla privada que usaba
  * una publica no viajaba, y al instanciar la publica en quien importa salia
  * "funcion no declarada" en `<vxi-templates:>`. */
-inline constexpr uint16_t VXI_FORMAT_VERSION = 23;
+/* v24: cada campo y cada metodo de un struct o una clase lleva detras su
+ * bloque de atributos (@ref VxiMemberAttrs: visibilidad y tipo que lo
+ * escribio).  Sin el, un miembro `private` de un tipo importado se usaba desde
+ * otro modulo como uno publico. */
+inline constexpr uint16_t VXI_FORMAT_VERSION = 24;
 
 /// Bit del campo `kind` de una plantilla exportada: viaja solo porque otra
 /// plantilla la usa, y quien importa no la expone al codigo del usuario.  El
@@ -329,12 +334,18 @@ struct VxiSymbol {
         uint32_t size = 0;
         uint8_t bit_offset = 0;
         uint8_t bit_width = 0;
+        VxiMemberAttrs attrs; ///< quien lo ve y quien lo escribio
     };
     std::vector<FieldInfo> fields;
     /// (CLASS) Nombre de la superclase o vacio.
     std::string super_class;
     /// (CLASS) Interfaces implementadas (nombres).
     std::vector<std::string> interfaces;
+    /// Bits de @ref MethodInfo::flags.  Valores ESTABLES: se persisten.
+    static constexpr uint8_t kMethodStatic = 1u << 0;      ///< sin receptor
+    static constexpr uint8_t kMethodConstructor = 1u << 1; ///< constructor
+    static constexpr uint8_t kMethodVirtual = 1u << 2;     ///< por la vtable
+    static constexpr uint8_t kMethodComptime = 1u << 3;    ///< ctor comptime
     /// (CLASS)  M6.b: firmas de metodos publicos para que el
     /// consumidor pueda emitir CALLVIRT correctamente cross-module.
     /// Cierra L.6.
@@ -343,10 +354,10 @@ struct VxiSymbol {
         std::string return_type;              ///< typename canonico
         std::vector<std::string> param_types; ///< typenames canonicos
         uint32_t vtable_index = 0;
-        uint8_t flags =
-            0; ///< bit0=is_static, bit1=is_constructor, bit2=is_virtual
+        uint8_t flags = 0; ///< bits @c kMethod* de @ref VxiSymbol
         std::string mangled_label; ///< label real en .vel para CALLVM directo
                                    ///< si !is_virtual
+        VxiMemberAttrs attrs;      ///< quien lo ve y quien lo escribio
     };
     std::vector<MethodInfo> methods;
     /// (STRUCT / CLASS) Tamano total + alineacion.
@@ -509,6 +520,7 @@ struct VxiModule {
         std::vector<std::string> param_types; ///< tipos de los params
         std::string mangled_label;            ///< label real (target_key__name)
         bool target_is_class = false;
+        VxiMemberAttrs attrs; ///< v24: quien lo ve
     };
     std::vector<ExtMethod> ext_methods;
     ///  NS.3 (v10): identidad del PAQUETE que produjo este .vxi.
