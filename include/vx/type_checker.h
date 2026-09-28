@@ -5099,7 +5099,9 @@ class TypeChecker {
     struct PendingBoundCheck {
         std::string concept_name; ///< concepto exigido
         Type arg;                 ///< type-arg concreto
-        std::string type_param;   ///< nombre del param (para el mensaje)
+        /// Los argumentos del concepto, ya concretos (`View<i64>`: `[i64]`).
+        std::vector<Type> concept_args;
+        std::string type_param; ///< nombre del param (para el mensaje)
         SourceLoc loc;
     };
     std::vector<PendingBoundCheck> pending_bound_checks_;

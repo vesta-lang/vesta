@@ -27,6 +27,7 @@
 #include "vx/type_checker.h"
 
 #include "vx/generics/generic_clone.h"
+#include "vx/generics/generic_infer.h" // escribir un tipo como en el fuente
 #include "vx/project/module_names.h" // el simbolo de un nombre cualificado
 
 #include "util/os/thread_slot.h" // el contador de recursion, sin `thread_local`
@@ -393,6 +394,47 @@ void TypeChecker::note_instance_requirement(const Type &target,
     }
 }
 
+/**
+ * @brief Los argumentos de un concepto de una cota, concretos para una
+ *        instancia: en `<T, V: View<T>>` con `T = i64`, `[i64]`.
+ * @param tc     El comprobador.
+ * @param c      El concepto tal como se escribio en la cota.
+ * @param params Los parametros de la plantilla.
+ * @param args   Sus argumentos concretos.
+ * @return Los argumentos del concepto, resueltos.
+ */
+static ConceptArgs bound_concept_args(const TypeChecker &tc,
+                                      const ast::ConceptRef &c,
+                                      const std::vector<std::string> &params,
+                                      const std::vector<Type> &args) {
+    const vxgen::GenSubst g{&params, &args};
+    ConceptArgs out;
+    out.reserve(c.args.size());
+    for (const auto &a : c.args)
+        out.push_back(resolve_concept_type(tc, a.get(), g));
+    return out;
+}
+
+/**
+ * @brief Como se escribe para el usuario un concepto con sus argumentos:
+ *        `View<i64>`.  Sin argumentos, el nombre a secas.
+ * @param tc   El comprobador (para escribir los tipos como en el fuente).
+ * @param name El concepto.
+ * @param args Sus argumentos.
+ * @return El texto.
+ */
+static std::string written_concept(const TypeChecker &tc,
+                                   const std::string &name,
+                                   const ConceptArgs &args) {
+    if (args.empty()) return name;
+    std::string out = name + "<";
+    for (size_t i = 0; i < args.size(); ++i) {
+        if (i != 0) out += ", ";
+        out += tc.written_type_name(args[i]);
+    }
+    return out + ">";
+}
+
 bool TypeChecker::check_type_bounds(const std::vector<ast::TypeBound> &bounds,
                                     const std::vector<std::string> &params,
                                     const std::vector<Type> &args,
@@ -433,15 +475,18 @@ bool TypeChecker::check_type_bounds(const std::vector<ast::TypeBound> &bounds,
         const bool needs_layout =
             ak == PrimitiveKind::STRUCT || ak == PrimitiveKind::CLASS ||
             args[idx].is_valued_enum || !args[idx].struct_name.empty();
-        for (const auto &cname : b.concepts) {
+        for (const auto &c : b.concepts) {
+            const std::string &cname = c.name.str();
+            // `<V: View<T>>`: los argumentos del concepto, ya concretos.
+            ConceptArgs cargs = bound_concept_args(*this, c, params, args);
             if (!needs_layout) {
                 const ConceptEval ev =
-                    comptime_eval_concept(*this, cname, args[idx]);
+                    comptime_eval_concept(*this, cname, args[idx], cargs);
                 if (ev.found) {
                     if (!ev.satisfied) {
-                        report_unsatisfied_bound(diags_, loc,
-                                                 written_type_name(args[idx]),
-                                                 cname, b.type_param);
+                        report_unsatisfied_bound(
+                            diags_, loc, written_type_name(args[idx]),
+                            written_concept(*this, cname, cargs), b.type_param);
                         all_ok = false;
                     }
                     continue; // contestado: no hace falta encolarlo
@@ -449,6 +494,7 @@ bool TypeChecker::check_type_bounds(const std::vector<ast::TypeBound> &bounds,
             }
             PendingBoundCheck pc;
             pc.concept_name = cname;
+            pc.concept_args = std::move(cargs);
             pc.arg = args[idx];
             pc.type_param = b.type_param;
             pc.loc = loc;
@@ -491,12 +537,13 @@ bool TypeChecker::method_available_for_subst(
             continue;
         }
         const Type &arg = container_args[idx];
-        for (const auto &cname : b.concepts) {
-            const ConceptEval ev = comptime_eval_concept(*this, cname, arg);
+        for (const auto &c : b.concepts) {
+            const ConceptEval ev = comptime_eval_concept(
+                *this, c.name.str(), arg,
+                bound_concept_args(*this, c, container_params, container_args));
             if (!ev.found) {
-                diags_.error(b.loc, "concepto desconocido '" + cname +
-                                        "' en la clausula where del metodo '" +
-                                        m->name + "'");
+                diags_.diag(b.loc, DiagLevel::ERR, "VX2109",
+                            {c.name.str(), b.type_param});
                 continue; // no filtrar por un concepto invalido
             }
             if (!ev.satisfied) available = false;
@@ -511,7 +558,16 @@ void TypeChecker::record_unavailable_method(
     for (const auto &b : m->type_bounds) {
         for (const auto &c : b.concepts) {
             if (!reqs.empty()) reqs += ", ";
-            reqs += b.type_param + ": " + c;
+            // Como se escribio, con sus argumentos: `T: View<U>`.
+            reqs += b.type_param + ": " + c.name.str();
+            if (!c.args.empty()) {
+                reqs += "<";
+                for (size_t i = 0; i < c.args.size(); ++i) {
+                    if (i != 0) reqs += ", ";
+                    reqs += generics::type_node_text(c.args[i].get());
+                }
+                reqs += ">";
+            }
         }
     }
     unavailable_methods_[container_mangled].push_back({m->name, reqs});
@@ -526,17 +582,18 @@ void TypeChecker::verify_pending_type_bounds() {
         std::vector<PendingBoundCheck> batch;
         batch.swap(pending_bound_checks_);
         for (const auto &pc : batch) {
-            const ConceptEval ev =
-                comptime_eval_concept(*this, pc.concept_name, pc.arg);
+            const ConceptEval ev = comptime_eval_concept(
+                *this, pc.concept_name, pc.arg, pc.concept_args);
             if (!ev.found) {
                 diags_.diag(pc.loc, DiagLevel::ERR, "VX2109",
                             {pc.concept_name, pc.type_param});
                 continue;
             }
             if (!ev.satisfied)
-                report_unsatisfied_bound(diags_, pc.loc,
-                                         written_type_name(pc.arg),
-                                         pc.concept_name, pc.type_param);
+                report_unsatisfied_bound(
+                    diags_, pc.loc, written_type_name(pc.arg),
+                    written_concept(*this, pc.concept_name, pc.concept_args),
+                    pc.type_param);
         }
     }
 }

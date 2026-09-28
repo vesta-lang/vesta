@@ -7558,21 +7558,7 @@ void Parser::parse_type_params_with_bounds(
             ast::TypeBound tb;
             tb.type_param = pname;
             tb.loc = bl;
-            while (current_.kind == TokenKind::IDENTIFIER) {
-                // NS.2: concepto opcionalmente cualificado (`mat.Numerico`).
-                std::string cname = consume().lexeme;
-                while (current_.kind == TokenKind::DOT) {
-                    (void)consume(); // '.'
-                    if (current_.kind != TokenKind::IDENTIFIER) break;
-                    cname += "." + consume().lexeme;
-                }
-                tb.concepts.push_back(std::move(cname));
-                if (current_.kind == TokenKind::PLUS) {
-                    (void)consume(); // '+' : otro concepto exigido
-                    continue;
-                }
-                break;
-            }
+            parse_bound_concepts(tb);
             bounds.push_back(std::move(tb));
         }
         if (!match(TokenKind::COMMA)) break;
@@ -7600,21 +7586,7 @@ bool Parser::parse_generic_head(
             ast::TypeBound tb;
             tb.type_param = static_cast<ast::NamedTypeNode *>(tn.get())->name;
             tb.loc = bl;
-            while (current_.kind == TokenKind::IDENTIFIER) {
-                // NS.2: concepto opcionalmente cualificado (`mat.Numerico`).
-                std::string cname = consume().lexeme;
-                while (current_.kind == TokenKind::DOT) {
-                    (void)consume(); // '.'
-                    if (current_.kind != TokenKind::IDENTIFIER) break;
-                    cname += "." + consume().lexeme;
-                }
-                tb.concepts.push_back(std::move(cname));
-                if (current_.kind == TokenKind::PLUS) {
-                    (void)consume(); // '+' : otro concepto exigido
-                    continue;
-                }
-                break;
-            }
+            parse_bound_concepts(tb);
             bounds.push_back(std::move(tb));
             saw_bound = true;
         }
@@ -7636,21 +7608,7 @@ void Parser::parse_where_clause(std::vector<ast::TypeBound> &bounds) {
         tb.loc = bl;
         if (current_.kind == TokenKind::COLON) {
             (void)consume(); // ':'
-            while (current_.kind == TokenKind::IDENTIFIER) {
-                // NS.2: concepto opcionalmente cualificado (`mat.Numerico`).
-                std::string cname = consume().lexeme;
-                while (current_.kind == TokenKind::DOT) {
-                    (void)consume(); // '.'
-                    if (current_.kind != TokenKind::IDENTIFIER) break;
-                    cname += "." + consume().lexeme;
-                }
-                tb.concepts.push_back(std::move(cname));
-                if (current_.kind == TokenKind::PLUS) {
-                    (void)consume();
-                    continue;
-                }
-                break;
-            }
+            parse_bound_concepts(tb);
         } else {
             error_here(
                 "se esperaba ':' tras el type-param en la clausula where");

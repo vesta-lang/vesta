@@ -1,0 +1,21 @@
+namespace ejemplos.cota_con_argumentos_err;
+
+// Una cota con ARGUMENTOS que no se cumple: `<C: Da<i64>>` pide un `dame()`
+// que devuelva un i64, y `Otra` lo tiene pero devuelve un f64.  El error cita
+// el concepto con su argumento, `Da<i64>` (VX2108).
+concept Da<Self, E> {
+	E dame();
+}
+
+struct Otra {
+	f64 v;
+
+	f64 dame() => this.v;
+}
+
+i64 saca<C: Da<i64>>(C c) => 1;
+
+i32 main() {
+	Otra o = {.v = 1.5};
+	return (i32)saca(o);
+}

@@ -98,6 +98,7 @@ add_library(vx_lib STATIC
     parser/for_stmt.cpp
     # Mirar hacia delante si empieza un tipo y donde acaba.
     parser/type_lookahead.cpp
+    parser/concept_bounds.cpp
     # Que declara el modulo, indexado UNA vez.  Buscar una declaracion por
     # nombre estaba escrito a mano, con un recorrido del modulo entero, en 33
     # sitios del frontend; varios corren por cada identificador del programa.

@@ -85,10 +85,26 @@ struct ConCadena {
 }
 i64 bytes_de<T: Pod>() => type.size<T>();
 
+// Un concepto con ARGUMENTOS: el primer parametro es el tipo que lo cumple y
+// los demas se dan en la cota.  `<C: Da<i64>>` es `Da<C, i64>`: "C tiene un
+// `dame()` que devuelve un i64".  Vale en la cabeza y en `where`.
+concept Da<Self, E> {
+	E dame();
+}
+struct Ficha {
+	i64 v;
+
+	i64 dame() => this.v;
+}
+i64 saca<C: Da<i64>>(C c) => c.dame();
+i64 saca_w<C>(C c) where C: Da<i64> => c.dame();
+
 i32 main() {
 	if (bytes_de<Plano>() != 16) return 1;
 	if (!Pod<Plano>() || !Pod<i64>()) return 2;
 	if (Pod<ConDtor>() || Pod<ConCadena>() || Pod<string>()) return 3;
+	Ficha fi = {.v = 20};
+	if (saca(fi) + saca_w(fi) != 40) return 4;
 
 	i64 mx = maximo<i64>(10, 30); // built-in Comparable      -> 30
 	i64 sm = sumar<i64>(3, 4);    // user MiNumero (where)     -> 7

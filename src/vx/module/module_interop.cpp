@@ -2212,8 +2212,9 @@ void inject_generic_templates_from_vxi(
     auto rename_bounds = [&](std::vector<ast::TypeBound> &bounds) {
         for (auto &b : bounds)
             for (auto &c : b.concepts) {
-                auto it = concept_rename.find(c);
-                if (it != concept_rename.end()) c = it->second;
+                auto it = concept_rename.find(c.name.str());
+                if (it != concept_rename.end())
+                    c.name = util::InternedName::intern(it->second);
             }
     };
     /* Y lo mismo DENTRO del predicado de un concepto, que puede llamar a otro

@@ -53,6 +53,7 @@
 #include <utility>
 #include <vector>
 
+#include "util/name_pool.h"    // nombres internados (conceptos de una cota)
 #include "vx/builtin_names.h" // `@Provides(<builtin>)` guarda el VALOR
 #include "vx/diagnostic.h"
 #include "vx/types.h"
@@ -1964,9 +1965,29 @@ struct ParamDecl : Node {
  * "Sized"]).  El type-arg concreto debe satisfacer TODOS los conceptos.
  * La verificacion es compile-time (al monomorphizar); cero codigo emitido.
  */
+/**
+ * @brief Un concepto exigido en una cota, con sus argumentos:
+ *        `View<i64>` en `<V: View<i64>>`.
+ *
+ * El tipo que se comprueba NO va en @c args: es el parametro de la cota (el
+ * primero del concepto, por la regla de los conceptos).  `<V: View<i64>>` es
+ * `View<V, i64>`.
+ *
+ * Los argumentos se COMPARTEN entre copias (`shared_ptr`) y no son dueno unico
+ * como el resto del arbol: una cota se copia -- a los metodos que la heredan,
+ * a la lista de las que se comprueban al instanciar --, y todas hablan del
+ * mismo tipo escrito.  El renombrado por namespace lo reescribe una vez y lo
+ * ven todas.
+ */
+struct ConceptRef {
+    util::InternedName name; ///< como se escribio (`View`, `mat.Numerico`)
+    std::vector<std::shared_ptr<TypeNode>> args; ///< `<i64>`; vacio si no lleva
+    SourceLoc loc;                               ///< donde se escribio
+};
+
 struct TypeBound {
-    std::string type_param;            ///< nombre del type-param (e.g. "T")
-    std::vector<std::string> concepts; ///< conceptos exigidos (A + B + ...)
+    std::string type_param;           ///< nombre del type-param (e.g. "T")
+    std::vector<ConceptRef> concepts; ///< conceptos exigidos (A + B<x> + ...)
     SourceLoc loc;
 };
 

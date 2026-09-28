@@ -464,6 +464,11 @@ class Parser {
     /// anyade los bounds a @p bounds (acumula con los inline si los hubo).
     void parse_where_clause(std::vector<ast::TypeBound> &bounds);
 
+    /// @brief La lista de conceptos de una cota, tras el `:`:
+    ///        `C + ns.D<i64, T>`.  Un dueno para los tres sitios que la leen.
+    /// @param tb La cota que se rellena (@c concepts).
+    void parse_bound_concepts(ast::TypeBound &tb);
+
     /// @brief Parsea el patron `<i64>` / `<T*>` de una especializacion (#7).
     ///
     /// Precondicion: @c current_ es '<'.  Rellena @p pattern con los

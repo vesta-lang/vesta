@@ -3690,6 +3690,7 @@ fails_case("ovr601", "un @SyncImpl sin su pareja no compila: el error se situa e
 modes3_case("decl_varios_nombres", "una declaracion nombra varias variables (`f64 dx = a, dy = b;`, tambien con `const` y con dimensiones por nombre) y el `for` declara varias y da varios pasos (`for (auto i = 1, doble = ...; ...; i = doble(i), n++)`); con `auto` cada nombre infiere el suyo, y `auto` vale en el `for`, donde antes daba tipo desconocido", "603_declaracion_varios_nombres.vx", 42)
 fails_case("neg_generico_const", "una plantilla que escribe por un `const T*` no compila, igual que sin parametros de tipo: al instanciarla, el clon de la firma copiaba la forma del tipo y perdia `const`, `nonnull`, `volatile`, `VirtualPtr` y la ABI de los tipos funcion", "602_neg_generico_const.vx", r"602_neg_generico_const.vx:14:.*const")
 fails_case("gen224", "constraint violada (Punto no es Numeric)", "224_conceptos_error.vx", "VX2108", line=3673)
+fails_case("cota617", "cota con argumentos `<C: Da<i64>>` que no se cumple: el error cita Da<i64>", "617_cota_con_argumentos_err.vx", "Da<i64>", line=3673)
 r0_case("gen225", "especializacion total + parcial (Caja<T> / Caja<i64> / Caja<Punto> / Caja<T*>)", "225_especializacion.vx", 42, line=3676)
 r0_case("gen226", "especializacion avanzada (clase + funcion + patron anidado Caja<Inner<T>>)", "226_especializacion_avanzada.vx", 42, line=3677)
 r0_case("gen227", "concepts avanzado (firma estructural completa + where en metodos genericos)", "227_concepts_avanzado.vx", 42, line=3678)

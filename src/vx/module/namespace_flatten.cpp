@@ -390,8 +390,12 @@ void rewrite_bounds_(
     const std::unordered_map<std::string, std::string> &rename_map) {
     for (auto &b : bounds) {
         for (auto &c : b.concepts) {
-            auto it = rename_map.find(c);
-            if (it != rename_map.end()) c = it->second;
+            auto it = rename_map.find(c.name.str());
+            if (it != rename_map.end())
+                c.name = util::InternedName::intern(it->second);
+            // Y los tipos de sus argumentos: `View<Celda>` nombra un tipo del
+            // namespace igual que cualquier otra firma.
+            for (auto &arg : c.args) rewrite_refs_in_type_(arg.get(), rename_map);
         }
     }
 }
