@@ -22,6 +22,8 @@
 #include "vx/module/module_interop.h"
 #include "vx/module/vxi_format.h"
 #include "vx/module/vxi_members.h" // un miembro del .vxi
+#include "vx/module/import_origin.h" // con que se califica lo importado
+#include "vx/project/module_imports.h" // import_qualifier
 #include "vx/type_checker.h"
 #include "vx/diagnostic.h"
 #include "vx/lexer.h"
@@ -381,10 +383,38 @@ void test_member_attr_rules() {
           "heredado: lo escribio la base");
 }
 
+// ------------------------------------------------------------------
+// Test 7: UNA regla para calificar lo que llega de otro modulo.
+// ------------------------------------------------------------------
+void test_import_origin_rule() {
+    std::cout << "\n[Test] calificacion de lo importado\n";
+    const vx::ImportOrigin lib = vx::import_origin_of("lib");
+    CHECK(vx::imported_symbol(lib, "", "Punto") == "lib__Punto",
+          "sin namespace: por el modulo");
+    CHECK(vx::imported_symbol(lib, "geo.formas", "Punto") ==
+              "geo__formas__Punto",
+          "con namespace: por el namespace declarado, no por el modulo");
+    CHECK(vx::imported_symbol(lib, "", "base__Punto") == "base__Punto",
+          "ya calificado (re-export): una sola vez");
+    CHECK(vx::imported_symbol(lib, "geo", "base__Punto") == "base__Punto",
+          "ya calificado con namespace: una sola vez");
+
+    vx::ImportRequest por_ruta;
+    por_ruta.module_name = "util";
+    CHECK(vx::import_qualifier(por_ruta) == "util", "import por ruta: el modulo");
+    vx::ImportRequest por_ns;
+    por_ns.module_name = "x86_64";
+    por_ns.by_namespace = true;
+    por_ns.ns_path = "std.types";
+    CHECK(vx::import_qualifier(por_ns) == "std__types",
+          "import por namespace: el namespace, no el fichero que lo resolvio");
+}
+
 } // namespace
 
 int main() {
     std::cout << "=== test_vx_module_interop:  M.2.d ===\n";
+    test_import_origin_rule();
     test_typedef_roundtrip();
     test_struct_roundtrip();
     test_only_rename();

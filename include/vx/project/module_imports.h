@@ -183,6 +183,20 @@ std::vector<ImportRequest> collect_imports(
     const std::string &self_path);
 
 /**
+ * @brief Con que se califica lo que llega por @p req y no declara namespace
+ *        propio.
+ *
+ * Por NAMESPACE si el import lo nombra, no por fichero: `std.types` lo
+ * declaran `types.vx`, `types/arm64.vx` y `types/x86_64.vx`, y el resolver da
+ * el primero que encuentra; calificar por fichero daba al mismo `uintptr` la
+ * identidad `arm64__uintptr` o `std__types__uintptr` segun el disco.
+ *
+ * @param req El import.
+ * @return El calificador.
+ */
+std::string import_qualifier(const ImportRequest &req);
+
+/**
  * @brief Huella de lo que un modulo VE de una de sus dependencias.
  *
  * Es lo unico que le puede afectar de ella, y por eso es lo que se guarda en

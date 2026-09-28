@@ -5,7 +5,8 @@
  */
 #include "vx/project/module_imports.h"
 
-#include "vx/module/vxi_format.h"   // vxi_hash_de_simbolos
+#include "vx/module/namespace_names.h" // namespace_symbol_path
+#include "vx/module/vxi_format.h"      // vxi_hash_de_simbolos
 #include "vx/project/module_work.h" // ProjectModuleWork
 
 #include <unordered_set>
@@ -210,6 +211,12 @@ std::vector<ImportRequest> collect_imports(
         out.push_back(std::move(req));
     }
     return out;
+}
+
+std::string import_qualifier(const ImportRequest &req) {
+    return (req.by_namespace && !req.ns_path.empty())
+               ? namespace_symbol_path(req.ns_path)
+               : req.module_name;
 }
 
 uint64_t used_surface_hash(const VxiModule &dep_vxi, const ImportRequest &req) {

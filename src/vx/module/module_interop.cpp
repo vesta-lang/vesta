@@ -32,6 +32,7 @@
 #include "vx/types.h"
 #include "vx/module/vxi_format.h"
 #include "vx/module/vxi_members.h" // un miembro del .vxi, en UN sitio
+#include "vx/module/import_origin.h" // con que se califica lo importado
 #include "vx/module/namespace_names.h" // la forma fisica de un nombre con ruta
 #include "vx/project/module_names.h"   // la de un miembro de un modulo
 #include "vx/diagnostic.h" // #cross-module-generics: re-parse de templates
@@ -2500,6 +2501,7 @@ void import_vxi_into_typechecker(
     const std::vector<TypeChecker::VxiOnlyEntry> &only_symbols,
     const std::string &module_name, const SourceLoc &at) {
     if (only_symbols.empty()) return;
+    const ImportOrigin origin = import_origin_of(module_name);
     /* Donde se escribio este `import`, para que un choque de nombres entre dos
      * de ellos se explique AHI.  Se pone y se quita alrededor de la inyeccion:
      * lo que se declare mientras tanto viene de esta linea. */
@@ -2560,13 +2562,8 @@ void import_vxi_into_typechecker(
         }
         const std::string local =
             os_ptr->rename.empty() ? os_ptr->name : os_ptr->rename;
-        // MISMA regla canonica que el registro de layouts de abajo: sin
-        // `namespace` declarado la clave es `<modulo>__<nombre>`.
-        std::string mangled;
-        {
-            mangled = s.ns_path.empty() ? qualify_once_(module_name, s.name)
-                                        : qualify_once_(s.ns_path, s.name);
-        }
+        // MISMA regla canonica que el registro de layouts de abajo.
+        const std::string mangled = imported_symbol(origin, s.ns_path, s.name);
         // Type base local ya construido: se usa DIRECTO (sin
         // resolve_type_string) porque el struct que porta el metodo todavia no
         // esta registrado cuando se resuelven sus propios param_types
@@ -2633,15 +2630,10 @@ void import_vxi_into_typechecker(
         // otro modulo ("tipo (T*) incompatible con parametro (mod__T*)").
         // Se registra bajo la canonica y se ata `local_name` como ALIAS, que es
         // justo lo que TYPEDEF_NEW ya hace via stable_nominal_id.
-        std::string canon;
-        {
-            // MISMA regla que la ruta namespaced (PASE 1b): sin `namespace`
-            // declarado, la clave es `<modulo>__<nombre>`.  Si aqui se usara el
-            // nombre pelado, un newtype importado con `only` obtendria un
-            // stable_nominal_id distinto al de las firmas -> dos identidades.
-            canon = s.ns_path.empty() ? qualify_once_(module_name, s.name)
-                                      : qualify_once_(s.ns_path, s.name);
-        }
+        // MISMA regla que la ruta namespaced: si aqui se usara el nombre
+        // pelado, un newtype importado con `only` obtendria un
+        // stable_nominal_id distinto al de las firmas -> dos identidades.
+        const std::string canon = imported_symbol(origin, s.ns_path, s.name);
 
         // Recordar el ORIGEN del simbolo importado (namespace donde se declara
         // + nombre publico).  Sin esto, un modulo que lo RE-EXPORTA lo escribe
@@ -2871,6 +2863,7 @@ void register_namespace_for_import(TypeChecker &tc,
                                    const VxiModule &mod) {
     const uint32_t ns_idx =
         tc.register_imported_namespace(local_name, module_name);
+    const ImportOrigin origin = import_origin_of(module_name);
     //  M7.b: para que `lib.MyClass` funcione como tipo qualified
     // (clase, struct, enum o typedef), necesitamos:
     //   1. Inyectar el layout en class_layouts_ / struct_layouts_ /
@@ -2889,9 +2882,8 @@ void register_namespace_for_import(TypeChecker &tc,
     auto resolve_with_mangled_fallback = [&](const std::string &name) -> Type {
         Type t = tc.resolve_type_string(name);
         if (t.kind != PrimitiveKind::VOID || name == "void") return t;
-        // Si la resolucion plana fallo, intentar con mangling.
-        const std::string mangled = module_member_symbol(module_name, name);
-        return tc.resolve_type_string(mangled);
+        // Si la resolucion plana fallo, intentar con el nombre del modulo.
+        return tc.resolve_type_string(imported_symbol(origin, "", name));
     };
 
     // PASE 1a: pre-registrar el SKELETON de cada tipo (solo nombre + size,
@@ -2917,9 +2909,8 @@ void register_namespace_for_import(TypeChecker &tc,
         // Depende de que `ns_path` sobreviva a los re-exports (lo garantiza el
         // registro del origen al importar): sin eso, los nombres ya venian
         // cualificados y volver a prefijarlos daba `ch__top__ch__base__handle`.
-        const std::string mangled_pre = s.ns_path.empty()
-                                            ? qualify_once_(module_name, s.name)
-                                            : qualify_once_(s.ns_path, s.name);
+        const std::string mangled_pre =
+            imported_symbol(origin, s.ns_path, s.name);
         switch (s.kind) {
         case VxiSymbolKind::STRUCT: {
             StructLayout L;
@@ -2964,16 +2955,13 @@ void register_namespace_for_import(TypeChecker &tc,
     for (const auto &s : mod.symbols) {
         if (s.kind == VxiSymbolKind::FUNCTION) continue;
         if (s.kind == VxiSymbolKind::GLOBAL_VAR) continue;
-        // M7.b: tipos cross-module via namespace qualified.
-        // Compute mangled name = module_name + "__" + s.name.  Asi el
-        // tipo no colisiona con un tipo del mismo nombre en el consumer.
-        // NS.2: si el tipo pertenece a un `namespace X;` DECLARADO por el dep,
-        // su label real en el dep es `X__Tipo` (ns-mangled por flatten); usamos
-        // ESE como clave local para que fields/fns que lo referencian por
-        // `X__Tipo` resuelvan directo, y para que `__new_X__Tipo` coincida.
-        const std::string mangled =
-            s.ns_path.empty() ? module_member_symbol(module_name, s.name)
-                              : namespace_member_symbol(s.ns_path, s.name);
+        // M7.b: tipos cross-module via namespace qualified, con la MISMA clave
+        // que el esqueleto del pase 1a.  Antes este pase volvia a calificar lo
+        // que ya venia calificado (re-exports) y el esqueleto no: el mismo tipo
+        // quedaba bajo dos claves.  NS.2: si el tipo pertenece a un `namespace
+        // X;` DECLARADO por el dep, la clave es `X__Tipo` (la de su label real),
+        // para que `__new_X__Tipo` coincida.
+        const std::string mangled = imported_symbol(origin, s.ns_path, s.name);
         switch (s.kind) {
         case VxiSymbolKind::TYPEDEF_ALIAS:
         case VxiSymbolKind::TYPEDEF_NEW: {
@@ -3122,7 +3110,7 @@ void register_namespace_for_import(TypeChecker &tc,
             TypeChecker::ImportedNamespace::Sym sym;
             sym.kind = 1; // Variable / Constant
             sym.mangled_label = s.mangled_label.empty()
-                                    ? module_member_symbol(module_name, s.name)
+                                    ? imported_symbol(origin, s.ns_path, s.name)
                                     : s.mangled_label;
             sym.var_type = t;
             sym.has_const_value = s.is_const && s.has_init_value;
@@ -3227,7 +3215,7 @@ void register_namespace_for_import(TypeChecker &tc,
             TypeChecker::ImportedNamespace::Sym sym;
             sym.kind = 1;
             sym.mangled_label = s.mangled_label.empty()
-                                    ? module_member_symbol(module_name, s.name)
+                                    ? imported_symbol(origin, s.ns_path, s.name)
                                     : s.mangled_label;
             sym.var_type = t;
             sym.has_const_value = s.is_const && s.has_init_value;

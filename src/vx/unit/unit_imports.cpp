@@ -11,7 +11,6 @@
 
 #include "vx/compiler.h"
 #include "vx/module/module_interop.h"
-#include "vx/module/namespace_names.h" // namespace_symbol_path
 #include "vx/module/vxi_format.h"
 #include "vx/project/module_imports.h"
 #include "vx/project/module_work.h"
@@ -182,9 +181,7 @@ void inject_plain_import(const UnitEnv &env, ProjectModuleWork &pm,
         }
         // Cualificar por NAMESPACE, no por fichero: en un namespace
         // parcial todos sus ficheros deben dar la MISMA identidad.
-        const std::string qual = (req.by_namespace && !req.ns_path.empty())
-                                     ? namespace_symbol_path(req.ns_path)
-                                     : req.module_name;
+        const std::string qual = import_qualifier(req);
         auto missing = import_vxi_into_typechecker_with_missing(
             *pm.tc, dep_vxi, synth_only, qual, req.loc);
         (void)missing; // best-effort; los privados ya fueron
@@ -262,17 +259,8 @@ bool inject_only_import(const UnitEnv &env, ProjectModuleWork &pm,
                                       dep_alias_srcs);
     // M2.d: inyeccion directa via only.  M6.a.3: usar la variante
     // que devuelve los missing para emitir diagnostico claro.
-    /* Cualificar por NAMESPACE, no por fichero.  Hacerlo con el
-     * nombre de FICHERO era el origen de que un mismo tipo tuviera
-     * varias identidades: `std.types` lo declaran `types.vx`,
-     * `types/arm64.vx` y `types/x86_64.vx`, y el resolver devuelve
-     * el PRIMERO que encuentra el escaneo del disco -- el mismo
-     * `uintptr` entraba como `arm64__uintptr` o como
-     * `std__types__uintptr` y no unificaba consigo mismo --.  El
-     * namespace es el mismo para todos sus ficheros. */
-    const std::string qual = (req.by_namespace && !req.ns_path.empty())
-                                 ? namespace_symbol_path(req.ns_path)
-                                 : req.module_name;
+    // Cualificar por NAMESPACE, no por fichero (ver import_qualifier).
+    const std::string qual = import_qualifier(req);
     auto missing = import_vxi_into_typechecker_with_missing(
         *pm.tc, dep_vxi, req.only_symbols, qual, req.loc);
     // Namespace PARCIAL: un `import std.types only uintptr`

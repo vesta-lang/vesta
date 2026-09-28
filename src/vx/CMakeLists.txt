@@ -601,6 +601,8 @@ add_library(vx_lib STATIC
     module/module_interop.cpp
     # Un campo o un metodo de un tipo importado: del .vxi a la ficha.
     module/vxi_members.cpp
+    # Con que se califica lo que llega de otro modulo, en UN sitio.
+    module/import_origin.cpp
     module/namespace_flatten.cpp
     # El nombre fisico de lo declarado en un namespace (`a.b.f` -> `a__b__f`):
     # una representacion, en un solo sitio.
