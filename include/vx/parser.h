@@ -469,6 +469,13 @@ class Parser {
     /// @param tb La cota que se rellena (@c concepts).
     void parse_bound_concepts(ast::TypeBound &tb);
 
+    /// @brief Un nombre de concepto (o interfaz) con sus argumentos:
+    ///        `View<T>`, `mat.Numerico`.  Lo leen las cotas y las cabeceras
+    ///        `struct S : ...` / `class C : ...`.
+    /// Precondicion: @c current_ es un identificador.
+    /// @return La referencia.
+    ast::ConceptRef parse_concept_ref();
+
     /// @brief Parsea el patron `<i64>` / `<T*>` de una especializacion (#7).
     ///
     /// Precondicion: @c current_ es '<'.  Rellena @p pattern con los

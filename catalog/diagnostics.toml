@@ -2976,6 +2976,17 @@ es = "el Result de esta llamada se descarta: asignalo y compruebalo con isOk()/v
 en = "slicing a string with 's[a..b]' is only built for native code; in the interpreter and the JIT use substr(s, a, len)"
 es = "cortar una cadena con 's[a..b]' solo se construye en codigo nativo; en el interprete y el JIT usa substr(s, a, len)"
 
+# `struct S : C` con un C que no existe.  {0} el tipo, {1} el nombre escrito.
+[VX2159]
+en = "'{0}' declares ': {1}', and '{1}' is neither a known concept nor a base it can extend"
+es = "'{0}' declara ': {1}', y '{1}' no es un concepto conocido ni una base que pueda extender"
+
+# `struct S : C<...>` que no cumple C.  {0} el tipo, {1} el concepto con sus
+# argumentos (`Da<i64>`).
+[VX2160]
+en = "'{0}' does not satisfy the concept '{1}' it declares (directly, or inherited from an @Abstract base)"
+es = "'{0}' no cumple el concepto '{1}' que declara (directamente, o heredado de una base @Abstract)"
+
 # Escribir a traves de un prestamo compartido.  {0} el tipo del prestamo.
 [VX2153]
 en = "'{0}' is a shared borrow: it only reads, and this writes through it.  Take it with `lend_mut` to write"

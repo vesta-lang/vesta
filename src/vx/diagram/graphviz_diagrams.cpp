@@ -1201,7 +1201,7 @@ std::string graphviz_types_from_ast(const ast::ModuleNode &mod) {
             if (!d->super_name.empty())
                 rels.push_back("  " + d->name + " -> " + d->super_name + ";");
             for (const auto &iface : d->interface_names)
-                rels.push_back("  " + d->name + " -> " + iface +
+                rels.push_back("  " + d->name + " -> " + iface.name.str() +
                                " [style=dashed];");
         } else if (node->kind == ast::NodeKind::StructDecl) {
             auto *d = static_cast<const ast::StructDecl *>(node.get());

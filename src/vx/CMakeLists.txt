@@ -293,6 +293,7 @@ add_library(vx_lib STATIC
     # Si un tipo es POD (concepto `Pod` y huella `@pod`).
     checker/type_pod.cpp
     checker/subscript_operator.cpp
+    checker/concept_conformance.cpp
     # Fase 4 interop C: generador de header C publico (vx --emit-header).
     c_header_gen.cpp
     lombok.cpp

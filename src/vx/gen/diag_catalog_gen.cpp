@@ -211,6 +211,8 @@ const CatEntry kEntries[] = {
     {"VX2156", {"slicing a string with 's[a..b]' is only built for native code; in the interpreter and the JIT use substr(s, a, len)", "cortar una cadena con 's[a..b]' solo se construye en codigo nativo; en el interprete y el JIT usa substr(s, a, len)"}},
     {"VX2157", {"'x[a..]' slices up to the end, and '{0}' does not say where that is: declare `len()` in it, or write the upper bound", "'x[a..]' corta hasta el final, y '{0}' no dice donde esta: declara `len()` en el, o escribe el limite superior"}},
     {"VX2158", {"'{0}' declares no `__index_set__(index, value)` that takes this write: 'x[i] = v' on a struct or class calls that operator", "'{0}' no declara un `__index_set__(indice, valor)` que admita esta escritura: 'x[i] = v' sobre un struct o una clase llama a ese operador"}},
+    {"VX2159", {"'{0}' declares ': {1}', and '{1}' is neither a known concept nor a base it can extend", "'{0}' declara ': {1}', y '{1}' no es un concepto conocido ni una base que pueda extender"}},
+    {"VX2160", {"'{0}' does not satisfy the concept '{1}' it declares (directly, or inherited from an @Abstract base)", "'{0}' no cumple el concepto '{1}' que declara (directamente, o heredado de una base @Abstract)"}},
     {"VX3001", {"{0} of {1} bytes is outside {2}: the object reserves [0, {3}) and the access is [{4}, {5})", "{0} de {1} bytes fuera de {2}: el objeto reserva [0, {3}) y el acceso es [{4}, {5})"}},
     {"VX3002", {"write", "escritura"}},
     {"VX3003", {"read", "lectura"}},
@@ -893,7 +895,7 @@ const CatEntry kEntries[] = {
     {"use_def.unused", {"'{2}' is never used", "'{2}' no se usa en ningun sitio"}},
     {"value_shape.none", {"it has no values with components", "no tiene valores con componentes"}},
 };
-const int kEntryCount = 872;
+const int kEntryCount = 874;
 
 } // namespace
 

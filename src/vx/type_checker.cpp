@@ -667,7 +667,21 @@ static bool method_body_is_ours(vx::GenericInstanceRegistry *reg, size_t index,
     return reg->claim(mangled + "::" + m->name, index);
 }
 
+bool TypeChecker::report_type_name_taken(const std::string &name,
+                                         const SourceLoc &loc) {
+    const char *taken = declared_type_keyword(name);
+    if (taken == nullptr) return false;
+    diags_.diag(loc, DiagLevel::ERR, "VX2062", {name, taken});
+    return true;
+}
+
 const char *TypeChecker::declared_type_keyword(const std::string &name) const {
+    /* Una PLANTILLA tambien ocupa el nombre: dos `struct Caja<T>` se pisaban
+     * (la segunda sustituia a la primera sin decir nada), y un `struct Caja` y
+     * un `struct Caja<T>` tampoco pueden convivir. */
+    if (generic_struct_templates_.count(name) != 0) return "struct";
+    if (generic_templates_.count(name) != 0) return "class";
+    if (generic_enum_templates_.count(name) != 0) return "enum";
     /* "Completo" = ya tiene contenido.  La pre-pasada crea entradas VACIAS para
      * que los tipos se puedan referenciar entre si antes de construirse, y esas
      * no cuentan: si contaran, todo tipo chocaria consigo mismo.
@@ -831,8 +845,8 @@ std::string TypeChecker::monomorphize_class(const std::string &template_name,
     auto cloned = std::make_unique<ast::ClassDecl>();
     cloned->loc = src->loc;
     cloned->name = mangled;
-    cloned->super_name = src->super_name;
-    cloned->interface_names = src->interface_names;
+    // Con sus argumentos sustituidos: `: Iterator<T>` es `: Iterator<i64>`.
+    clone_header_with_subst(*src, *cloned, g);
     cloned->is_final = src->is_final;
     cloned->is_aspect = src->is_aspect;
     cloned->is_interface = src->is_interface;
@@ -1100,6 +1114,11 @@ std::string TypeChecker::monomorphize_struct(const std::string &template_name,
     cloned->name = mangled;
     cloned->is_public = src->is_public;
     cloned->is_introspect = src->is_introspect;
+    /* Lo que la plantilla declara cumplir, con sus argumentos SUSTITUIDOS:
+     * `struct Caja<T> : Da<T>` es, en `Caja<i64>`, `: Da<i64>`.  No se copiaba,
+     * asi que la conformidad de un struct generico no se comprobaba nunca en
+     * sus instancias. */
+    clone_header_with_subst(*src, *cloned, g);
     // type_params vacio: ya es concreto.
 
     // Clonar campos sustituyendo el tipo (T -> arg concreto).
@@ -1389,83 +1408,6 @@ bool TypeChecker::struct_ptr_upcast_ok(const Type &target,
     return false;
 }
 
-void TypeChecker::verify_struct_interface_conformance() {
-    // Para cada struct que declara `: IConcepto`, exigir que satisfaga el
-    // concepto.  Es coste cero: la misma via comptime que `where T: C`, sin
-    // vtable ni codigo.  El `super_name` (herencia de un @Abstract) NO se toca
-    // aqui -- eso aporta campos+impl; las `interface_names` solo son contratos.
-    // Indice nombre -> StructDecl para recorrer cadenas de herencia (bases).
-    std::unordered_map<std::string, ast::StructDecl *> smap;
-    for (auto &d : mod_.decls)
-        if (d && d->kind == ast::NodeKind::StructDecl) {
-            auto *sd = static_cast<ast::StructDecl *>(d.get());
-            smap[sd->name] = sd;
-        }
-
-    for (const auto &decl : mod_.decls) {
-        if (!decl || decl->kind != ast::NodeKind::StructDecl) continue;
-        auto *s = static_cast<ast::StructDecl *>(decl.get());
-        // Los templates (`struct Caja<T> : C`) no se verifican sobre el molde;
-        // cada instancia monomorphizada hereda las clausulas y se verifica.
-        if (!s->type_params.empty()) continue;
-
-        // Conceptos exigidos = interfaces declaradas por el struct MAS las de
-        // toda su cadena de bases (@Abstract).  Un @Abstract puede declarar una
-        // interfaz sin implementarla del todo (modelo Java): la obligacion se
-        // TRANSFIERE al derivado concreto.  Recopilamos aqui esa herencia.
-        // Un nombre en la posicion `super_name` que NO resuelve a struct es en
-        // realidad una interfaz (`struct S : IConcepto` sin base concreta).
-        std::vector<std::string> ifaces;
-        std::unordered_set<std::string> seen_iface;
-        auto add_ifaces_of = [&](ast::StructDecl *d) {
-            for (const std::string &n : d->interface_names)
-                if (seen_iface.insert(n).second) ifaces.push_back(n);
-            if (!d->super_name.empty() &&
-                smap.find(d->super_name) == smap.end())
-                if (seen_iface.insert(d->super_name).second)
-                    ifaces.push_back(d->super_name);
-        };
-        {
-            std::unordered_set<std::string> seen_base;
-            ast::StructDecl *cur = s;
-            while (cur && seen_base.insert(cur->name).second) {
-                add_ifaces_of(cur);
-                if (cur->super_name.empty()) break;
-                auto it = smap.find(cur->super_name);
-                if (it == smap.end()) break; // super es interfaz, ya contada
-                cur = it->second;            // subir a la base struct
-            }
-        }
-        if (ifaces.empty()) continue;
-
-        // El tipo concreto del struct (nombre ya mangled tras
-        // flatten/namespace).
-        Type st{PrimitiveKind::STRUCT};
-        st.struct_name = s->name;
-        for (const std::string &iname : ifaces) {
-            const ConceptEval ev = comptime_eval_concept(*this, iname, st);
-            if (!ev.found) {
-                diags_.error(s->loc, "el struct '" + s->name + "' declara ': " +
-                                         iname + "' pero '" + iname +
-                                         "' no es un concepto conocido");
-                continue;
-            }
-            // Un @Abstract NO se verifica estrictamente: puede diferir la
-            // implementacion a sus derivados.  Solo se comprueba que el
-            // concepto exista (diagnostico de nombres mal escritos).  El
-            // derivado concreto que herede de este abstract SI sera verificado
-            // (arriba acumulamos las interfaces heredadas).
-            if (s->is_abstract) continue;
-            if (!ev.satisfied) {
-                diags_.error(s->loc,
-                             "el struct '" + s->name +
-                                 "' no satisface el concepto '" + iname +
-                                 "' que declara implementar (directamente "
-                                 "o heredado de una base @Abstract)");
-            }
-        }
-    }
-}
 
 void TypeChecker::flatten_struct_inheritance() {
     // Indice nombre -> StructDecl.
@@ -2901,13 +2843,15 @@ bool TypeChecker::run() {
             if (cd->is_specialization) {
                 // #7: especializacion (total/parcial) de una clase generica.
                 class_specializations_[cd->name].push_back(i);
-            } else if (!cd->type_params.empty()) {
+            } else if (!cd->type_params.empty() &&
+                       !report_type_name_taken(cd->name, cd->loc)) {
                 generic_templates_[cd->name] = i;
             }
         } else if (d && d->kind == ast::NodeKind::EnumDecl) {
             // L2.3: enums genericos como templates.
             auto *en = static_cast<ast::EnumDecl *>(d);
-            if (!en->type_params.empty()) {
+            if (!en->type_params.empty() &&
+                !report_type_name_taken(en->name, en->loc)) {
                 generic_enum_templates_[en->name] = i;
             }
         } else if (d && d->kind == ast::NodeKind::StructDecl) {
@@ -2916,7 +2860,8 @@ bool TypeChecker::run() {
             if (sd->is_specialization) {
                 // #7: especializacion (total/parcial) de un struct generico.
                 struct_specializations_[sd->name].push_back(i);
-            } else if (!sd->type_params.empty()) {
+            } else if (!sd->type_params.empty() &&
+                       !report_type_name_taken(sd->name, sd->loc)) {
                 generic_struct_templates_[sd->name] = i;
             }
         } else if (d && d->kind == ast::NodeKind::FunctionDecl) {
@@ -3177,7 +3122,7 @@ bool TypeChecker::run() {
     // Fase 4b: un struct `: IConcepto` debe satisfacer el concepto (coste cero,
     // comptime).  Se corre con los layouts ya completos (conceptos
     // estructurales inspeccionan struct_layouts_).
-    verify_struct_interface_conformance();
+    verify_declared_concept_conformance();
 
     /* LANG.fix-2 pre-pase: inicializar los `comptime const|var`
      * globals con sus inits.  Sin esto, los top-level `comptime { }`
@@ -5246,10 +5191,7 @@ void TypeChecker::collect_globals() {
             /* El nombre no lo puede tener ya NINGUN tipo -- ni otro struct, ni
              * una clase, ni un enum --.  Antes esto solo miraba los structs,
              * asi que `struct X` y `class X` convivian sin decir nada. */
-            if (const char *taken = declared_type_keyword(s->name)) {
-                diags_.diag(s->loc, DiagLevel::ERR, "VX2062", {s->name, taken});
-                continue;
-            }
+            if (report_type_name_taken(s->name, s->loc)) continue;
 
             // Calcular layout con alineamiento natural por campo, igual
             // que C: cada campo arranca en el siguiente offset que sea
@@ -5957,11 +5899,7 @@ void TypeChecker::collect_globals() {
             /* Este era el UNICO de los tres que miraba las tres familias, y por
              * eso el hueco se veia solo desde aqui.  Ahora la pregunta es la
              * misma para los tres. */
-            if (const char *taken = declared_type_keyword(en->name)) {
-                diags_.diag(en->loc, DiagLevel::ERR, "VX2062",
-                            {en->name, taken});
-                continue;
-            }
+            if (report_type_name_taken(en->name, en->loc)) continue;
             EnumLayout elay;
             elay.name = en->name;
             // C-style: enum con VALOR (`enum Op : u8 { ... }`, `enum M : f64
@@ -6202,10 +6140,7 @@ void TypeChecker::collect_globals() {
             if (!c->type_params.empty() || c->is_specialization) continue;
             /* Igual que el struct: el nombre no lo puede tener ya ningun tipo.
              * Esto solo miraba las clases. */
-            if (const char *taken = declared_type_keyword(c->name)) {
-                diags_.diag(c->loc, DiagLevel::ERR, "VX2062", {c->name, taken});
-                continue;
-            }
+            if (report_type_name_taken(c->name, c->loc)) continue;
 
             // Layout de campos: cada slot ocupa 8 bytes (igual que el
             // ClassRegistry) por simplicidad y alineacion.  El offset
@@ -6216,7 +6151,27 @@ void TypeChecker::collect_globals() {
             ClassLayout layout;
             layout.name = c->name;
             layout.super_name = c->super_name;
-            layout.interface_names = c->interface_names;
+            /* Tras `:` puede haber INTERFACES (dinamicas: van a la tabla de
+             * envio) y CONCEPTOS (estaticos: se comprueban y no cuestan nada).
+             * Se separan aqui, porque cada uno va por un camino distinto. */
+            for (const ast::ConceptRef &ref : c->interface_names) {
+                if (is_concept_name(*this, ref.name.str()))
+                    layout.declared_concepts.push_back(ref);
+                else
+                    layout.interface_names.push_back(ref.name.str());
+            }
+            // Y el primer nombre, si es un concepto, no es una superclase.
+            const bool super_is_concept =
+                !c->super_name.empty() &&
+                is_concept_name(*this, c->super_name);
+            if (super_is_concept) {
+                ast::ConceptRef super_ref;
+                super_ref.name = util::InternedName::intern(c->super_name);
+                super_ref.args = c->super_args;
+                super_ref.loc = c->loc;
+                layout.declared_concepts.push_back(std::move(super_ref));
+                layout.super_name.clear();
+            }
             layout.is_interface = c->is_interface;
             /* preservar la marca @Introspect del AST. */
             layout.is_introspect = c->is_introspect;
@@ -6232,7 +6187,7 @@ void TypeChecker::collect_globals() {
             // como heredado.  Override por nombre se resuelve mas
             // abajo cuando procesamos los metodos propios.
             const ClassLayout *super_layout = nullptr;
-            if (!c->super_name.empty()) {
+            if (!c->super_name.empty() && !super_is_concept) {
                 //  M.L30: detector de ciclos de herencia.
                 // Recorrer la cadena super_name -> super_name de la
                 // clase candidata.  Si llegamos al name de la clase
@@ -6542,7 +6497,8 @@ void TypeChecker::collect_globals() {
                 // si la clase NO tiene super custom (super == "Object" o
                 // ausente): si hay super con ctor no-trivial, hay que llamarlo.
                 if (m->is_constructor && m->body &&
-                    (c->super_name.empty() || c->super_name == "Object")) {
+                    (c->super_name.empty() || c->super_name == "Object" ||
+                     super_is_concept)) {
                     bool zero_init_only = true;
                     for (const auto &stmt : m->body->body) {
                         if (!stmt) {

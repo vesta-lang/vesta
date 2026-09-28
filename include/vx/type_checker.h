@@ -1117,7 +1117,12 @@ inline EnumLayout build_optlike_enum_layout(const Type &st,
 struct ClassLayout {
     std::string name;
     std::string super_name;
+    /// Las INTERFACES (dinamicas, con envio por tabla) que implementa.
     std::vector<std::string> interface_names;
+    /// Los CONCEPTOS (estaticos, coste cero) que declara tras `:`, con sus
+    /// argumentos: `class X : Iterator<i64>`.  Se comprueban como los de un
+    /// struct; no entran en el envio.
+    std::vector<ast::ConceptRef> declared_concepts;
     std::vector<StructFieldInfo> fields; // solo campos de instancia
     std::vector<StructFieldInfo> static_fields;
     std::vector<ClassMethodInfo> methods;
@@ -1544,13 +1549,43 @@ class TypeChecker {
     void flatten_struct_inheritance();
 
     /**
-     * @brief Verifica que cada struct que declara `: IConcepto` satisface ese
-     *        concepto.  Coste cero: es una comprobacion comptime (misma via que
-     *        `where T: C`), no genera codigo ni vtables.  Distinto de heredar
-     * de un `@Abstract` (que aporta campos + implementacion): aqui la interfaz
-     * solo OBLIGA la forma (contrato), no da codigo.
+     * @brief Verifica que cada struct o clase que declara `: Concepto<...>`
+     *        lo cumple, con sus argumentos.  Coste cero: es una comprobacion
+     *        comptime (misma via que `where T: C`), no genera codigo ni
+     *        vtables.  Distinto de heredar de un `@Abstract` (que aporta campos
+     *        + implementacion): aqui el concepto solo OBLIGA la forma.
      */
-    void verify_struct_interface_conformance();
+    void verify_declared_concept_conformance();
+
+    /// @brief Como se prometio cumplir un concepto: decide que codigo cita
+    ///        el error.
+    enum class ConceptPromise : uint8_t {
+        Header, ///< `struct S : C<...>` / `class X : C<...>` (VX2159/VX2160)
+        Impl,   ///< `impl C<...> for X` (VX2140/VX2139)
+    };
+
+    /// @brief Hasta donde se comprueba una promesa.
+    enum class PromiseDepth : uint8_t {
+        Full,          ///< que el concepto exista Y se cumpla
+        ExistenceOnly, ///< solo que exista (un @Abstract difiere a derivados)
+    };
+
+    /**
+     * @brief Comprueba UNA promesa de cumplir un concepto, con sus argumentos,
+     *        y dice por que falla si falla.
+     *
+     * Un dueno para las tres formas de prometer (cabecera de struct, de clase,
+     * `impl`): cada una evaluaba y reportaba por su cuenta.
+     *
+     * @param t       El tipo que promete.
+     * @param ref     El concepto prometido, con sus argumentos.
+     * @param loc     Donde senalar.
+     * @param promise Como se prometio.
+     * @param depth   Hasta donde comprobar.
+     */
+    void check_concept_promise(const Type &t, const ast::ConceptRef &ref,
+                               const SourceLoc &loc, ConceptPromise promise,
+                               PromiseDepth depth);
 
     /**
      * @brief @Virtual: true si `value` es asignable a `target` por upcast de
@@ -3400,6 +3435,20 @@ class TypeChecker {
      *         traduce: entra como dato en el mensaje.
      */
     const char *declared_type_keyword(const std::string &name) const;
+
+    /**
+     * @brief Si el nombre de tipo @p name ya lo tiene otro tipo (concreto o
+     *        plantilla), lo reporta (VX2062) y devuelve @c true.
+     *
+     * Un sitio para el mensaje de los cuatro que lo daban: struct, enum,
+     * clase y plantilla.  Las especializaciones (`struct Caja<i64> {...}`) no
+     * pasan por aqui: repetir el nombre es lo que las define.
+     *
+     * @param name El nombre del tipo nuevo.
+     * @param loc  Donde se declara.
+     * @return @c true si el nombre ya estaba tomado (y se dijo).
+     */
+    bool report_type_name_taken(const std::string &name, const SourceLoc &loc);
 
     /**
      * @brief Construye la ficha de un metodo a partir de su declaracion.

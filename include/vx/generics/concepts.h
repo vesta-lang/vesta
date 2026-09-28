@@ -35,6 +35,9 @@
 namespace vx {
 
 class TypeChecker;
+namespace ast {
+struct ConceptRef;
+}
 
 /**
  * @struct ConceptEval
@@ -74,6 +77,31 @@ ConceptEval comptime_eval_concept(const TypeChecker &tc,
                                   const ConceptArgs &args = {});
 
 /**
+ * @brief Como se escribe para el usuario un concepto con sus argumentos:
+ *        `View<i64>`.  Sin argumentos, el nombre a secas.
+ * @param tc   El comprobador (escribe los tipos como en el fuente).
+ * @param name El concepto.
+ * @param args Sus argumentos.
+ * @return El texto, para un mensaje.
+ */
+std::string written_concept(const TypeChecker &tc, const std::string &name,
+                            const ConceptArgs &args);
+
+/**
+ * @brief Los argumentos de un concepto escrito, ya CONCRETOS: resuelve cada
+ *        tipo de @p ref con la sustitucion @p params -> @p args (vacia si el
+ *        contexto ya es concreto, como una instancia monomorfizada).
+ * @param tc     El comprobador.
+ * @param ref    El concepto tal como se escribio (`View<T>`).
+ * @param params Los parametros de la plantilla (puede ir vacio).
+ * @param args   Sus argumentos concretos.
+ * @return Los argumentos del concepto, resueltos.
+ */
+ConceptArgs concept_ref_args(const TypeChecker &tc, const ast::ConceptRef &ref,
+                             const std::vector<std::string> &params,
+                             const std::vector<Type> &args);
+
+/**
  * @brief Cuantos argumentos de tipo toma el concepto @p name: el tipo
  *        comprobado mas sus argumentos.  Un builtin toma uno.
  * @param tc   Comprobador.
@@ -82,6 +110,20 @@ ConceptEval comptime_eval_concept(const TypeChecker &tc,
  */
 size_t concept_type_param_count(const TypeChecker &tc,
                                 const std::string &name);
+
+/**
+ * @brief Es @p name un concepto (built-in o de usuario, con o sin
+ *        parametros)?
+ *
+ * No es lo mismo que "tiene parametros": `concept Medible { i64 medida(); }`
+ * no declara ninguno y es un concepto.  Preguntarlo con el recuento daba por
+ * inexistentes los conceptos sin parametros.
+ *
+ * @param tc   Comprobador.
+ * @param name Nombre (con o sin espacio de nombres).
+ * @return @c true si es un concepto.
+ */
+bool is_concept_name(const TypeChecker &tc, const std::string &name);
 
 namespace ast {
 struct CallExpr;

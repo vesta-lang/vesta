@@ -228,6 +228,33 @@ std::unique_ptr<ast::TypeNode> clone_type_with_subst(const ast::TypeNode *t,
     return out;
 }
 
+std::vector<std::shared_ptr<ast::TypeNode>>
+clone_shared_types_with_subst(
+    const std::vector<std::shared_ptr<ast::TypeNode>> &types,
+    const GenSubst &g) {
+    std::vector<std::shared_ptr<ast::TypeNode>> out;
+    out.reserve(types.size());
+    for (const auto &t : types)
+        out.push_back(
+            std::shared_ptr<ast::TypeNode>(clone_type_with_subst(t.get(), g)));
+    return out;
+}
+
+std::vector<ast::ConceptRef>
+clone_concept_refs_with_subst(const std::vector<ast::ConceptRef> &refs,
+                              const GenSubst &g) {
+    std::vector<ast::ConceptRef> out;
+    out.reserve(refs.size());
+    for (const ast::ConceptRef &r : refs) {
+        ast::ConceptRef c;
+        c.name = r.name;
+        c.loc = r.loc;
+        c.args = clone_shared_types_with_subst(r.args, g);
+        out.push_back(std::move(c));
+    }
+    return out;
+}
+
 namespace {
 
 std::unique_ptr<ast::TypeNode> clone_type_shape(const ast::TypeNode *t,

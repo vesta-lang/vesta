@@ -1122,7 +1122,7 @@ std::string mermaid_types_from_ast(const ast::ModuleNode &mod) {
             if (!d->super_name.empty())
                 rels.push_back("    " + d->super_name + " <|-- " + d->name);
             for (const auto &iface : d->interface_names)
-                rels.push_back("    " + iface + " <|.. " + d->name);
+                rels.push_back("    " + iface.name.str() + " <|.. " + d->name);
             break;
         }
         case ast::NodeKind::StructDecl: {

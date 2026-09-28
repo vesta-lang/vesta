@@ -1,0 +1,16 @@
+namespace ejemplos.clase_no_cumple_err;
+
+// Una CLASE que declara un concepto tras `:` lo tiene que cumplir, igual que un
+// struct: `Da<i64>` pide un `dame()` que devuelva i64 (VX2160).
+concept Da<Self, E> {
+	E dame();
+}
+
+class Mala : Da<i64> {
+	f64 v;
+
+	Mala(f64 v) { this.v = v; }
+	f64 dame() => this.v;
+}
+
+i32 main() => 0;

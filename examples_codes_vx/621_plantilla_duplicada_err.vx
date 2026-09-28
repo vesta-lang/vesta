@@ -1,0 +1,21 @@
+namespace ejemplos.plantilla_duplicada_err;
+
+// Dos PLANTILLAS con el mismo nombre: la segunda sustituia a la primera sin
+// decir nada, y el uso fallaba despues con un "no tiene el metodo" que no daba
+// la causa.  Ahora el nombre ocupado se dice donde se repite (VX2062).  Una
+// especializacion (`struct Caja<i64> {...}`) si repite el nombre: eso es lo que
+// la define, y no entra aqui.
+struct Caja<T> {
+	T a;
+
+	T leer() => this.a;
+}
+
+struct Caja<T> {
+	T b;
+}
+
+i32 main() {
+	Caja<i64> c = {.a = 1};
+	return (i32)c.leer();
+}

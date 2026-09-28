@@ -145,6 +145,10 @@ static const ast::ConceptDecl *find_user_concept(const TypeChecker &tc,
     return it == tc.concepts().end() ? nullptr : it->second;
 }
 
+bool is_concept_name(const TypeChecker &tc, const std::string &name) {
+    return is_builtin_concept(name) || find_user_concept(tc, name) != nullptr;
+}
+
 size_t concept_type_param_count(const TypeChecker &tc,
                                 const std::string &name) {
     if (is_builtin_concept(name)) return 1;
@@ -326,19 +330,16 @@ ConceptEval comptime_eval_concept(const TypeChecker &tc,
 }
 
 void TypeChecker::check_impl_conformance(const PendingImplCheck &pc) {
-    const std::string &cname = pc.concept_name.str();
     const SourceLoc &loc = pc.decl != nullptr ? pc.decl->loc : SourceLoc{};
-    if (concept_type_param_count(*this, cname) == 0) {
-        diags_.diag(loc, DiagLevel::ERR, "VX2140",
-                    {cname, pc.type_key.str()});
-        return;
-    }
     Type t{pc.kind};
     t.struct_name = pc.type_key.str();
-    const ConceptEval ev = comptime_eval_concept(*this, cname, t);
-    if (!ev.satisfied)
-        diags_.diag(loc, DiagLevel::ERR, "VX2139",
-                    {pc.type_key.str(), cname});
+    /* Con sus argumentos: `impl Iterator<i64> for X` promete
+     * `Iterator<X, i64>`. */
+    ast::ConceptRef ref;
+    ref.name = pc.concept_name;
+    if (pc.decl != nullptr && pc.decl->kind == ast::NodeKind::ImplDecl)
+        ref.args = static_cast<const ast::ImplDecl *>(pc.decl)->concept_args;
+    check_concept_promise(t, ref, loc, ConceptPromise::Impl, PromiseDepth::Full);
 }
 
 ConceptEval eval_concept_question(const TypeChecker &tc,
@@ -394,19 +395,9 @@ void TypeChecker::note_instance_requirement(const Type &target,
     }
 }
 
-/**
- * @brief Los argumentos de un concepto de una cota, concretos para una
- *        instancia: en `<T, V: View<T>>` con `T = i64`, `[i64]`.
- * @param tc     El comprobador.
- * @param c      El concepto tal como se escribio en la cota.
- * @param params Los parametros de la plantilla.
- * @param args   Sus argumentos concretos.
- * @return Los argumentos del concepto, resueltos.
- */
-static ConceptArgs bound_concept_args(const TypeChecker &tc,
-                                      const ast::ConceptRef &c,
-                                      const std::vector<std::string> &params,
-                                      const std::vector<Type> &args) {
+ConceptArgs concept_ref_args(const TypeChecker &tc, const ast::ConceptRef &c,
+                             const std::vector<std::string> &params,
+                             const std::vector<Type> &args) {
     const vxgen::GenSubst g{&params, &args};
     ConceptArgs out;
     out.reserve(c.args.size());
@@ -415,17 +406,8 @@ static ConceptArgs bound_concept_args(const TypeChecker &tc,
     return out;
 }
 
-/**
- * @brief Como se escribe para el usuario un concepto con sus argumentos:
- *        `View<i64>`.  Sin argumentos, el nombre a secas.
- * @param tc   El comprobador (para escribir los tipos como en el fuente).
- * @param name El concepto.
- * @param args Sus argumentos.
- * @return El texto.
- */
-static std::string written_concept(const TypeChecker &tc,
-                                   const std::string &name,
-                                   const ConceptArgs &args) {
+std::string written_concept(const TypeChecker &tc, const std::string &name,
+                            const ConceptArgs &args) {
     if (args.empty()) return name;
     std::string out = name + "<";
     for (size_t i = 0; i < args.size(); ++i) {
@@ -478,7 +460,7 @@ bool TypeChecker::check_type_bounds(const std::vector<ast::TypeBound> &bounds,
         for (const auto &c : b.concepts) {
             const std::string &cname = c.name.str();
             // `<V: View<T>>`: los argumentos del concepto, ya concretos.
-            ConceptArgs cargs = bound_concept_args(*this, c, params, args);
+            ConceptArgs cargs = concept_ref_args(*this, c, params, args);
             if (!needs_layout) {
                 const ConceptEval ev =
                     comptime_eval_concept(*this, cname, args[idx], cargs);
@@ -540,7 +522,7 @@ bool TypeChecker::method_available_for_subst(
         for (const auto &c : b.concepts) {
             const ConceptEval ev = comptime_eval_concept(
                 *this, c.name.str(), arg,
-                bound_concept_args(*this, c, container_params, container_args));
+                concept_ref_args(*this, c, container_params, container_args));
             if (!ev.found) {
                 diags_.diag(b.loc, DiagLevel::ERR, "VX2109",
                             {c.name.str(), b.type_param});

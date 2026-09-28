@@ -6754,11 +6754,15 @@ std::unique_ptr<ast::StructDecl> Parser::parse_struct_decl(bool is_overlay) {
                 "se esperaba un nombre de struct base o interface tras ':'");
             return nullptr;
         }
-        s->super_name = consume().lexeme;
+        // Cada nombre, con sus argumentos si es un concepto que los lleva
+        // (`struct Slice<T> : View<T>`).
+        ast::ConceptRef first = parse_concept_ref();
+        s->super_name = first.name.str();
+        s->super_args = std::move(first.args);
         while (current_.kind == TokenKind::COMMA) {
             (void)consume();
             if (current_.kind == TokenKind::IDENTIFIER)
-                s->interface_names.push_back(consume().lexeme);
+                s->interface_names.push_back(parse_concept_ref());
             else
                 break;
         }
@@ -6880,16 +6884,10 @@ std::unique_ptr<ast::ImplDecl> Parser::parse_impl_decl() {
         error_here("se esperaba el nombre del concept tras 'impl'");
         return nullptr;
     }
-    std::string primero = consume().lexeme;
-    while (current_.kind == TokenKind::DOT) {
-        (void)consume();
-        if (current_.kind != TokenKind::IDENTIFIER) {
-            error_here("se esperaba un identificador tras '.' en el impl");
-            return nullptr;
-        }
-        primero += ".";
-        primero += consume().lexeme;
-    }
+    // El nombre (cualificado o no) y, si es un concepto, sus argumentos:
+    // `impl Iterator<i64> for X`.
+    ast::ConceptRef first = parse_concept_ref();
+    std::string primero = first.name.str();
 
     /* Dos formas, y lo que las separa es el `for`:
      *
@@ -6909,6 +6907,7 @@ std::unique_ptr<ast::ImplDecl> Parser::parse_impl_decl() {
         tgt = std::move(primero);
     } else {
         im->concept_name = std::move(primero);
+        im->concept_args = std::move(first.args);
         (void)consume(); // 'for'
         if (current_.kind != TokenKind::IDENTIFIER) {
             error_here("se esperaba el nombre del tipo tras 'for'");
@@ -7001,14 +7000,15 @@ std::unique_ptr<ast::ClassDecl> Parser::parse_class_decl() {
             error_here("se esperaba un nombre de superclase tras ':'");
             return nullptr;
         }
-        c->super_name = consume().lexeme;
-        // Despues de la superclase, una lista opcional de interfaces
-        // separadas por coma: @c class X : Base, IFoo, IBar.  El type
-        // checker valida que sean efectivamente interfaces.
+        ast::ConceptRef first = parse_concept_ref();
+        c->super_name = first.name.str();
+        c->super_args = std::move(first.args);
+        // Despues de la superclase, una lista opcional de interfaces y
+        // conceptos separados por coma: @c class X : Base, IFoo, Iter<i64>.
         while (current_.kind == TokenKind::COMMA) {
             (void)consume();
             if (current_.kind == TokenKind::IDENTIFIER) {
-                c->interface_names.push_back(consume().lexeme);
+                c->interface_names.push_back(parse_concept_ref());
             } else
                 break;
         }
@@ -7459,12 +7459,14 @@ std::unique_ptr<ast::ClassDecl> Parser::parse_interface_decl() {
     if (current_.kind == TokenKind::COLON) {
         (void)consume();
         if (current_.kind == TokenKind::IDENTIFIER) {
-            c->super_name = consume().lexeme;
+            ast::ConceptRef first = parse_concept_ref();
+            c->super_name = first.name.str();
+            c->super_args = std::move(first.args);
         }
         while (current_.kind == TokenKind::COMMA) {
             (void)consume();
             if (current_.kind == TokenKind::IDENTIFIER) {
-                c->interface_names.push_back(consume().lexeme);
+                c->interface_names.push_back(parse_concept_ref());
             } else
                 break;
         }

@@ -99,12 +99,43 @@ struct Ficha {
 i64 saca<C: Da<i64>>(C c) => c.dame();
 i64 saca_w<C>(C c) where C: Da<i64> => c.dame();
 
+// DECLARAR que se cumple, con argumentos: en la cabecera de un struct o de una
+// clase, o con `impl`.  Se comprueba al compilar (coste cero).  En un generico,
+// cada instancia se comprueba con los argumentos ya sustituidos:
+// `Bolsa<i64> : Da<i64>`.
+struct Bolsa<T> : Da<T> {
+	T v;
+
+	T dame() => this.v;
+}
+interface IHabla {
+	i64 habla();
+}
+class Voz : IHabla, Da<i64> { // una interfaz (dinamica) y un concepto
+	i64 v;
+
+	Voz(i64 v) { this.v = v; }
+	i64 dame() => this.v;
+	i64 habla() => this.v + 1;
+}
+struct Pieza {
+	i64 v;
+}
+impl Da<i64> for Pieza {
+	i64 dame() => this.v;
+}
+
 i32 main() {
 	if (bytes_de<Plano>() != 16) return 1;
 	if (!Pod<Plano>() || !Pod<i64>()) return 2;
 	if (Pod<ConDtor>() || Pod<ConCadena>() || Pod<string>()) return 3;
 	Ficha fi = {.v = 20};
 	if (saca(fi) + saca_w(fi) != 40) return 4;
+	Bolsa<i64> cj = {.v = 3};
+	Voz        vz = new Voz(4);
+	IHabla     hb = vz;
+	Pieza      pz = {.v = 5};
+	if (saca(cj) + saca(vz) + hb.habla() + saca(pz) != 17) return 5;
 
 	i64 mx = maximo<i64>(10, 30); // built-in Comparable      -> 30
 	i64 sm = sumar<i64>(3, 4);    // user MiNumero (where)     -> 7

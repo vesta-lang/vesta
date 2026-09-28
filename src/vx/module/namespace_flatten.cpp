@@ -382,22 +382,30 @@ void mangle_decls_(std::vector<std::unique_ptr<ast::Node>> &decls,
                    const std::string &ns_path,
                    std::unordered_map<std::string, std::string> &rename_map);
 
+/**
+ * @brief Renombra un concepto nombrado con sus argumentos (`View<Celda>`): el
+ *        nombre y los tipos de los argumentos, que nombran tipos del namespace
+ *        igual que cualquier otra firma.  Lo usan las cotas y las cabeceras
+ *        `struct S : ...` / `class C : ...`.
+ * @param c          La referencia.
+ * @param rename_map Nombre corto -> nombre aplanado.
+ */
+void rename_concept_ref_(
+    ast::ConceptRef &c,
+    const std::unordered_map<std::string, std::string> &rename_map) {
+    auto it = rename_map.find(c.name.str());
+    if (it != rename_map.end()) c.name = util::InternedName::intern(it->second);
+    for (auto &arg : c.args) rewrite_refs_in_type_(arg.get(), rename_map);
+}
+
 /// NS.1 fix: reescribe los nombres de CONCEPTS en los bounds de genericos
 /// (`<T: MiConcepto>` / `where T: A + B`).  Sin esto, un concept declarado en
 /// el namespace (mangled) no se resuelve en el bound ("concepto desconocido").
 void rewrite_bounds_(
     std::vector<ast::TypeBound> &bounds,
     const std::unordered_map<std::string, std::string> &rename_map) {
-    for (auto &b : bounds) {
-        for (auto &c : b.concepts) {
-            auto it = rename_map.find(c.name.str());
-            if (it != rename_map.end())
-                c.name = util::InternedName::intern(it->second);
-            // Y los tipos de sus argumentos: `View<Celda>` nombra un tipo del
-            // namespace igual que cualquier otra firma.
-            for (auto &arg : c.args) rewrite_refs_in_type_(arg.get(), rename_map);
-        }
-    }
+    for (auto &b : bounds)
+        for (auto &c : b.concepts) rename_concept_ref_(c, rename_map);
 }
 
 void mangle_function_decl_(
@@ -431,11 +439,11 @@ void mangle_struct_decl_(
     {
         auto it = rename_map.find(sd->super_name);
         if (it != rename_map.end()) sd->super_name = it->second;
+        for (auto &arg : sd->super_args)
+            rewrite_refs_in_type_(arg.get(), rename_map);
     }
-    for (auto &iname : sd->interface_names) {
-        auto it = rename_map.find(iname);
-        if (it != rename_map.end()) iname = it->second;
-    }
+    for (auto &iname : sd->interface_names)
+        rename_concept_ref_(iname, rename_map);
     rewrite_bounds_(sd->type_bounds, rename_map);
     // Especializacion total/parcial: el patron `struct Caja<Punto>` guarda
     // los TypeNode del patron en spec_pattern.  Si un tipo del patron es del
@@ -512,6 +520,8 @@ void mangle_impl_decl_(
     {
         auto it = rename_map.find(im->concept_name);
         if (it != rename_map.end()) im->concept_name = it->second;
+        for (auto &arg : im->concept_args)
+            rewrite_refs_in_type_(arg.get(), rename_map);
     }
     for (auto &m : im->methods) {
         if (!m) continue;
@@ -535,11 +545,11 @@ void mangle_class_decl_(
     {
         auto it = rename_map.find(cd->super_name);
         if (it != rename_map.end()) cd->super_name = it->second;
+        for (auto &arg : cd->super_args)
+            rewrite_refs_in_type_(arg.get(), rename_map);
     }
-    for (auto &iname : cd->interface_names) {
-        auto it = rename_map.find(iname);
-        if (it != rename_map.end()) iname = it->second;
-    }
+    for (auto &iname : cd->interface_names)
+        rename_concept_ref_(iname, rename_map);
     // Especializacion total/parcial de clase (mismo motivo que en struct).
     for (auto &sp : cd->spec_pattern) {
         rewrite_refs_in_type_(sp.get(), rename_map);

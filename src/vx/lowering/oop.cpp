@@ -1535,7 +1535,10 @@ void Lowering::generate_module_init_function(ir::IrModule &out) {
 
         // 1) Si hay superclase: FindClassParams (16B) + findclass -> v_super.
         ir::IrValueId v_super = ir::IR_NO_VALUE;
-        if (!cd->super_name.empty()) {
+        // Solo si el primer nombre tras `:` es una clase o interfaz de verdad:
+        // un CONCEPTO (`class X : Iterator<i64>`) no existe en ejecucion.
+        if (!cd->super_name.empty() &&
+            tc_.class_layouts().count(cd->super_name) != 0) {
             const uint64_t sname_idx = intern_class_name(out, cd->super_name);
             const uint32_t sname_len =
                 static_cast<uint32_t>(cd->super_name.size());

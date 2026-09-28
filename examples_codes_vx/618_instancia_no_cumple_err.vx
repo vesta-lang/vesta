@@ -1,0 +1,20 @@
+namespace ejemplos.instancia_no_cumple_err;
+
+// Un struct GENERICO que declara un concepto se comprueba en cada INSTANCIA,
+// con los argumentos ya sustituidos.  `Caja<T> : Da<i64>` exige un `dame()` que
+// devuelva i64, y `Caja<f64>` lo tiene devolviendo f64 (VX2160).  Antes la
+// instancia no heredaba lo que declaraba la plantilla y esto compilaba.
+concept Da<Self, E> {
+	E dame();
+}
+
+struct Caja<T> : Da<i64> {
+	T v;
+
+	T dame() => this.v;
+}
+
+i32 main() {
+	Caja<f64> c = {.v = 1.5};
+	return 0;
+}

@@ -3,8 +3,8 @@
  * @brief Negativo: un struct que declara `: IConcepto` pero NO cumple el contrato.
  *
  * `Dibujable` exige `i64 area()`.  El struct `Vacio` declara satisfacerlo pero
- * no expone ese metodo -> la compilacion debe FALLAR con
- * "no satisface el concepto 'Dibujable'".
+ * no expone ese metodo -> la compilacion debe FALLAR con VX2160 ("does not
+ * satisfy the concept 'Dibujable' it declares").
  *
  * Contraste con @Abstract: heredar de un @Abstract te DA la implementacion;
  * declarar una interfaz solo te OBLIGA a proveerla tu mismo.

@@ -1985,6 +1985,23 @@ struct ConceptRef {
     SourceLoc loc;                               ///< donde se escribio
 };
 
+/**
+ * @brief Los nombres de una lista de conceptos, sin sus argumentos.
+ *
+ * Para quien solo necesita saber A QUIEN se nombra -- la tabla de interfaces de
+ * una clase, un diagrama --, y no con que argumentos.
+ *
+ * @param refs La lista.
+ * @return Los nombres, en el mismo orden.
+ */
+inline std::vector<std::string>
+concept_ref_names(const std::vector<ConceptRef> &refs) {
+    std::vector<std::string> out;
+    out.reserve(refs.size());
+    for (const ConceptRef &r : refs) out.push_back(r.name.str());
+    return out;
+}
+
 struct TypeBound {
     std::string type_param;           ///< nombre del type-param (e.g. "T")
     std::vector<ConceptRef> concepts; ///< conceptos exigidos (A + B<x> + ...)
@@ -2389,7 +2406,9 @@ struct ExtensionDecl : Node {
  */
 struct ImplDecl : Node {
     std::string concept_name; ///< concept que se implementa
-    std::string target_type;  ///< tipo para el que se implementa
+    /// Sus argumentos: `impl Iterator<i64> for X` -> `[i64]`.
+    std::vector<std::shared_ptr<TypeNode>> concept_args;
+    std::string target_type; ///< tipo para el que se implementa
     std::vector<std::unique_ptr<ClassMethodDecl>> methods;
     bool is_public = true;
     ImplDecl() : Node(NodeKind::ImplDecl) {}
@@ -2830,9 +2849,13 @@ struct StructDecl : Node {
     /// operadores comunes viven una sola vez y devuelven el tipo correcto en
     /// cada derivado.  Vacio = sin base.
     std::string super_name;
-    /// Interfaces / conceptos que el struct declara satisfacer
-    /// (`struct S : Base, IWide`).  Verificado en compile-time; cero coste.
-    std::vector<std::string> interface_names;
+    /// Los argumentos del primer nombre tras `:` si es un concepto con ellos
+    /// (`struct Slice<T> : View<T>`); vacio si no lleva.
+    std::vector<std::shared_ptr<TypeNode>> super_args;
+    /// Interfaces / conceptos que el struct declara satisfacer, con sus
+    /// argumentos (`struct S : Base, IWide, Da<i64>`).  Verificado en
+    /// compile-time; cero coste.
+    std::vector<ConceptRef> interface_names;
     std::vector<StructFieldDecl> fields;
     /// Metodos del struct (value-type, dispatch estatico).  Reusa
     /// @c ClassMethodDecl pero los structs NO tienen vtable, herencia
@@ -3187,7 +3210,11 @@ struct ClassMethodDecl : Node {
 struct ClassDecl : Node {
     std::string name;
     std::string super_name; ///< vacio = sin superclase explicita
-    std::vector<std::string> interface_names;
+    /// Los argumentos del primer nombre tras `:` si es un concepto con ellos.
+    std::vector<std::shared_ptr<TypeNode>> super_args;
+    /// Interfaces y conceptos tras la superclase, con sus argumentos
+    /// (`class X : Base, IFoo, Iterator<i64>`).
+    std::vector<ConceptRef> interface_names;
     std::vector<ClassFieldDecl> fields;
     std::vector<std::unique_ptr<ClassMethodDecl>> methods;
     bool is_final = false;

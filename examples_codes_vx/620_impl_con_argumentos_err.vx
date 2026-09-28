@@ -1,0 +1,17 @@
+namespace ejemplos.impl_con_argumentos_err;
+
+// `impl Da<i64> for Ficha` promete `Da<Ficha, i64>`, y el metodo que aporta
+// devuelve f64 (VX2139, citando `Da<i64>`).
+concept Da<Self, E> {
+	E dame();
+}
+
+struct Ficha {
+	f64 v;
+}
+
+impl Da<i64> for Ficha {
+	f64 dame() => this.v;
+}
+
+i32 main() => 0;

@@ -460,7 +460,9 @@ class_bases(const ast::ClassDecl &cd,
     /* Una interfaz declarada aqui tiene su propio nodo, asi que la arista va a
      * el; las de fuera siguen consolidandose en una lista, que es lo que eran
      * antes TODAS: hojas sin estructura propia. */
-    for (const auto &iname : cd.interface_names) {
+    for (const auto &iref : cd.interface_names) {
+        // El nombre internado vive en el pozo: su direccion es estable.
+        const std::string &iname = iref.name.str();
         const auto at = classes.find(iname);
         if (at != classes.end())
             out.local_ifaces.push_back(at->second);
