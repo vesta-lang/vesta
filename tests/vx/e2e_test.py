@@ -3858,7 +3858,7 @@ r0_case("cev302", "enum C-style valued (typedef enum + bare enum + backing infer
 r0_case("csf303", "structs C: multi-declarador de campo + struct tagless top-level", "303_c_struct_fields.vx", 42, line=3713)
 r0_case("ctt304", "comptime fn con retorno typedef del modulo importada cross-modulo", "304_comptime_typedef_import.vx", 42, line=3714)
 r0_case("aef305", "enum ADT payloadless como campo de struct (plano + typedef struct)", "305_adt_enum_field.vx", 42, line=3715)
-r0_case("als306", "@align(N) a nivel de struct (plano + typedef struct): size padeado + align", "306_align_struct.vx", 42, line=3716)
+r0_case("als306", "@align(N) a nivel de struct (plano + typedef struct + union): size padeado + align", "306_align_struct.vx", 42, line=3716)
 r0_case("nec307", "forwarding de expr-capture anidado (comptime fn pasa su expr a otra)", "307_nested_expr_capture.vx", 42, line=3717)
 r0_case("nrv308", "variadico crudo '...' en @Naked (N args en arg-regs del ABI, sin vacount)", "308_naked_raw_variadic.vx", 42, line=3718)
 r0_case("osp309", "struct opaco 'typedef struct Tag *P;' (incompleto completable + deref)", "309_opaque_struct_ptr.vx", 42, line=3719)

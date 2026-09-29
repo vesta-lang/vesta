@@ -3,7 +3,7 @@
 // `@align(N)` a nivel de STRUCT (equivalente a C `__declspec(align(N))` /
 // `_Alignas(N)`): fuerza la alineacion del layout a max(natural, N) y padea el
 // tamano a un multiplo de esa alineacion.  Nunca reduce la alineacion natural.
-// Funciona en struct plano y en `typedef struct { ... } Name;`.
+// Funciona en struct plano, en `typedef struct { ... } Name;` y en una union.
 //
 // Resultado esperado: R0 == 42.
 
@@ -26,6 +26,14 @@ struct Aligned16 {
 @align(8)
 typedef struct _Cache { u8 x; } Cache;
 
+// @align(16) sobre una union -> size 16, align 16 (sin el, 8 y 8).  El parser
+// leia la anotacion y la tiraba.
+@align(16)
+union Word16 {
+	i64 a;
+	i32 b;
+}
+
 i32 main() {
 	// type.size:  Small=3, Aligned16=16, Cache=8
 	// type.align: Small=1, Aligned16=16, Cache=8
@@ -35,5 +43,7 @@ i32 main() {
 		+ (i32)type.align<Small>()    // 1
 		+ (i32)type.align<Cache>();   // 8
 	// 3 + 16 + 8 + 1 + 8 = 36; +6 = 42
-	return r + 6;
+	// La union: 16 + 16 = 32 -> 0.
+	i32 u = (i32)type.size<Word16>() + (i32)type.align<Word16>() - 32;
+	return r + 6 + u;
 }

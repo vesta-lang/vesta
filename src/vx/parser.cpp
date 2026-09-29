@@ -2582,6 +2582,8 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
             sd->contract_pod = top_t_pod;
             sd->contract_no_heap = top_t_no_heap;
             sd->contract_size = top_t_size;
+            // `@align(N)` vale igual en una union: se leia y se tiraba.
+            sd->attr_align = top_attr_align;
         }
         if (current_.kind == TokenKind::SEMICOLON) (void)consume();
         apply_pending_visibility(sd.get());
