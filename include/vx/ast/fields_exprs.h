@@ -274,7 +274,9 @@ template <> struct Of<LambdaExpr> {
     }
 };
 
-/// Una rama de un `match` (no es un nodo, pero tiene hijos).
+/// Una rama de un `match` (no es un nodo, pero tiene hijos).  La guarda va
+/// ANTES que el cuerpo porque es el orden en que se evaluan: el recorrido de
+/// hijos (`vx/ast/children.h`) sigue esta lista.
 template <> struct Of<MatchArm> {
     static constexpr auto list() {
         return std::make_tuple(
@@ -283,7 +285,7 @@ template <> struct Of<MatchArm> {
             parsed(&MatchArm::value_pattern, "value_pattern"),
             parsed(&MatchArm::value_pattern_hi, "value_pattern_hi"),
             parsed(&MatchArm::range_inclusive, "range_inclusive"),
-            parsed(&MatchArm::body, "body"), parsed(&MatchArm::guard, "guard"),
+            parsed(&MatchArm::guard, "guard"), parsed(&MatchArm::body, "body"),
             parsed(&MatchArm::loc, "loc"));
     }
 };

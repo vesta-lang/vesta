@@ -23,7 +23,9 @@
  *
  * Un campo nuevo en un nodo de `ast.h` va tambien a su lista, en
  * `fields_types.h`, `fields_exprs.h`, `fields_stmts.h`, `fields_decls.h` o
- * `fields_type_decls.h`.
+ * `fields_type_decls.h`; si liga un nombre, tambien a `vx/ast/scopes.h`.  De
+ * estas listas sale el recorrido unico de hijos (`vx/ast/children.h`): un
+ * campo con hijos que no este aqui no lo ve NINGUN recorrido.
  */
 
 #ifndef VX_AST_FIELDS_H

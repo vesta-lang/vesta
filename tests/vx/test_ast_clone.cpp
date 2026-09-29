@@ -22,22 +22,21 @@
  *
  * Uso:  ./test_vx_test_ast_clone [raiz_del_repositorio]
  */
+#include "ast_corpus.h"
 #include "vx/ast/ast_equal.h"
 #include "vx/diagnostic.h"
 #include "vx/generics/field_copy.h"
 #include "vx/generics/generic_clone.h"
 #include "vx/generics/member_clone.h"
-#include "vx/lexer.h"
-#include "vx/parser.h"
 
 #include <cstdio>
-#include <fstream>
 #include <memory>
-#include <sstream>
 #include <string>
 #include <vector>
 
 namespace {
+
+using vx_tests::parse;
 
 int g_failures = 0; ///< Cuantas comprobaciones han fallado.
 int g_bodies = 0;   ///< Cuantos cuerpos se han clonado y comparado.
@@ -54,36 +53,6 @@ void check(bool ok, const char *what, const std::string &where = "") {
         std::printf("FALLO: %s %s\n", what, where.c_str());
         ++g_failures;
     }
-}
-
-/**
- * @brief Lee un fichero entero.
- * @param path Ruta.
- * @param out  Contenido.
- * @return Si se pudo leer.
- */
-bool read_file(const std::string &path, std::string &out) {
-    std::ifstream f(path, std::ios::binary);
-    if (!f) return false;
-    std::ostringstream ss;
-    ss << f.rdbuf();
-    out = ss.str();
-    return true;
-}
-
-/**
- * @brief Parsea un fuente.
- * @param src   Texto.
- * @param name  Nombre para las posiciones.
- * @param diags Diagnosticos.
- * @return El modulo.
- */
-std::unique_ptr<vx::ast::ModuleNode> parse(const std::string &src,
-                                           const std::string &name,
-                                           vx::Diagnostics &diags) {
-    vx::Lexer lx(src, name, diags);
-    vx::Parser p(lx, diags);
-    return p.parse_program();
 }
 
 /**
@@ -109,11 +78,9 @@ void check_callable(const std::vector<std::unique_ptr<vx::ast::ParamDecl>> &para
     ++g_bodies;
 }
 
-void check_decls(const std::vector<std::unique_ptr<vx::ast::Node>> &decls,
-                 const std::string &where);
-
 /**
- * @brief Los metodos de un tipo.
+ * @brief El clon de cada metodo entero (firma, atributos y cuerpo) es el
+ *        original.  Sus cuerpos ya los compara @ref check_callable.
  * @param methods Metodos.
  * @param where   Donde.
  */
@@ -122,8 +89,6 @@ void check_methods(
     const std::string &where) {
     for (const auto &m : methods) {
         if (!m) continue;
-        check_callable(m->params, m->return_type.get(), m->body.get(),
-                       where + ":" + m->name);
         auto c = vx::vxgen::clone_method_with_subst(
             *m, {}, vx::vxgen::MethodBodyCopy::Clone);
         check(vx::ast::same_parsed(*m, *c), "el clon de un metodo",
@@ -132,7 +97,8 @@ void check_methods(
 }
 
 /**
- * @brief Cada cosa con cuerpo de una lista de declaraciones.
+ * @brief El clon de cada declaracion ENTERA -- cabecera, miembros, atributos
+ *        -- es ella, y el de cada metodo tambien.
  * @param decls Declaraciones.
  * @param where Donde.
  */
@@ -141,19 +107,11 @@ void check_decls(const std::vector<std::unique_ptr<vx::ast::Node>> &decls,
     using vx::ast::NodeKind;
     for (const auto &d : decls) {
         if (!d) continue;
-        // La declaracion ENTERA -- cabecera, miembros, atributos -- se copia
-        // igual que un cuerpo: su clon es ella.
         auto c = vx::vxgen::clone_decl(d.get());
         check(vx::ast::same_parsed_decl(d.get(), c.get()),
               "el clon de una declaracion", where);
         ++g_decls;
         switch (d->kind) {
-        case NodeKind::FunctionDecl: {
-            const auto &f = static_cast<const vx::ast::FunctionDecl &>(*d);
-            check_callable(f.params, f.return_type.get(), f.body.get(),
-                           where + ":" + f.name);
-            break;
-        }
         case NodeKind::StructDecl:
             check_methods(static_cast<const vx::ast::StructDecl &>(*d).methods,
                           where);
@@ -176,30 +134,38 @@ void check_decls(const std::vector<std::unique_ptr<vx::ast::Node>> &decls,
 }
 
 /**
+ * @struct CorpusFileChecker
+ * @brief Visitante de @ref vx_tests::for_each_corpus_file: clona y compara
+ *        cada declaracion y cada cuerpo del fichero.
+ */
+struct CorpusFileChecker {
+    /**
+     * @brief Un fichero del corpus.
+     * @param path Ruta.
+     * @param src  Fuente.
+     */
+    void operator()(const std::string &path, const std::string &src) {
+        vx::Diagnostics diags;
+        auto mod = parse(src, path, diags);
+        // Un fichero que no parsea solo (le falta el preprocesador, o es un
+        // caso que DEBE fallar) no tiene arbol que clonar.
+        if (!mod || diags.has_errors()) return;
+        check_decls(mod->decls, path);
+        std::vector<vx_tests::Callable> callables;
+        vx_tests::collect_callables(mod->decls, path, callables);
+        for (const vx_tests::Callable &c : callables)
+            check_callable(*c.params, c.ret, c.body, c.where);
+    }
+};
+
+/**
  * @brief Todo el corpus: cada cuerpo clonado sin sustituir es el original.
  * @param root Raiz del repositorio.
  * @return Falso si no se encontro la lista del corpus.
  */
 bool check_corpus(const std::string &root) {
-    // La lista la mantiene el test del formateador; se usa la misma.
-    std::string list;
-    if (!read_file(root + "/tests/vx/fmt_corpus.txt", list)) return false;
-    std::istringstream lines(list);
-    std::string path;
-    while (std::getline(lines, path)) {
-        while (!path.empty() && (path.back() == '\r' || path.back() == '\n'))
-            path.pop_back();
-        if (path.empty() || path[0] == '#') continue;
-        std::string src;
-        if (!read_file(root + "/" + path, src)) continue;
-        vx::Diagnostics diags;
-        auto mod = parse(src, path, diags);
-        // Un fichero que no parsea solo (le falta el preprocesador, o es un
-        // caso que DEBE fallar) no tiene arbol que clonar.
-        if (!mod || diags.has_errors()) continue;
-        check_decls(mod->decls, path);
-    }
-    return true;
+    CorpusFileChecker checker;
+    return vx_tests::for_each_corpus_file(root, checker);
 }
 
 /**
