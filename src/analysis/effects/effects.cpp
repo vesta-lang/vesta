@@ -386,6 +386,36 @@ static MemOrder stronger(MemOrder a, MemOrder b) {
     return (uint8_t(a) >= uint8_t(b)) ? a : b;
 }
 
+/**
+ * @brief Lo que @ref seq y @ref join juntan igual: los ejes "puede" y sus
+ *        refinamientos, mas io, determinismo y etiquetas.
+ *
+ * Los refinamientos se juntan con la regla comun del vocabulario
+ * (@ref ir::unite_origin, @ref ir::unite_refinement), que mira el eje de cada
+ * lado: quien no lanza no aporta su `Any` por defecto, ni quien no atrapa su
+ * conjunto vacio -- que se leia como "atrapa con cualquier cosa" y se comia la
+ * cota del otro lado --.  Se calculan ANTES de unir los ejes.
+ */
+static void unite_may_axes(SemanticEffects &r, const SemanticEffects &a,
+                           const SemanticEffects &b) {
+    r.throw_origin =
+        ir::unite_origin(a.throw_origin, a.may_throw, b.throw_origin, b.may_throw);
+    r.panic_origin =
+        ir::unite_origin(a.panic_origin, a.may_panic, b.panic_origin, b.may_panic);
+    r.trap_kinds =
+        ir::unite_refinement(a.trap_kinds, a.may_trap, b.trap_kinds, b.may_trap);
+    r.may_trap = a.may_trap || b.may_trap;
+    r.may_throw = a.may_throw || b.may_throw;
+    r.may_panic = a.may_panic || b.may_panic;
+    r.may_allocate = a.may_allocate || b.may_allocate;
+    r.may_block = a.may_block || b.may_block;
+    r.may_io = a.may_io || b.may_io;
+    r.determinism = a.determinism;
+    r.determinism.unite(b.determinism);
+    r.tags = a.tags;
+    r.tags.unite(b.tags);
+}
+
 SemanticEffects seq(const SemanticEffects &a, const SemanticEffects &b) {
     SemanticEffects r;
     // Memoria: reads(a;b) = a.reads U (b.reads \ a.writes-concretos); writes =
@@ -402,30 +432,7 @@ SemanticEffects seq(const SemanticEffects &a, const SemanticEffects &b) {
     // Atomic: el orden mas fuerte; fence si alguno.
     r.atomic.order = stronger(a.atomic.order, b.atomic.order);
     r.atomic.is_fence = a.atomic.is_fence || b.atomic.is_fence;
-    // may_*: OR.
-    r.may_trap = a.may_trap || b.may_trap;
-    r.may_throw = a.may_throw || b.may_throw;
-    r.may_panic = a.may_panic || b.may_panic;
-    r.may_allocate = a.may_allocate || b.may_allocate;
-    r.may_block = a.may_block || b.may_block;
-    /* El origen se ENSANCHA al juntar: si uno lanza lo nuestro y el otro lo
-     * ajeno, lo que sale de los dos puede ser cualquiera de los dos, y eso es
-     * `Any`.  Estrecharlo aqui seria quedarse con una mitad. */
-    r.throw_origin = (a.throw_origin == b.throw_origin) ? a.throw_origin
-                                                        : ir::UnwindOrigin::Any;
-    r.panic_origin = (a.panic_origin == b.panic_origin) ? a.panic_origin
-                                                        : ir::UnwindOrigin::Any;
-    /* Y los fallos se SUMAN, salvo que alguno no acote: un conjunto vacio vale
-     * por todos, asi que absorbe. */
-    r.trap_kinds =
-        (a.trap_kinds == ir::TRAP_NONE || b.trap_kinds == ir::TRAP_NONE)
-            ? ir::TRAP_NONE
-            : static_cast<ir::TrapKinds>(a.trap_kinds | b.trap_kinds);
-    r.may_io = a.may_io || b.may_io;
-    r.determinism = a.determinism;
-    r.determinism.unite(b.determinism);
-    r.tags = a.tags;
-    r.tags.unite(b.tags);
+    unite_may_axes(r, a, b);
     return r;
 }
 
@@ -443,29 +450,7 @@ SemanticEffects join(const SemanticEffects &a, const SemanticEffects &b) {
                     : ControlEffect{ControlKind::Branch, -1};
     r.atomic.order = stronger(a.atomic.order, b.atomic.order);
     r.atomic.is_fence = a.atomic.is_fence || b.atomic.is_fence;
-    r.may_trap = a.may_trap || b.may_trap;
-    r.may_throw = a.may_throw || b.may_throw;
-    r.may_panic = a.may_panic || b.may_panic;
-    r.may_allocate = a.may_allocate || b.may_allocate;
-    r.may_block = a.may_block || b.may_block;
-    /* El origen se ENSANCHA al juntar: si uno lanza lo nuestro y el otro lo
-     * ajeno, lo que sale de los dos puede ser cualquiera de los dos, y eso es
-     * `Any`.  Estrecharlo aqui seria quedarse con una mitad. */
-    r.throw_origin = (a.throw_origin == b.throw_origin) ? a.throw_origin
-                                                        : ir::UnwindOrigin::Any;
-    r.panic_origin = (a.panic_origin == b.panic_origin) ? a.panic_origin
-                                                        : ir::UnwindOrigin::Any;
-    /* Y los fallos se SUMAN, salvo que alguno no acote: un conjunto vacio vale
-     * por todos, asi que absorbe. */
-    r.trap_kinds =
-        (a.trap_kinds == ir::TRAP_NONE || b.trap_kinds == ir::TRAP_NONE)
-            ? ir::TRAP_NONE
-            : static_cast<ir::TrapKinds>(a.trap_kinds | b.trap_kinds);
-    r.may_io = a.may_io || b.may_io;
-    r.determinism = a.determinism;
-    r.determinism.unite(b.determinism);
-    r.tags = a.tags;
-    r.tags.unite(b.tags);
+    unite_may_axes(r, a, b);
     return r;
 }
 

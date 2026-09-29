@@ -239,6 +239,67 @@ static void two_definitions_that_disagree() {
 }
 
 /**
+ * @brief La union de lo peor cubre TODOS los ejes, no solo los booleanos basicos.
+ *
+ * Antes la union solo juntaba lecturas, escrituras y siete booleanos: lo que
+ * dijera la segunda declaracion sobre bloquear, atrapar, liberar, la parte del
+ * mundo o el origen de una excepcion se perdia, y la primera quedaba
+ * sobre-aprobada.  Y la garantia de memoria fresca se conservaba aunque la otra
+ * no la diera.
+ */
+static void disagreeing_definitions_unite_every_axis() {
+    std::printf("-- la union de lo peor cubre todos los ejes\n");
+    ir::IrModule mod = module_calling("libc:realloc");
+
+    ir::IrNativeEffects first; // asignador que atrapa por acceso y lee ficheros
+    first.declared = true;
+    first.returns_fresh = true;
+    first.may_trap = true;
+    first.trap_kinds = ir::TRAP_ACCESS;
+    first.reads_global = true;
+    first.reads_world = ir::WORLD_FILE;
+    first.may_throw = true;
+    first.throw_origin = ir::UnwindOrigin::Native;
+    mod.register_native_import("libc", "realloc", first);
+
+    ir::IrNativeEffects second; // libera, bloquea, lee el entorno sin acotar
+    second.declared = true;
+    second.frees_pointee = 1u << 0;
+    second.may_block = true;
+    second.may_trap = true;
+    second.trap_kinds = ir::TRAP_ALIGN;
+    second.reads_global = true;
+    second.reads_world = ir::WORLD_NONE; // sin acotar
+    second.may_throw = true;
+    second.throw_origin = ir::UnwindOrigin::Vesta;
+    second.writes_global = true;
+    second.writes_world = ir::WORLD_CONSOLE;
+    mod.register_native_import("libc", "realloc", second);
+
+    const ir::IrNativeImport *ni = nullptr;
+    for (const ir::IrNativeImport &x : mod.native_imports)
+        if (x.name == "realloc") ni = &x;
+    CHECK(ni != nullptr, "la nativa sigue registrada una sola vez");
+    if (ni == nullptr) return;
+    const ir::IrNativeEffects &fx = ni->effects;
+    CHECK(ni->effects_conflict, "el choque queda marcado");
+    CHECK(fx.frees_pointee == (1u << 0),
+          "lo que libera la segunda se atribuye: sin esto no hay aviso de uso "
+          "tras liberar");
+    CHECK(fx.may_block, "que pueda bloquear, tambien");
+    CHECK(fx.trap_kinds == (ir::TRAP_ACCESS | ir::TRAP_ALIGN),
+          "los fallos acotados por las dos se juntan");
+    CHECK(fx.reads_world == ir::WORLD_NONE,
+          "si una no acoto la parte del mundo, queda sin acotar");
+    CHECK(fx.writes_global && fx.writes_world == ir::WORLD_CONSOLE,
+          "un eje que solo pone una vale con SU refinamiento, no sin acotar");
+    CHECK(fx.throw_origin == ir::UnwindOrigin::Any,
+          "dos origenes distintos dejan el conservador");
+    CHECK(!fx.returns_fresh,
+          "memoria fresca es una garantia: con que una no la de, no la hay");
+}
+
+/**
  * @brief Dos definiciones que dicen LO MISMO no son un conflicto.
  *
  * Importa tanto como lo anterior: un aviso que salta cuando no pasa nada se
@@ -287,6 +348,7 @@ static void declaring_then_calling_is_not_a_conflict() {
 int main() {
     std::printf("=== test_native_effects ===\n");
     two_definitions_that_disagree();
+    disagreeing_definitions_unite_every_axis();
     two_identical_definitions_are_not_a_conflict();
     declaring_then_calling_is_not_a_conflict();
     undeclared_is_opaque();

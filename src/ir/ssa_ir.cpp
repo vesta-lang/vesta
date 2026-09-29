@@ -551,6 +551,55 @@ void IrModule::register_native_import(std::string lib, std::string name) {
     register_native_import(std::move(lib), std::move(name), IrNativeEffects{});
 }
 
+namespace {
+
+/**
+ * @brief La union de lo PEOR de dos declaraciones de la misma nativa.
+ *
+ * Lo que CUALQUIERA de las dos atribuye, se atribuye; lo que es una GARANTIA
+ * solo se conserva si la dan las dos.  Asi ninguna puede quedar sobre-aprobada
+ * por culpa de la otra: se pierde precision, nunca se afirma de mas.
+ *
+ * Los refinamientos se unen con la regla comun (@ref ir::unite_refinement,
+ * @ref ir::unite_origin) ANTES de unir sus ejes, que es cuando todavia se sabe
+ * cual de las dos los ponia.
+ *
+ * `comptime` NO se une: no es un efecto sobre el programa sino sobre la
+ * compilacion, asi que unirlo mezclaria dos cosas que no se suman.
+ *
+ * @param into  Declaracion que se queda (se sobrescribe).
+ * @param other La otra declaracion.
+ */
+void unite_worst(IrNativeEffects &into, const IrNativeEffects &other) noexcept {
+    into.trap_kinds = unite_refinement(into.trap_kinds, into.may_trap,
+                                       other.trap_kinds, other.may_trap);
+    into.reads_world = unite_refinement(into.reads_world, into.reads_global,
+                                        other.reads_world, other.reads_global);
+    into.writes_world = unite_refinement(into.writes_world, into.writes_global,
+                                         other.writes_world, other.writes_global);
+    into.throw_origin = unite_origin(into.throw_origin, into.may_throw,
+                                     other.throw_origin, other.may_throw);
+    into.panic_origin = unite_origin(into.panic_origin, into.may_panic,
+                                     other.panic_origin, other.may_panic);
+
+    into.reads_pointee |= other.reads_pointee;
+    into.writes_pointee |= other.writes_pointee;
+    into.frees_pointee |= other.frees_pointee;
+    into.reads_global |= other.reads_global;
+    into.writes_global |= other.writes_global;
+    into.io |= other.io;
+    into.may_throw |= other.may_throw;
+    into.nondeterministic |= other.nondeterministic;
+    into.may_panic |= other.may_panic;
+    into.allocates |= other.allocates;
+    into.may_block |= other.may_block;
+    into.may_trap |= other.may_trap;
+    // Memoria fresca es una garantia: con que una no la de, no la hay.
+    into.returns_fresh = into.returns_fresh && other.returns_fresh;
+}
+
+} // namespace
+
 /**
  * @brief Igual, pero definiendo lo que la nativa hace.
  *
@@ -581,21 +630,7 @@ void IrModule::register_native_import(std::string lib, std::string name,
             }
             if (ni.effects == effects) return; // dicen lo mismo
             ni.effects_conflict = true;
-            // Union de lo peor: lo que CUALQUIERA de las dos atribuye, se
-            // atribuye.  Asi ninguna de las dos puede quedar sobre-aprobada por
-            // culpa de la otra.
-            ni.effects.reads_pointee |= effects.reads_pointee;
-            ni.effects.writes_pointee |= effects.writes_pointee;
-            ni.effects.reads_global |= effects.reads_global;
-            ni.effects.writes_global |= effects.writes_global;
-            ni.effects.io |= effects.io;
-            ni.effects.may_throw |= effects.may_throw;
-            ni.effects.nondeterministic |= effects.nondeterministic;
-            ni.effects.may_panic |= effects.may_panic;
-            ni.effects.allocates |= effects.allocates;
-            // `comptime` NO se une: no es un efecto sobre el programa sino
-            // sobre la compilacion, asi que unirlo mezclaria dos cosas que no
-            // se suman.
+            unite_worst(ni.effects, effects);
             return;
         }
     }

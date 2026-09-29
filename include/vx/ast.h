@@ -2529,9 +2529,6 @@ struct ExternEffects {
     ir::UnwindOrigin panic_origin = ir::UnwindOrigin::Any;
     /// Que fallos del procesador se acotaron.  Cero = ninguno: vale por todos.
     ir::TrapKinds trap_kinds = ir::TRAP_NONE;
-    /// Alguna linea escribio `@traps` SIN acotar, asi que no hay conjunto.
-    /// Se guarda para que el orden de las lineas no cambie el resultado.
-    bool traps_sin_acotar = false;
     /// Que PARTES del mundo de fuera lee y escribe.  Cero = sin acotar.
     ir::WorldKinds reads_world = ir::WORLD_NONE;
     ir::WorldKinds writes_world = ir::WORLD_NONE;

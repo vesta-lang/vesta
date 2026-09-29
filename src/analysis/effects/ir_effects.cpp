@@ -482,6 +482,17 @@ static void aplicar_decl(SemanticEffects &e, const ir::IrNativeEffects &d,
         e.may_io = true;
         e.determinism.add(DeterminismTag::ExternalObservable);
     }
+    /* Los refinamientos van PRIMERO, con la regla comun del vocabulario y los
+     * ejes de `e` tal y como estaban: una vez puesto `may_trap` ya no se sabe
+     * si el conjunto vacio de `e` era "no atrapa" o "atrapa con cualquier
+     * cosa", y `Any` en quien aun no lanza no es un origen ensanchado sino que
+     * no aplica. */
+    e.throw_origin = ir::unite_origin(e.throw_origin, e.may_throw,
+                                      d.throw_origin, d.may_throw);
+    e.panic_origin = ir::unite_origin(e.panic_origin, e.may_panic,
+                                      d.panic_origin, d.may_panic);
+    e.trap_kinds = ir::unite_refinement(e.trap_kinds, e.may_trap, d.trap_kinds,
+                                        d.may_trap);
     if (d.may_throw) e.may_throw = true;
     /* Los dos ejes nuevos.  Sin ellos, una nativa declarada dejaba `may_panic`
      * y `may_allocate` en falso por omision, y el motor semantico daba por
@@ -494,20 +505,6 @@ static void aplicar_decl(SemanticEffects &e, const ir::IrNativeEffects &d,
      * por no bloquear y una que divide por no fallar. */
     if (d.may_block) e.may_block = true;
     if (d.may_trap) e.may_trap = true;
-    /* Y los refinamientos, que solo se estrechan si NADIE los ha ensanchado
-     * ya: una funcion que llama a dos externas con origenes distintos tiene
-     * que salir con `Any`. */
-    if (d.may_throw && e.throw_origin == ir::UnwindOrigin::Any)
-        e.throw_origin = d.throw_origin;
-    if (d.may_panic && e.panic_origin == ir::UnwindOrigin::Any)
-        e.panic_origin = d.panic_origin;
-    if (d.may_trap) {
-        if (d.trap_kinds == ir::TRAP_NONE)
-            e.trap_kinds = ir::TRAP_NONE; // sin acotar: vale por todos
-        else if (e.trap_kinds != ir::TRAP_NONE || !e.may_trap)
-            e.trap_kinds =
-                static_cast<ir::TrapKinds>(e.trap_kinds | d.trap_kinds);
-    }
     if (d.nondeterministic)
         e.determinism.add(DeterminismTag::ExternalObservable);
 }

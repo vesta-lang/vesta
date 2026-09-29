@@ -150,6 +150,33 @@ int main() {
         x.tags.add(CapabilityTag::PortIO);
         check(join(x, x) == x, "join idempotente");
     }
+    {
+        // Los refinamientos solo hablan con su eje puesto: quien no atrapa ni
+        // lanza no aporta su conjunto vacio ni su `Any` por defecto, que antes
+        // se leian como "cualquier fallo" y "cualquier origen" y se comian la
+        // cota del otro lado.
+        SemanticEffects a; // atrapa solo en div0 y lanza lo nuestro
+        a.may_trap = true;
+        a.trap_kinds = ir::TRAP_DIV0;
+        a.may_throw = true;
+        a.throw_origin = ir::UnwindOrigin::Vesta;
+        SemanticEffects n; // ni atrapa ni lanza
+        for (const SemanticEffects &r : {seq(a, n), seq(n, a), join(a, n)}) {
+            check(r.may_trap && r.trap_kinds == ir::TRAP_DIV0,
+                  "quien no atrapa no ensancha la cota de fallos");
+            check(r.may_throw && r.throw_origin == ir::UnwindOrigin::Vesta,
+                  "quien no lanza no ensancha el origen");
+        }
+        SemanticEffects b; // atrapa sin acotar y lanza lo ajeno
+        b.may_trap = true;
+        b.may_throw = true;
+        b.throw_origin = ir::UnwindOrigin::Native;
+        SemanticEffects ab = join(a, b);
+        check(ab.trap_kinds == ir::TRAP_NONE,
+              "un lado sin acotar absorbe la cota del otro");
+        check(ab.throw_origin == ir::UnwindOrigin::Any,
+              "dos origenes distintos dejan Any");
+    }
 
     // ---- MachineEffects: gen/kill de registros + stack peak ----
     {

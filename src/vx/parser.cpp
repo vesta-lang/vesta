@@ -3692,21 +3692,18 @@ void Parser::parse_extern_effects_(ast::ExternEffects &out) {
         if (nm == "io")
             out.io = true;
         else if (nm == "throws") {
+            /* Varias lineas se juntan con la regla comun: dos `@throws` con
+             * origenes distintos dejan `Any`, y un `@throws` desnudo -- que ya
+             * es `Any` -- no lo estrecha la linea siguiente.  Quedarse con la
+             * ultima dejaria que una segunda linea borrara la advertencia de
+             * la primera.  El eje se mira ANTES de ponerlo. */
+            out.throw_origin = ir::unite_origin(out.throw_origin, out.may_throw,
+                                                origen, true);
             out.may_throw = true;
-            /* El origen se ESTRECHA, nunca se ensancha: dos `@throws` con
-             * origenes distintos dejan `Any`, que es lo conservador.  Al reves
-             * -- quedarse con el ultimo -- dejaria que una segunda linea
-             * borrara la advertencia de la primera. */
-            out.throw_origin = (out.throw_origin == ir::UnwindOrigin::Any ||
-                                out.throw_origin == origen)
-                                   ? origen
-                                   : ir::UnwindOrigin::Any;
         } else if (nm == "panics") {
+            out.panic_origin = ir::unite_origin(out.panic_origin, out.may_panic,
+                                                origen, true);
             out.may_panic = true;
-            out.panic_origin = (out.panic_origin == ir::UnwindOrigin::Any ||
-                                out.panic_origin == origen)
-                                   ? origen
-                                   : ir::UnwindOrigin::Any;
         } else if (nm == "alloc")
             out.allocates = true;
         /* RESERVAR y MAPEAR se parecen y NO son lo mismo, y confundirlos
@@ -3773,13 +3770,10 @@ void Parser::parse_extern_effects_(ast::ExternEffects &out) {
             out.nondeterministic = true; // dos llamadas iguales interactuan
         } else if (nm == "reads_env") {
             out.reads_global = true;
-            out.reads_world = static_cast<ir::WorldKinds>(
-                (mundo == ir::WORLD_NONE || out.reads_world == ir::WORLD_NONE)
-                    ? ir::WORLD_NONE
-                    : (out.reads_world | mundo));
-            if (out.reads_world == ir::WORLD_NONE && mundo != ir::WORLD_NONE &&
-                !out.reads_env_visto)
-                out.reads_world = mundo;
+            /* El eje es `reads_env_visto` y no `reads_global`: `keeps_state`
+             * pone el segundo sin decir nada del mundo. */
+            out.reads_world = ir::unite_refinement(
+                out.reads_world, out.reads_env_visto, mundo, true);
             out.reads_env_visto = true;
             /* Solo lo que CAMBIA por su cuenta hace no-determinista: leer el
              * reloj o la entropia no da lo mismo dos veces, leer la
@@ -3792,13 +3786,8 @@ void Parser::parse_extern_effects_(ast::ExternEffects &out) {
                 out.nondeterministic = true;
         } else if (nm == "writes_env") {
             out.writes_global = true;
-            out.writes_world = static_cast<ir::WorldKinds>(
-                (mundo == ir::WORLD_NONE || out.writes_world == ir::WORLD_NONE)
-                    ? ir::WORLD_NONE
-                    : (out.writes_world | mundo));
-            if (out.writes_world == ir::WORLD_NONE && mundo != ir::WORLD_NONE &&
-                !out.writes_env_visto)
-                out.writes_world = mundo;
+            out.writes_world = ir::unite_refinement(
+                out.writes_world, out.writes_env_visto, mundo, true);
             out.writes_env_visto = true;
             out.io = true; // cambiar el mundo se ve desde fuera
         }
@@ -3809,21 +3798,18 @@ void Parser::parse_extern_effects_(ast::ExternEffects &out) {
         else if (nm == "blocks")
             out.may_block = true;
         else if (nm == "traps") {
-            out.may_trap = true;
             /* Los fallos se SUMAN entre lineas: `@traps(div0)` y
              * `@traps(access, when: ...)` describen la misma funcion en dos
              * frases.
              *
              * Pero un `@traps` SIN acotar vale por todos, y entonces ya no hay
              * conjunto que valga: una linea que no acota se lleva por delante
-             * lo que acotaron las otras.  Al reves seria peor -- acotar de
-             * menos hace creer que un fallo no puede pasar --. */
-            if (traps == ir::TRAP_NONE)
-                out.traps_sin_acotar = true;
-            else
-                out.trap_kinds =
-                    static_cast<ir::TrapKinds>(out.trap_kinds | traps);
-            if (out.traps_sin_acotar) out.trap_kinds = ir::TRAP_NONE;
+             * lo que acotaron las otras, en cualquier orden.  Al reves seria
+             * peor -- acotar de menos hace creer que un fallo no puede
+             * pasar --.  Es la regla comun, con `may_trap` como eje. */
+            out.trap_kinds =
+                ir::unite_refinement(out.trap_kinds, out.may_trap, traps, true);
+            out.may_trap = true;
         }
         /* `noblock` y `notrap` no ponen nada, como `nothrow` y `nopanic`: bajo
          * descripcion completa el default ya es que no pasa.  Se aceptan porque

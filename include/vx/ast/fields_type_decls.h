@@ -219,7 +219,6 @@ template <> struct Of<ExternEffects> {
             parsed(&ExternEffects::throw_origin, "throw_origin"),
             parsed(&ExternEffects::panic_origin, "panic_origin"),
             parsed(&ExternEffects::trap_kinds, "trap_kinds"),
-            parsed(&ExternEffects::traps_sin_acotar, "traps_sin_acotar"),
             parsed(&ExternEffects::reads_world, "reads_world"),
             parsed(&ExternEffects::writes_world, "writes_world"),
             parsed(&ExternEffects::reads_env_visto, "reads_env_visto"),

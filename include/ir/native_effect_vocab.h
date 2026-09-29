@@ -181,6 +181,59 @@ inline TrapKinds trap_kind_from_name(const char *s) noexcept {
     return TRAP_NONE;
 }
 
+/**
+ * @brief Junta dos refinamientos de conjunto (fallos, partes del mundo).
+ *
+ * UNA regla para todos los que juntan efectos -- la secuencia y la union del
+ * motor, lo declarado de una nativa al entrar en la funcion que la llama, dos
+ * declaraciones de la misma nativa --.  Estuvo escrita en cuatro sitios y no
+ * decian lo mismo.
+ *
+ * Un refinamiento solo HABLA si su eje esta puesto: sin `may_trap`, el conjunto
+ * de fallos vale cero por no aplicar, no por "sin acotar".  Leerlo sin mirar el
+ * eje convertia a quien no atrapa en quien atrapa con cualquier cosa, y se
+ * perdia la cota del otro lado.  Por eso:
+ *
+ *   - si solo uno pone el eje, vale su refinamiento;
+ *   - si lo ponen los dos, se suman, salvo que alguno no acote: cero vale por
+ *     todos, asi que absorbe;
+ *   - si no lo pone ninguno, no hay nada que decir (cero).
+ *
+ * @param a      Refinamiento de un lado.
+ * @param a_axis Si ese lado pone el eje.
+ * @param b      Refinamiento del otro lado.
+ * @param b_axis Si el otro pone el eje.
+ * @return El refinamiento del conjunto.
+ */
+template <typename Bits>
+constexpr Bits unite_refinement(Bits a, bool a_axis, Bits b,
+                                bool b_axis) noexcept {
+    if (!a_axis) return b_axis ? b : Bits{0};
+    if (!b_axis) return a;
+    return (a == 0 || b == 0) ? Bits{0} : static_cast<Bits>(a | b);
+}
+
+/**
+ * @brief Junta dos origenes de desenrollado (lanzar, abortar).
+ *
+ * Misma disciplina que @ref unite_refinement: un origen solo cuenta si su eje
+ * (`may_throw`, `may_panic`) esta puesto -- `Any` por defecto en quien no lanza
+ * no es "cualquiera de los dos", es que no aplica --.  Si los dos lanzan y no
+ * coinciden, lo que sale puede ser cualquiera de los dos: @c Any.
+ *
+ * @param a      Origen de un lado.
+ * @param a_axis Si ese lado lanza (o aborta).
+ * @param b      Origen del otro lado.
+ * @param b_axis Si el otro lanza.
+ * @return El origen del conjunto.
+ */
+constexpr UnwindOrigin unite_origin(UnwindOrigin a, bool a_axis, UnwindOrigin b,
+                                    bool b_axis) noexcept {
+    if (!a_axis) return b_axis ? b : UnwindOrigin::Any;
+    if (!b_axis) return a;
+    return a == b ? a : UnwindOrigin::Any;
+}
+
 } // namespace ir
 
 #endif // IR_NATIVE_EFFECT_VOCAB_H
