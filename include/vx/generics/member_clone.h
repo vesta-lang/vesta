@@ -10,16 +10,15 @@
 
 /**
  * @file member_clone.h
- * @brief Copiar un MIEMBRO de un tipo (metodo o campo) con los parametros de
- *        tipo sustituidos.
+ * @brief Copiar un METODO de un tipo con los parametros de tipo sustituidos,
+ *        con o sin su cuerpo.
  *
- * Un miembro se copia en cuatro sitios: al instanciar un struct o una clase
- * generica, al aplanar la herencia de un struct y al inyectar lo que trae un
- * concepto.  Cada uno llevaba su propia lista de "que se copia", y las listas
- * divergian: el aplanado perdia `@Override`, la instancia de un struct perdia
- * todo lo de un campo salvo el tipo, el ancho de bits y el valor por defecto
- * (un miembro anonimo, una direccion `in`, un campo `static`...), y ninguna
- * copiaba las propiedades de una clase.  Ahora la lista es UNA.
+ * Un metodo se copia al instanciar un struct o una clase generica, al aplanar
+ * la herencia de un struct y al inyectar lo que trae un concepto.  Que se
+ * copia lo dice la lista de campos del metodo (`vx/ast/fields_decls.h`) y lo
+ * hace @ref copy_parsed, como para cualquier otro nodo; lo unico propio de un
+ * metodo es que el CUERPO puede quedarse fuera (ver @ref MethodBodyCopy).  Un
+ * campo no tiene nada propio: se copia con @ref parsed_copy.
  */
 
 #ifndef VX_GENERICS_MEMBER_CLONE_H
@@ -50,11 +49,11 @@ enum class MethodBodyCopy : uint8_t {
 /**
  * @brief Copia un metodo con los parametros de tipo sustituidos.
  *
- * Copia TODA la declaracion -- banderas, contratos, propiedades, parametros de
- * tipo del metodo, cotas y procedencia --; lo que cambia segun quien copia (el
- * nombre del constructor de una instancia, las cotas que quedan, los contratos
- * con `when:` que ya se pueden resolver) lo ajusta quien llama.  El hueco del
- * layout no se copia: es de cada tipo.
+ * Copia TODA la declaracion escrita -- banderas, contratos, propiedades,
+ * parametros de tipo del metodo, cotas y procedencia --; lo que cambia segun
+ * quien copia (el nombre del constructor de una instancia, las cotas que
+ * quedan, los contratos con `when:` que ya se pueden resolver) lo ajusta quien
+ * llama.  El hueco del layout no se copia: es de cada tipo.
  *
  * @param m    El metodo original.
  * @param g    La sustitucion.
@@ -64,26 +63,6 @@ enum class MethodBodyCopy : uint8_t {
 std::unique_ptr<ast::ClassMethodDecl>
 clone_method_with_subst(const ast::ClassMethodDecl &m, const GenSubst &g,
                         MethodBodyCopy body);
-
-/**
- * @brief Copia un campo de struct con los parametros de tipo sustituidos,
- *        con todo lo que lleva (overlay, bits, direccion, valor por defecto,
- *        procedencia).
- * @param f El campo original.
- * @param g La sustitucion.
- * @return La copia.
- */
-ast::StructFieldDecl clone_struct_field_with_subst(const ast::StructFieldDecl &f,
-                                                   const GenSubst &g);
-
-/**
- * @brief Copia un campo de clase con los parametros de tipo sustituidos.
- * @param f El campo original.
- * @param g La sustitucion.
- * @return La copia.
- */
-ast::ClassFieldDecl clone_class_field_with_subst(const ast::ClassFieldDecl &f,
-                                                 const GenSubst &g);
 
 } // namespace vxgen
 } // namespace vx

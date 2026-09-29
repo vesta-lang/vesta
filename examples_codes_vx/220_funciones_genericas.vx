@@ -48,6 +48,29 @@ T cuenta<T>(T x) {
 	return (T)n;
 }
 
+// La FIRMA tambien se copia entera.  `inout`/`out` hacen que quien llama ceda
+// un hueco y el cuerpo lo escriba; la instancia perdia la marca y el valor no
+// volvia.  Un variadico acepta N argumentos; la instancia lo perdia y la
+// llamada no compilaba.
+void doblar_en<T>(inout T v) {
+	v = v + v;
+}
+
+void divide<T>(T a, T b, out T coc, out T resto) {
+	coc   = a / b;
+	resto = a % b;
+}
+
+T suma_desde<T>(T base, i64... resto) {
+	T   total = base;
+	i64 k     = 0_i64;
+	while (k < vacount()) {
+		total = total + (T)resto[k];
+		k     = k + 1;
+	}
+	return total;
+}
+
 i32 main() {
 	i64 a = identidad<i64>(10); // explicito
 	i32 b = identidad(5);       // inferido de '5' -> i32... (literal i64->trunc)
@@ -62,6 +85,14 @@ i32 main() {
 	i64 j      = cuenta<i64>(0);          // 2
 	i64 copias = f + g + h + i + j - 345; // 0 si las cinco son correctas
 
+	i64 v = 21_i64;
+	doblar_en<i64>(v); // 42
+	i64 coc;
+	i64 resto;
+	divide<i64>(7, 2, coc, resto);           // 3 y 1
+	i64 s     = suma_desde<i64>(1, 2, 3, 4); // 10
+	i64 firma = v + coc + resto + s - 56;    // 0 si las tres son correctas
+
 	// 10 + 5 + 20 + 4 + 0 ... ajustado a 42:
-	return (i32)(a + (i64)b + c + d + e + 3 + copias); // 10+5+20+4+0+3 = 42
+	return (i32)(a + (i64)b + c + d + e + 3 + copias + firma); // 10+5+20+4+0+3 = 42
 }

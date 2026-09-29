@@ -22,6 +22,19 @@ struct Par<K, V> {
 	V get_valor() => this.valor;
 }
 
+// Lo que la plantilla dice de su LAYOUT es tambien de cada instancia: una
+// union generica pone sus campos en el mismo sitio, y `@align` fuerza la
+// alineacion.  La instancia los perdia y salia como un struct corriente.
+union Hueco<T> {
+	T   a;
+	i64 b;
+}
+
+@align(16)
+struct Alineada<T> {
+	T x;
+}
+
 i32 main() {
 	Caja<i64> a;
 	a.dato = 20;
@@ -41,5 +54,9 @@ i32 main() {
 	if (sz == 8) { ok = ok + 3; }
 	if (nf == 2) { ok = ok + 2; }
 	if (off == 8) { ok = ok + 2; }
-	return (i32)(a.leer() + (i64)b.dato + p.get_valor() + ok); // 20+8+7+7 = 42
+
+	// 8 (la union mide su campo mayor) + 16 + 16 = 40 -> 0.
+	i64 layout = type.size<Hueco<i32>>() + type.size<Alineada<u8>>()
+		+ type.align<Alineada<u8>>() - 40;
+	return (i32)(a.leer() + (i64)b.dato + p.get_valor() + ok + layout); // 20+8+7+7 = 42
 }

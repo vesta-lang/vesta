@@ -1,0 +1,17 @@
+// Un contrato de TIPO sobre un struct GENERICO se comprueba en cada instancia.
+// La instancia no se llevaba el @size de su plantilla, y un `Caja<i64>` de 8
+// bytes pasaba por uno de 4 sin que nadie lo dijera.
+//
+// Tiene que FALLAR con VXT004: `Caja<i64>` mide 8 bytes, no 4.
+namespace contratos.tipo_generico;
+
+@size(4)
+struct Caja<T> {
+	T x;
+}
+
+i32 main() {
+	Caja<i64> c;
+	c.x = 1;
+	return (i32)c.x;
+}

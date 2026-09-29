@@ -126,6 +126,38 @@ template <class F> bool visit_type(const TypeNode &t, F &f) {
     }
 }
 
+/**
+ * @brief Llama a @p f con la declaracion @p d vista como su clase concreta.
+ *
+ * Solo para lo que cuelga de una lista de declaraciones (`ModuleNode::decls`,
+ * `NamespaceDecl::decls`).  Un @c ClassMethodDecl lleva la etiqueta
+ * @c FunctionDecl, pero nunca vive ahi: esta en las listas TIPADAS de su
+ * tipo, que no pasan por aqui.
+ *
+ * @param d Declaracion.
+ * @param f Visitante con `operator()(const T &)` para cada clase.
+ * @return Falso si la etiqueta no es de una declaracion (p.ej. un
+ *         `comptime { ... }` de nivel superior, que es una sentencia).
+ */
+template <class F> bool visit_decl(const Node &d, F &f) {
+    switch (d.kind) {
+    case NodeKind::FunctionDecl: f(static_cast<const FunctionDecl &>(d)); return true;
+    case NodeKind::GlobalVarDecl: f(static_cast<const GlobalVarDecl &>(d)); return true;
+    case NodeKind::TypeAliasDecl: f(static_cast<const TypeAliasDecl &>(d)); return true;
+    case NodeKind::StructDecl: f(static_cast<const StructDecl &>(d)); return true;
+    case NodeKind::ClassDecl: f(static_cast<const ClassDecl &>(d)); return true;
+    case NodeKind::EnumDecl: f(static_cast<const EnumDecl &>(d)); return true;
+    case NodeKind::ExternFnDecl: f(static_cast<const ExternFnDecl &>(d)); return true;
+    case NodeKind::ImportDecl: f(static_cast<const ImportDecl &>(d)); return true;
+    case NodeKind::NamespaceDecl: f(static_cast<const NamespaceDecl &>(d)); return true;
+    case NodeKind::BytesDecl: f(static_cast<const BytesDecl &>(d)); return true;
+    case NodeKind::ConceptDecl: f(static_cast<const ConceptDecl &>(d)); return true;
+    case NodeKind::ExtensionDecl: f(static_cast<const ExtensionDecl &>(d)); return true;
+    case NodeKind::ImplDecl: f(static_cast<const ImplDecl &>(d)); return true;
+    default: return false;
+    }
+}
+
 } // namespace vx::ast
 
 #endif // VX_AST_KIND_DISPATCH_H

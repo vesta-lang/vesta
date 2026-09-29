@@ -164,6 +164,16 @@ struct Caja<T> {
 	}
 }
 
+// Una FUNCION libre generica declara igual que un metodo, y cada instancia
+// resuelve su `when:` con T ya concreto.  La plantilla se resolvia sin T y no
+// compilaba ("predicado mal formado"); y la instancia no se llevaba ni los
+// contratos ni el @complexity.
+@nothrow
+@nopanic
+@complexity(total_post: O(1), when: type.is_integer<T>())
+@complexity(total_post: O(1), when: type.is_float<T>())
+T mitad<T>(T x) => x / (T)2;
+
 // El `when:` de target se escribe igual, y los dos ejes se combinan en la
 // misma expresion porque es una sola gramatica:
 //
@@ -190,6 +200,8 @@ i32 main() {
 	Caja<f64> cf;
 	cf.v = 1.0;
 	r    = r + (i64)cf.sumar(3.0); // 1 + 3*3 = 10 -> 100 + 10 = 110
+
+	r = r + mitad<i64>(0) + (i64)mitad<f64>(0.0); // + 0 + 0 = 110
 
 	return (i32)r;
 }

@@ -26,6 +26,7 @@
 #include "vx/type_checker.h"
 
 #include "vx/generics/concepts.h"
+#include "vx/generics/field_copy.h"
 #include "vx/generics/member_clone.h"
 
 #include <memory>
@@ -199,8 +200,7 @@ void TypeChecker::inject_concept_defaults_into(ast::StructDecl &s) {
         for (const ast::StructFieldDecl &f : cd->fields) {
             if (!gives_field(f) || has_field(s.fields, f.name))
                 continue; // no lo da, o lo escrito gana
-            ast::StructFieldDecl nf =
-                vxgen::clone_struct_field_with_subst(f, cs.g);
+            ast::StructFieldDecl nf = vxgen::parsed_copy(f, cs.g);
             nf.origin = concept_origin(*ref, f.loc);
             s.fields.push_back(std::move(nf));
         }

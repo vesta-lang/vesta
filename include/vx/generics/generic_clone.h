@@ -34,6 +34,7 @@
 
 #include <memory>
 #include <string>
+#include <type_traits>
 #include <unordered_map>
 #include <vector>
 
@@ -97,6 +98,30 @@ std::string mangle_args(const std::vector<Type> &args);
 std::string generic_instance_name(const std::string &tmpl,
                                   const std::vector<Type> &args);
 
+/**
+ * @brief Quita a una INSTANCIA recien copiada de su plantilla la cabecera
+ *        generica: parametros de tipo, cotas y, si la tiene, el patron de
+ *        especializacion.
+ *
+ * La instancia ya es concreta: sus parametros no existen, y las cotas ya se
+ * comprobaron contra los argumentos al pedirla -- en la instancia hablarian de
+ * una `T` que no esta --.  Con la cabecera puesta se tomaria por otra
+ * plantilla.
+ *
+ * @tparam Decl `ast::FunctionDecl`, `ast::StructDecl`, `ast::ClassDecl` o
+ *              `ast::EnumDecl` (este sin especializaciones).
+ * @param inst La instancia.
+ */
+template <class Decl> void drop_template_head(Decl &inst) {
+    inst.type_params.clear();
+    inst.type_bounds.clear();
+    if constexpr (!std::is_same_v<Decl, ast::EnumDecl>) {
+        inst.is_specialization = false;
+        inst.spec_pattern.clear();
+        inst.generic_head_unresolved = false;
+    }
+}
+
 /// @brief Reconstruye un @c TypeNode AST a partir de un @c Type resuelto.
 ///
 /// Preserva pointee/element y tamano de punteros y arrays (un type-arg
@@ -109,40 +134,6 @@ std::unique_ptr<ast::TypeNode> type_node_from_type(const Type &a,
 ///        vacia, o sea una copia exacta, marcas incluidas).
 std::unique_ptr<ast::TypeNode> clone_type_with_subst(const ast::TypeNode *t,
                                                      const GenSubst &g = {});
-
-/// @brief Clona una lista de tipos COMPARTIDOS (argumentos de un concepto, de
-///        una base) aplicando @p g: cada instancia recibe los suyos, ya
-///        concretos, sin tocar los de la plantilla.
-std::vector<std::shared_ptr<ast::TypeNode>>
-clone_shared_types_with_subst(
-    const std::vector<std::shared_ptr<ast::TypeNode>> &types,
-    const GenSubst &g);
-
-/// @brief Clona una lista de conceptos nombrados (`: Da<T>, View<T>`) con sus
-///        argumentos sustituidos por @p g.
-std::vector<ast::ConceptRef>
-clone_concept_refs_with_subst(const std::vector<ast::ConceptRef> &refs,
-                              const GenSubst &g);
-
-/**
- * @brief Copia a una INSTANCIA lo que su plantilla declara tras `:` -- base,
- *        sus argumentos y conceptos --, con los argumentos sustituidos:
- *        `Caja<T> : Da<T>` pasa a `Caja<i64> : Da<i64>`.
- *
- * Struct y clase lo hacen igual (tienen los mismos tres campos), asi que es
- * una sola funcion para los dos.
- *
- * @tparam Decl `ast::StructDecl` o `ast::ClassDecl`.
- * @param src La plantilla.
- * @param dst La instancia.
- * @param g   La sustitucion de la instancia.
- */
-template <class Decl>
-void clone_header_with_subst(const Decl &src, Decl &dst, const GenSubst &g) {
-    dst.super_name = src.super_name;
-    dst.super_args = clone_shared_types_with_subst(src.super_args, g);
-    dst.interface_names = clone_concept_refs_with_subst(src.interface_names, g);
-}
 
 /**
  * @brief Copia un parametro con su tipo sustituido y TODO lo que lleva: la

@@ -1,0 +1,17 @@
+// Un contrato de TIPO sobre una CLASE generica se comprueba en cada instancia.
+// La instancia de una clase copiaba a mano solo cuatro marcas de su plantilla,
+// y el @size no era una de ellas: se evaporaba sin decir nada.
+//
+// Tiene que FALLAR con VXT004: la instancia `Caja<i64>` no mide 4 bytes.
+namespace contratos.clase_generica;
+
+@size(4)
+class Caja<T> {
+	T x;
+}
+
+i32 main() {
+	Caja<i64> c = new Caja<i64>();
+	c.x         = 1;
+	return (i32)c.x;
+}

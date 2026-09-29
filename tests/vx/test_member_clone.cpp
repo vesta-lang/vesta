@@ -16,6 +16,7 @@
  * parametros por los tipos TAL COMO SE ESCRIBIERON (antes de que existan los
  * layouts que los resolverian).
  */
+#include "vx/generics/field_copy.h"
 #include "vx/generics/generic_infer.h"
 #include "vx/generics/member_clone.h"
 
@@ -112,7 +113,7 @@ int main() {
     f.is_static = true;
     f.is_anonymous = true;
     f.dir = ParamDir::In;
-    const ast::StructFieldDecl cf = vxgen::clone_struct_field_with_subst(f, g);
+    const ast::StructFieldDecl cf = vxgen::parsed_copy(f, g);
     check(generics::type_node_text(cf.type.get()) == "i64",
           "el campo E pasa a i64");
     check(cf.is_static, "`static` se conserva");
@@ -126,7 +127,7 @@ int main() {
     kf.type = named("Self");
     kf.is_final = true;
     kf.lombok_getter = true;
-    const ast::ClassFieldDecl ckf = vxgen::clone_class_field_with_subst(kf, g);
+    const ast::ClassFieldDecl ckf = vxgen::parsed_copy(kf, g);
     check(generics::type_node_text(ckf.type.get()) == "Punto",
           "el campo de clase Self pasa a Punto");
     check(ckf.is_final && ckf.lombok_getter,

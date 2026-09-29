@@ -21,7 +21,8 @@
  * variable (que volvia a su valor inicial en cada llamada), los patrones de
  * valor de un `match`, los sufijos de los literales; y `super(...)` o un `asm`
  * desaparecian enteros.  Aqui se copia TODO campo que el parser escribe, y
- * solo esos: lo que anota el comprobador se recalcula sobre la instancia.
+ * solo esos (con @ref copy_parsed): lo que anota el comprobador se recalcula
+ * sobre la instancia.
  *
  * Solo dos cosas no son copiar: un nombre de tipo que es un parametro de la
  * plantilla se SUSTITUYE, en un tipo escrito y en el `new T[...]`.
@@ -29,8 +30,8 @@
 
 #include "vx/generics/generic_clone.h"
 
-#include "vx/ast/fields.h"
 #include "vx/ast/kind_dispatch.h"
+#include "vx/generics/field_copy.h"
 #include "vx/generics/generic_infer.h" // type_node_text
 
 #include <cstddef>
@@ -43,146 +44,7 @@ namespace vxgen {
 
 namespace {
 
-using ast::fields::Field;
-using ast::fields::Role;
-
-// Todas las formas de copiar un campo, declaradas ANTES de las plantillas que
-// las llaman: dentro de una plantilla solo se ve lo declarado antes.
-template <class T> void copy_fields(const T &src, T &dst, const GenSubst &g);
-template <class V> void copy_value(const V &s, V &d, const GenSubst &g);
-template <class V>
-void copy_value(const std::vector<V> &s, std::vector<V> &d, const GenSubst &g);
-void copy_value(const std::unique_ptr<ast::Expr> &s,
-                std::unique_ptr<ast::Expr> &d, const GenSubst &g);
-void copy_value(const std::unique_ptr<ast::Stmt> &s,
-                std::unique_ptr<ast::Stmt> &d, const GenSubst &g);
-void copy_value(const std::unique_ptr<ast::BlockStmt> &s,
-                std::unique_ptr<ast::BlockStmt> &d, const GenSubst &g);
-void copy_value(const std::unique_ptr<ast::TypeNode> &s,
-                std::unique_ptr<ast::TypeNode> &d, const GenSubst &g);
-void copy_value(const std::shared_ptr<ast::TypeNode> &s,
-                std::shared_ptr<ast::TypeNode> &d, const GenSubst &g);
-void copy_value(const std::unique_ptr<ast::ParamDecl> &s,
-                std::unique_ptr<ast::ParamDecl> &d, const GenSubst &g);
-
-/**
- * @struct FieldCopier
- * @brief Visitante de la lista de campos de @p T: copia los que escribe el
- *        parser de @c src a @c dst y deja los anotados como estan.
- */
-template <class T> struct FieldCopier {
-    const T &src;      ///< el original
-    T &dst;            ///< el clon
-    const GenSubst &g; ///< la sustitucion
-
-    /**
-     * @brief Copia un campo del parser.
-     * @param f El campo.
-     */
-    template <class C, class M>
-    void operator()(const Field<Role::Parsed, C, M> &f) const {
-        copy_value(src.*f.member, dst.*f.member, g);
-    }
-
-    /**
-     * @brief Un campo anotado no se copia: el comprobador lo recalcula sobre
-     *        el clon, que puede tener otros tipos.
-     */
-    template <class C, class M>
-    void operator()(const Field<Role::Annotated, C, M> &) const {}
-};
-
-/**
- * @brief Copia los campos del parser de @p src en @p dst.
- * @param src Original.
- * @param dst Destino (recien construido).
- * @param g   Sustitucion.
- */
-template <class T> void copy_fields(const T &src, T &dst, const GenSubst &g) {
-    FieldCopier<T> copier{src, dst, g};
-    ast::fields::for_each_field<T>(copier);
-}
-
-/**
- * @brief Un nodo nuevo de la clase de @p src con sus campos del parser.
- * @param src Original.
- * @param g   Sustitucion.
- * @return El clon.
- */
-template <class T>
-std::unique_ptr<T> clone_node(const T &src, const GenSubst &g) {
-    auto x = std::make_unique<T>();
-    copy_fields(src, *x, g);
-    return x;
-}
-
-/**
- * @brief Un valor sin hijos se copia tal cual; una pieza con lista de campos
- *        (`MatchArm`, `CatchClause`...), campo a campo.
- * @param s Original.
- * @param d Destino.
- * @param g Sustitucion.
- */
-template <class V> void copy_value(const V &s, V &d, const GenSubst &g) {
-    if constexpr (ast::fields::HasFields<V>::value)
-        copy_fields(s, d, g);
-    else
-        d = s;
-}
-
-/**
- * @brief Una lista, elemento a elemento.
- * @param s Original.
- * @param d Destino.
- * @param g Sustitucion.
- */
-template <class V>
-void copy_value(const std::vector<V> &s, std::vector<V> &d,
-                const GenSubst &g) {
-    d.clear();
-    d.reserve(s.size());
-    for (const V &e : s) {
-        V x{};
-        copy_value(e, x, g);
-        d.push_back(std::move(x));
-    }
-}
-
-/// @brief Una expresion hija.
-void copy_value(const std::unique_ptr<ast::Expr> &s,
-                std::unique_ptr<ast::Expr> &d, const GenSubst &g) {
-    d = clone_expr(s.get(), g);
-}
-
-/// @brief Una sentencia hija.
-void copy_value(const std::unique_ptr<ast::Stmt> &s,
-                std::unique_ptr<ast::Stmt> &d, const GenSubst &g) {
-    d = clone_stmt(s.get(), g);
-}
-
-/// @brief Un bloque hijo: su clase se sabe, no hace falta despachar.
-void copy_value(const std::unique_ptr<ast::BlockStmt> &s,
-                std::unique_ptr<ast::BlockStmt> &d, const GenSubst &g) {
-    d = s ? clone_node(*s, g) : nullptr;
-}
-
-/// @brief Un tipo escrito hijo.
-void copy_value(const std::unique_ptr<ast::TypeNode> &s,
-                std::unique_ptr<ast::TypeNode> &d, const GenSubst &g) {
-    d = clone_type_with_subst(s.get(), g);
-}
-
-/// @brief Un tipo escrito COMPARTIDO: cada clon recibe el suyo.
-void copy_value(const std::shared_ptr<ast::TypeNode> &s,
-                std::shared_ptr<ast::TypeNode> &d, const GenSubst &g) {
-    d = std::shared_ptr<ast::TypeNode>(clone_type_with_subst(s.get(), g));
-}
-
-/// @brief Un parametro hijo (de una lambda).
-void copy_value(const std::unique_ptr<ast::ParamDecl> &s,
-                std::unique_ptr<ast::ParamDecl> &d, const GenSubst &g) {
-    d = s ? clone_param_with_subst(*s, g) : nullptr;
-}
+using field_copy::clone_node;
 
 /**
  * @brief Si @p name es un parametro de tipo de la sustitucion, cual.
@@ -321,23 +183,6 @@ std::unique_ptr<ast::TypeNode> clone_type_with_subst(const ast::TypeNode *t,
     if (!ast::visit_type(*t, cloner))
         ast::abort_unexpected_node(*t, "TypeNode", "clone_type_with_subst");
     return std::move(cloner.out);
-}
-
-std::vector<std::shared_ptr<ast::TypeNode>>
-clone_shared_types_with_subst(
-    const std::vector<std::shared_ptr<ast::TypeNode>> &types,
-    const GenSubst &g) {
-    std::vector<std::shared_ptr<ast::TypeNode>> out;
-    copy_value(types, out, g);
-    return out;
-}
-
-std::vector<ast::ConceptRef>
-clone_concept_refs_with_subst(const std::vector<ast::ConceptRef> &refs,
-                              const GenSubst &g) {
-    std::vector<ast::ConceptRef> out;
-    copy_value(refs, out, g);
-    return out;
 }
 
 std::unique_ptr<ast::ParamDecl> clone_param_with_subst(const ast::ParamDecl &p,

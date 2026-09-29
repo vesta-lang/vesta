@@ -50,11 +50,11 @@
 #include "vx/generics/concepts.h"     // conceptos como predicado comptime
 #include "vx/generics/generic_head.h" // repartir los `<...>` de una decl
 #include "vx/lexer.h" // parse de fragments en comptime_emit_expr
-#include "vx/contract_when.h"
 #include "vx/parser.h" // parse_one_expr para macros con splice
 #include "loader/oop_types.h" // para sizeof(loader::ObjectHeader) en el layout de clases
 #include "vx/generics/generic_clone.h" // GenSubst + clone_* + mangle_* (extraidos del monolito)
-#include "vx/generics/member_clone.h" // la unica copia de un metodo o un campo
+#include "vx/generics/field_copy.h" // la copia de lo escrito en cualquier nodo
+#include "vx/generics/member_clone.h" // un metodo, con o sin cuerpo
 
 #include <algorithm>
 #include <utility>
@@ -439,166 +439,6 @@ bool TypeChecker::is_generic_struct_template(const std::string &name) const {
     return !generic_template_key(name, generic_struct_templates_).empty();
 }
 
-namespace {
-
-/// Da valor a un atomo de un `when:` de contrato con los type params ligados.
-///
-/// Los de target los resuelve el evaluador de @Target -- el mismo que usa la
-/// anotacion @Target, asi que no hay dos gramaticas ni dos verdades.  Los que
-/// hablan del parametro de tipo se responden aqui, que es donde T es concreto:
-/// es lo que permite declarar que `atomic<i64>::fetch_add` es un `lock xadd`
-/// (O(1)) y `atomic<f64>::fetch_add` un bucle CAS (O(n)), del mismo fuente.
-static bool when_atomo_(const std::string &at, const vxgen::GenSubst &g,
-                        bool &ok) {
-    if (cwhen::atom_kind(at) == cwhen::AtomKind::TARGET)
-        return target_expr_matches(at);
-
-    // `pred<PARAM>()` [OP N].  La forma ya la valido `atom_kind`.
-    const size_t lt = at.find('<');
-    const size_t gt = at.find('>', lt == std::string::npos ? 0 : lt);
-    if (lt == std::string::npos || gt == std::string::npos || gt < lt) {
-        ok = false;
-        return false;
-    }
-    const std::string pred = at.substr(0, lt);
-    const std::string param = at.substr(lt + 1, gt - lt - 1);
-
-    const Type *concreto = nullptr;
-    if (g.params && g.args) {
-        for (size_t i = 0; i < g.params->size() && i < g.args->size(); ++i) {
-            if ((*g.params)[i] == param) {
-                concreto = &(*g.args)[i];
-                break;
-            }
-        }
-    }
-    if (!concreto) {
-        ok = false; // el `when:` nombra un param que este tipo no tiene
-        return false;
-    }
-    const PrimitiveKind k = concreto->kind;
-    const bool es_float = (k == PrimitiveKind::F32 || k == PrimitiveKind::F64);
-    const bool es_int = (k == PrimitiveKind::I8 || k == PrimitiveKind::I16 ||
-                         k == PrimitiveKind::I32 || k == PrimitiveKind::I64 ||
-                         k == PrimitiveKind::U8 || k == PrimitiveKind::U16 ||
-                         k == PrimitiveKind::U32 || k == PrimitiveKind::U64);
-
-    if (pred == "type.is_float") return es_float;
-    if (pred == "type.is_integer") return es_int;
-    if (pred == "type.is_pointer") return k == PrimitiveKind::PTR;
-    if (pred == "type.is_signed")
-        return (k == PrimitiveKind::I8 || k == PrimitiveKind::I16 ||
-                k == PrimitiveKind::I32 || k == PrimitiveKind::I64);
-    if (pred == "type.size") {
-        size_t bytes = 0;
-        switch (k) {
-        case PrimitiveKind::I8:
-        case PrimitiveKind::U8:
-        case PrimitiveKind::BOOL: bytes = 1; break;
-        case PrimitiveKind::I16:
-        case PrimitiveKind::U16: bytes = 2; break;
-        case PrimitiveKind::I32:
-        case PrimitiveKind::U32:
-        case PrimitiveKind::F32:
-        case PrimitiveKind::CHAR: bytes = 4; break;
-        case PrimitiveKind::I64:
-        case PrimitiveKind::U64:
-        case PrimitiveKind::F64:
-        case PrimitiveKind::PTR: bytes = 8; break;
-        default: ok = false; return false;
-        }
-        const size_t par = at.find(')', gt);
-        if (par == std::string::npos) {
-            ok = false;
-            return false;
-        }
-        std::string resto = at.substr(par + 1);
-        size_t a = resto.find_first_not_of(" 	");
-        if (a == std::string::npos) {
-            ok = false;
-            return false;
-        }
-        resto = resto.substr(a);
-        std::string op;
-        while (!resto.empty() && (resto[0] == '=' || resto[0] == '!' ||
-                                  resto[0] == '<' || resto[0] == '>')) {
-            op.push_back(resto[0]);
-            resto.erase(resto.begin());
-        }
-        a = resto.find_first_not_of(" 	");
-        if (op.empty() || a == std::string::npos) {
-            ok = false;
-            return false;
-        }
-        /* Ancho FIJO, no `long`: en Windows mide 32 bits, asi que un tamano por
-         * encima de 2 GB se recortaba SIN DECIRLO y el contrato se comprobaba
-         * contra otro numero.  Mismo fallo que tenia el umbral del JIT: ver la
-         * nota en `src/jit/auto_jit.cpp`. */
-        const int64_t n =
-            static_cast<int64_t>(std::strtoll(resto.c_str() + a, nullptr, 10));
-        const int64_t b = static_cast<int64_t>(bytes);
-        if (op == "==" || op == "=") return b == n;
-        if (op == "!=") return b != n;
-        if (op == "<") return b < n;
-        if (op == "<=") return b <= n;
-        if (op == ">") return b > n;
-        if (op == ">=") return b >= n;
-        ok = false;
-        return false;
-    }
-    ok = false;
-    return false;
-}
-
-} // namespace
-
-void TypeChecker::resolve_pending_complexity_(ast::ClassMethodDecl &nm,
-                                              const ast::ClassMethodDecl &m,
-                                              const vxgen::GenSubst &g,
-                                              const SourceLoc &loc) {
-    nm.complexity_pending.clear();
-    nm.footprint_pending.clear();
-
-    cwhen::AtomEval ev = [&](const std::string &at, bool &ok) {
-        return when_atomo_(at, g, ok);
-    };
-    cwhen::ErrFn err = [&](const std::string &msg) { diags_.error(loc, msg); };
-
-    // @complexity con `when:` sobre T: aqui T ya es concreto.
-    if (!m.complexity_pending.empty()) {
-        cwhen::Resolved r;
-        cwhen::resolve(m.complexity_pending, ev, err, r);
-        nm.complexity_expr = std::move(r.expr);
-        nm.complexity_vars = std::move(r.vars);
-        nm.complexity_partial_pre = std::move(r.partial_pre);
-        nm.complexity_partial_post = std::move(r.partial_post);
-        nm.complexity_total_pre = std::move(r.total_pre);
-        nm.complexity_total_post = std::move(r.total_post);
-    }
-
-    // Contratos de HUELLA con `when:` sobre T (mismo motivo).  El default son
-    // los campos directos que el clon ya copio.
-    if (!m.footprint_pending.empty()) {
-        cwhen::ResolvedFP base;
-        base.pure = nm.contract_pure ? 1 : -1;
-        base.nothrow_ = nm.contract_nothrow ? 1 : -1;
-        base.nopanic = nm.contract_nopanic ? 1 : -1;
-        base.alloc = nm.contract_alloc;
-        base.alloc_partial = nm.contract_alloc_partial;
-        base.stack = nm.contract_stack;
-        base.stack_partial = nm.contract_stack_partial;
-        cwhen::ResolvedFP r;
-        cwhen::resolve_footprint(m.footprint_pending, base, ev, err, r);
-        nm.contract_pure = (r.pure == 1);
-        nm.contract_nothrow = (r.nothrow_ == 1);
-        nm.contract_nopanic = (r.nopanic == 1);
-        nm.contract_alloc = r.alloc;
-        nm.contract_alloc_partial = r.alloc_partial;
-        nm.contract_stack = r.stack;
-        nm.contract_stack_partial = r.stack_partial;
-    }
-}
-
 /**
  * @brief Le toca a ESTE modulo clonar el cuerpo de @p m, o ya se lo quedo
  *        otro?
@@ -845,19 +685,15 @@ std::string TypeChecker::monomorphize_class(const std::string &template_name,
     GenSubst g = spec ? GenSubst{&spec_params, &spec_args}
                       : GenSubst{&tmpl->type_params, &args};
 
+    /* Todo lo escrito en la plantilla, con sus argumentos sustituidos (`:
+     * Iterator<T>` es `: Iterator<i64>`); los metodos van uno a uno abajo: uno
+     * puede no existir en esta instancia (`where`) y su cuerpo solo lo clona
+     * quien se queda la instancia. */
     auto cloned = std::make_unique<ast::ClassDecl>();
-    cloned->loc = src->loc;
+    vxgen::copy_parsed(*src, *cloned, g, &ast::ClassDecl::methods);
     cloned->name = mangled;
-    // Con sus argumentos sustituidos: `: Iterator<T>` es `: Iterator<i64>`.
-    clone_header_with_subst(*src, *cloned, g);
-    cloned->is_final = src->is_final;
-    cloned->is_aspect = src->is_aspect;
-    cloned->is_interface = src->is_interface;
-    cloned->is_introspect = src->is_introspect;
-    // type_params vacio: ya es concreto.
+    vxgen::drop_template_head(*cloned);
 
-    for (const auto &f : src->fields)
-        cloned->fields.push_back(vxgen::clone_class_field_with_subst(f, g));
     for (const auto &m : src->methods) {
         auto nm = clone_instance_method_(*m, mangled, g, loc);
         if (!nm) continue;
@@ -942,24 +778,11 @@ std::string TypeChecker::monomorphize_enum(const std::string &template_name,
 
     GenSubst g{&tmpl->type_params, &args};
 
+    // Todo lo escrito, con los tipos de los payloads sustituidos.
     auto cloned = std::make_unique<ast::EnumDecl>();
-    cloned->loc = tmpl->loc;
+    vxgen::copy_parsed(*tmpl, *cloned, g);
     cloned->name = mangled;
-    cloned->is_introspect = tmpl->is_introspect;
-    cloned->is_public = tmpl->is_public;
-    // type_params vacio: ya es concreto.
-
-    // Clonar variantes sustituyendo los payload types.
-    for (const auto &v : tmpl->variants) {
-        ast::EnumVariantDecl nv;
-        nv.loc = v.loc;
-        nv.name = v.name;
-        nv.field_types.reserve(v.field_types.size());
-        for (const auto &ft : v.field_types) {
-            nv.field_types.push_back(clone_type_with_subst(ft.get(), g));
-        }
-        cloned->variants.push_back(std::move(nv));
-    }
+    vxgen::drop_template_head(*cloned);
 
     monomorphized_[mangled] = true;
 
@@ -1054,20 +877,14 @@ std::string TypeChecker::monomorphize_struct(const std::string &template_name,
     GenSubst g = spec ? GenSubst{&spec_params, &spec_args}
                       : GenSubst{&tmpl->type_params, &args};
 
+    /* Todo lo escrito en la plantilla, con sus argumentos sustituidos -- lo que
+     * declara cumplir incluido: `struct Caja<T> : Da<T>` es, en `Caja<i64>`,
+     * `: Da<i64>` --; los metodos, uno a uno abajo (ver monomorphize_class). */
     auto cloned = std::make_unique<ast::StructDecl>();
-    cloned->loc = src->loc;
+    vxgen::copy_parsed(*src, *cloned, g, &ast::StructDecl::methods);
     cloned->name = mangled;
-    cloned->is_public = src->is_public;
-    cloned->is_introspect = src->is_introspect;
-    /* Lo que la plantilla declara cumplir, con sus argumentos SUSTITUIDOS:
-     * `struct Caja<T> : Da<T>` es, en `Caja<i64>`, `: Da<i64>`.  No se copiaba,
-     * asi que la conformidad de un struct generico no se comprobaba nunca en
-     * sus instancias. */
-    clone_header_with_subst(*src, *cloned, g);
-    // type_params vacio: ya es concreto.
+    vxgen::drop_template_head(*cloned);
 
-    for (const auto &f : src->fields)
-        cloned->fields.push_back(vxgen::clone_struct_field_with_subst(f, g));
     for (const auto &m : src->methods) {
         auto nm = clone_instance_method_(*m, mangled, g, loc);
         if (nm) cloned->methods.push_back(std::move(nm));
@@ -1319,8 +1136,7 @@ void TypeChecker::flatten_struct_inheritance() {
                             S->name +
                             "' (produciria un layout de tamano infinito); usa "
                             "'Self*'");
-                ast::StructFieldDecl nf =
-                    vxgen::clone_struct_field_with_subst(fld, g);
+                ast::StructFieldDecl nf = vxgen::parsed_copy(fld, g);
                 if (*rit != S) mark_inherited(nf.origin, **rit, fld.loc);
                 f.fields.push_back(std::move(nf));
             }
@@ -1448,9 +1264,13 @@ std::string TypeChecker::monomorphize_function(const std::string &template_name,
     GenSubst g = spec ? GenSubst{&spec_params, &spec_args}
                       : GenSubst{&tmpl->type_params, &args};
 
+    /* Todo lo escrito en la plantilla -- parametros con su direccion, su
+     * variadico y su registro, contratos, atributos --, con T sustituido.  El
+     * cuerpo, abajo: solo lo clona quien se queda la instancia. */
     auto cloned = std::make_unique<ast::FunctionDecl>();
-    cloned->loc = src->loc;
+    vxgen::copy_parsed(*src, *cloned, g, &ast::FunctionDecl::body);
     cloned->name = mangled;
+    vxgen::drop_template_head(*cloned);
     instance_template_of_[util::InternedName::intern(mangled)] =
         util::InternedName::intern(tmpl->name);
     /* Y DE DONDE SALIO, para que un error en su cuerpo pueda decirlo.
@@ -1483,33 +1303,31 @@ std::string TypeChecker::monomorphize_function(const std::string &template_name,
          * escribio de verdad, en vez de dejarlo a un salto. */
         cloned->instance_parent = checking_instance_;
     }
-    cloned->is_public = src->is_public;
-    cloned->is_noexcept = src->is_noexcept;
-    cloned->is_pure = src->is_pure;
-    // Preservar el caracter comptime: una comptime fn generica monomorfizada
-    // sigue siendo comptime (su instancia concreta se ejecuta en la ComptimeVM
-    // como cualquier otra comptime fn; su introspeccion `sizeof<Vec3>` etc. se
-    // pliega a constante al bajarla).  is_macro NO (los @Macro tienen su path).
-    cloned->is_comptime = src->is_comptime;
-    /* La ficha de `@Provides` NO viaja a la instancia, y es a proposito.
+    // Una comptime fn generica sigue siendo comptime (la copia lo lleva: su
+    // instancia se ejecuta en la ComptimeVM y su introspeccion se pliega a
+    // constante al bajarla).  `@Macro` NO: los @Macro tienen su path.
+    cloned->is_macro = false;
+    /* Los PAPELES de proveedor no viajan a la instancia, y es a proposito:
+     * `@Provides`, `@StringConcat`, `@StringEq`, `@SyncImpl`,
+     * `@HelperOverride` y `@Hook`.
      *
-     * La que cubre el builtin es la PLANTILLA; sus instancias son funciones
-     * corrientes que alguien ya nombro.  Copiarla las registraba como
+     * El proveedor es la PLANTILLA; sus instancias son funciones corrientes
+     * que alguien ya nombro.  Copiar `@Provides` las registraba como
      * proveedoras tambien, y eso hacia dos cosas malas: quien resuelve el
      * builtin podia encontrar una INSTANCIA y querer instanciarla otra vez, y
      * el propio registro crecia mientras se recorria -- con un puntero dentro,
-     * que es un acceso invalido en cuanto realoja --. */
-    // type_params vacio: ya es concreta.
-    if (src->return_type)
-        cloned->return_type = clone_type_with_subst(src->return_type.get(), g);
-    for (const auto &p : src->params) {
-        auto np = std::make_unique<ast::ParamDecl>();
-        np->loc = p->loc;
-        np->name = p->name;
-        np->is_expr_capture = p->is_expr_capture;
-        np->type = clone_type_with_subst(p->type.get(), g);
-        cloned->params.push_back(std::move(np));
-    }
+     * que es un acceso invalido en cuanto realoja --.  Los otros se recogen
+     * recorriendo las declaraciones sin saltar las instancias, asi que cada
+     * instancia contaria como un SEGUNDO proveedor del mismo papel. */
+    cloned->provides_builtin = Builtin::Unknown;
+    cloned->is_string_concat_override = false;
+    cloned->is_string_eq_override = false;
+    cloned->is_sync_impl = false;
+    cloned->helper_override_target.clear();
+    cloned->hook_point.clear();
+    cloned->hook_selector.clear();
+    // Los @complexity/huella cuyo `when:` habla de T: aqui T ya es concreto.
+    resolve_pending_complexity_(*cloned, *src, g, loc);
     /* EL CUERPO SOLO LO CLONA QUIEN SE QUEDA CON LA INSTANCIA.
      *
      * Cada modulo tiene su propio checker, asi que sin esto `procesa<S0>` se
@@ -2103,75 +1921,7 @@ void TypeChecker::apply_class_field_defaults_to_ctors() {
     visit(mod_.decls);
 }
 
-/// Resuelve los @complexity de un metodo que NO es de una plantilla generica.
-///
-/// El parser los deja todos sin resolver a proposito: hay que verlos juntos
-/// para aplicar la prioridad por especificidad.  Los de una instanciacion los
-/// resuelve el clon (con T); estos no tienen T, asi que todos sus atomos deben
-/// ser de target -- uno que hable de un parametro de tipo aqui no tiene a que
-/// referirse, y se dice.
 namespace {
-/// Resuelve los @complexity pendientes de CUALQUIER declaracion sin type
-/// params (funcion libre o metodo no generico): todos sus atomos deben ser de
-/// target -- aqui no hay T al que referirse.  Template porque FunctionDecl y
-/// ClassMethodDecl tienen los mismos campos de @complexity y no queria dos
-/// copias de esto.  Aplica la REGLA DE PRIORIDAD (cwhen::resolve): sin ella
-/// ganaba el ultimo textualmente, tambien en las funciones libres.
-template <class Decl> void resolve_cx_sin_tipos(Decl &m, Diagnostics &diags) {
-    if (m.complexity_pending.empty()) return;
-    static const vxgen::GenSubst kSinTipos{};
-    cwhen::AtomEval ev = [&](const std::string &at, bool &ok) {
-        if (cwhen::atom_kind(at) == cwhen::AtomKind::TIPO) {
-            ok = false;
-            return false;
-        }
-        return when_atomo_(at, kSinTipos, ok);
-    };
-    cwhen::ErrFn err = [&](const std::string &msg) { diags.error(m.loc, msg); };
-    cwhen::Resolved r;
-    cwhen::resolve(m.complexity_pending, ev, err, r);
-    m.complexity_expr = std::move(r.expr);
-    m.complexity_vars = std::move(r.vars);
-    m.complexity_partial_pre = std::move(r.partial_pre);
-    m.complexity_partial_post = std::move(r.partial_post);
-    m.complexity_total_pre = std::move(r.total_pre);
-    m.complexity_total_post = std::move(r.total_post);
-    m.complexity_pending.clear();
-}
-
-/// Igual, pero para los contratos de HUELLA con `when:`.  El default son los
-/// campos directos (los declarados SIN when); un `when:` que casa gana sobre
-/// ellos por ser mas especifico.
-template <class Decl> void resolve_fp_sin_tipos(Decl &m, Diagnostics &diags) {
-    if (m.footprint_pending.empty()) return;
-    static const vxgen::GenSubst kSinTipos{};
-    cwhen::AtomEval ev = [&](const std::string &at, bool &ok) {
-        if (cwhen::atom_kind(at) == cwhen::AtomKind::TIPO) {
-            ok = false;
-            return false;
-        }
-        return when_atomo_(at, kSinTipos, ok);
-    };
-    cwhen::ErrFn err = [&](const std::string &msg) { diags.error(m.loc, msg); };
-    cwhen::ResolvedFP base;
-    base.pure = m.contract_pure ? 1 : -1;
-    base.nothrow_ = m.contract_nothrow ? 1 : -1;
-    base.nopanic = m.contract_nopanic ? 1 : -1;
-    base.alloc = m.contract_alloc;
-    base.alloc_partial = m.contract_alloc_partial;
-    base.stack = m.contract_stack;
-    base.stack_partial = m.contract_stack_partial;
-    cwhen::ResolvedFP r;
-    cwhen::resolve_footprint(m.footprint_pending, base, ev, err, r);
-    m.contract_pure = (r.pure == 1);
-    m.contract_nothrow = (r.nothrow_ == 1);
-    m.contract_nopanic = (r.nopanic == 1);
-    m.contract_alloc = r.alloc;
-    m.contract_alloc_partial = r.alloc_partial;
-    m.contract_stack = r.stack;
-    m.contract_stack_partial = r.stack_partial;
-    m.footprint_pending.clear();
-}
 
 /// @brief Cierto si @p k viaja como una DIRECCION en una llamada.
 ///
@@ -2248,50 +1998,6 @@ static bool provider_matches(const FunctionSig &want,
     return true;
 }
 } // namespace
-
-void TypeChecker::resolve_complexity_no_generico_(ast::ClassMethodDecl &m) {
-    resolve_cx_sin_tipos(m, diags_);
-}
-
-/// Recorre las decls resolviendo los @complexity que queden pendientes.
-///
-/// Las instanciaciones genericas ya vienen resueltas del clon (que es quien
-/// tiene T) y llegan con la lista vacia; esto cubre el resto (funciones libres
-/// incluidas: sin este pase, la regla de prioridad no las tocaba y ganaba el
-/// ultimo textualmente).  Las PLANTILLAS se saltan: no producen IR, y sus
-/// `when:` sobre T no tienen respuesta aqui.
-void TypeChecker::resolve_complexity_decls_(
-    std::vector<std::unique_ptr<ast::Node>> &decls) {
-    for (auto &d : decls) {
-        if (!d) continue;
-        if (d->kind == ast::NodeKind::NamespaceDecl) {
-            resolve_complexity_decls_(
-                static_cast<ast::NamespaceDecl *>(d.get())->decls);
-            continue;
-        }
-        if (d->kind == ast::NodeKind::FunctionDecl) {
-            auto *fd = static_cast<ast::FunctionDecl *>(d.get());
-            resolve_cx_sin_tipos(*fd, diags_);
-            resolve_fp_sin_tipos(*fd, diags_);
-        } else if (d->kind == ast::NodeKind::StructDecl) {
-            auto *sd = static_cast<ast::StructDecl *>(d.get());
-            if (!sd->type_params.empty() || sd->is_specialization) continue;
-            for (auto &m : sd->methods)
-                if (m) {
-                    resolve_cx_sin_tipos(*m, diags_);
-                    resolve_fp_sin_tipos(*m, diags_);
-                }
-        } else if (d->kind == ast::NodeKind::ClassDecl) {
-            auto *cd = static_cast<ast::ClassDecl *>(d.get());
-            if (!cd->type_params.empty()) continue;
-            for (auto &m : cd->methods)
-                if (m) {
-                    resolve_cx_sin_tipos(*m, diags_);
-                    resolve_fp_sin_tipos(*m, diags_);
-                }
-        }
-    }
-}
 
 /**
  * @brief Crea la instancia del proveedor de reserva que trabaja en BYTES.

@@ -32,18 +32,17 @@ template <class T> bool fields_equal(const T &a, const T &b);
 template <class V> bool same_value(const V &a, const V &b);
 template <class V>
 bool same_value(const std::vector<V> &a, const std::vector<V> &b);
+template <class V>
+bool same_value(const std::unique_ptr<V> &a, const std::unique_ptr<V> &b);
 bool same_value(const double &a, const double &b);
 bool same_value(const SourceLoc &a, const SourceLoc &b);
+bool same_value(const std::unique_ptr<Node> &a, const std::unique_ptr<Node> &b);
 bool same_value(const std::unique_ptr<Expr> &a, const std::unique_ptr<Expr> &b);
 bool same_value(const std::unique_ptr<Stmt> &a, const std::unique_ptr<Stmt> &b);
-bool same_value(const std::unique_ptr<BlockStmt> &a,
-                const std::unique_ptr<BlockStmt> &b);
 bool same_value(const std::unique_ptr<TypeNode> &a,
                 const std::unique_ptr<TypeNode> &b);
 bool same_value(const std::shared_ptr<TypeNode> &a,
                 const std::shared_ptr<TypeNode> &b);
-bool same_value(const std::unique_ptr<ParamDecl> &a,
-                const std::unique_ptr<ParamDecl> &b);
 
 /**
  * @struct FieldComparer
@@ -107,6 +106,21 @@ bool same_value(const std::vector<V> &a, const std::vector<V> &b) {
     return true;
 }
 
+/**
+ * @brief Un hijo de clase CONOCIDA (un bloque, un parametro, un metodo), campo
+ *        a campo.
+ * @param a Uno.
+ * @param b Otro.
+ * @return Cierto si los dos son nulos o coinciden.
+ */
+template <class V>
+bool same_value(const std::unique_ptr<V> &a, const std::unique_ptr<V> &b) {
+    static_assert(fields::HasFields<V>::value,
+                  "un hijo sin lista de campos no se sabe comparar");
+    if (!a || !b) return !a && !b;
+    return fields_equal(*a, *b);
+}
+
 /// @brief Un literal real, por sus BITS: un NaN escrito es igual a si mismo.
 bool same_value(const double &a, const double &b) {
     return std::memcmp(&a, &b, sizeof(double)) == 0;
@@ -117,6 +131,12 @@ bool same_value(const SourceLoc &a, const SourceLoc &b) {
     return a.file_name == b.file_name && a.line == b.line &&
            a.column == b.column && a.offset == b.offset &&
            a.length == b.length && a.expansion == b.expansion;
+}
+
+/// @brief Una entrada de una lista de declaraciones.
+bool same_value(const std::unique_ptr<Node> &a,
+                const std::unique_ptr<Node> &b) {
+    return same_parsed_decl(a.get(), b.get());
 }
 
 /// @brief Una expresion hija.
@@ -131,13 +151,6 @@ bool same_value(const std::unique_ptr<Stmt> &a,
     return same_parsed(a.get(), b.get());
 }
 
-/// @brief Un bloque hijo.
-bool same_value(const std::unique_ptr<BlockStmt> &a,
-                const std::unique_ptr<BlockStmt> &b) {
-    if (!a || !b) return !a && !b;
-    return fields_equal(*a, *b);
-}
-
 /// @brief Un tipo escrito hijo.
 bool same_value(const std::unique_ptr<TypeNode> &a,
                 const std::unique_ptr<TypeNode> &b) {
@@ -150,18 +163,11 @@ bool same_value(const std::shared_ptr<TypeNode> &a,
     return same_parsed(a.get(), b.get());
 }
 
-/// @brief Un parametro hijo.
-bool same_value(const std::unique_ptr<ParamDecl> &a,
-                const std::unique_ptr<ParamDecl> &b) {
-    if (!a || !b) return !a && !b;
-    return fields_equal(*a, *b);
-}
-
 /**
  * @struct SameAs
  * @brief Visitante de los `visit_*`: compara el nodo visitado con @c other,
  *        que ya se sabe de la misma etiqueta.
- * @tparam Base `Expr`, `Stmt` o `TypeNode`.
+ * @tparam Base `Expr`, `Stmt`, `TypeNode` o `Node` (declaraciones).
  */
 template <class Base> struct SameAs {
     const Base &other; ///< el otro nodo
@@ -205,6 +211,23 @@ bool same_parsed(const TypeNode *a, const TypeNode *b) {
 
 bool same_parsed(const ParamDecl &a, const ParamDecl &b) {
     return fields_equal(a, b);
+}
+
+bool same_parsed(const ClassMethodDecl &a, const ClassMethodDecl &b) {
+    return fields_equal(a, b);
+}
+
+bool same_parsed_decl(const Node *a, const Node *b) {
+    if (!a || !b) return !a && !b;
+    if (a->kind != b->kind) return false;
+    SameAs<Node> cmp{*b};
+    if (visit_decl(*a, cmp)) return cmp.eq;
+    /* Un `comptime { ... }` de nivel superior cuelga de la misma lista que las
+     * declaraciones, y es una sentencia. */
+    if (a->kind == NodeKind::ComptimeBlockStmt)
+        return same_parsed(static_cast<const Stmt *>(a),
+                           static_cast<const Stmt *>(b));
+    abort_unexpected_node(*a, "Decl", "same_parsed_decl");
 }
 
 } // namespace vx::ast

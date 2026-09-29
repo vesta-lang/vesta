@@ -1,0 +1,17 @@
+// Un contrato sobre una funcion GENERICA se comprueba en cada instancia, igual
+// que sobre una que no lo es.  La plantilla no baja -- bajan sus instancias --,
+// y la instancia no se llevaba el contrato: el @pure se evaporaba sin decir
+// nada y el programa compilaba como si se cumpliera.
+//
+// Tiene que FALLAR con VXT004: `mal<i64>` escribe un global.
+namespace contratos.generica;
+
+i64 total = 0_i64;
+
+@pure
+T mal<T>(T x) {
+	total = total + 1;
+	return x;
+}
+
+i32 main() => (i32)mal<i64>(2);

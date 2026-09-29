@@ -7,21 +7,26 @@
 
 /**
  * @file tests/vx/test_ast_clone.cpp
- * @brief El clon de un arbol es el original: en todo el corpus, y en los tres
- *        casos que el clonador viejo perdia.
+ * @brief El clon de un arbol es el original: en todo el corpus, cuerpos y
+ *        declaraciones, y en los casos que las copias viejas perdian.
  *
  * El clonador de las genericas enumeraba a mano lo que copiaba y se quedaba
  * corto en silencio: los argumentos con nombre de una llamada, el `static` de
- * una variable, los patrones de valor de un `match`.  Ahora clon y comparacion
- * recorren la MISMA lista de campos (`vx/ast/fields.h`); aqui se comprueba que
- * clonar sin sustituir devuelve lo mismo para cada cuerpo del corpus, que la
- * comparacion no es trivialmente cierta, y que la sustitucion hace lo suyo.
+ * una variable, los patrones de valor de un `match`; y las instancias de
+ * funciones, structs, clases y enums, la direccion de un parametro, que un
+ * struct era union, sus contratos.  Ahora clon y comparacion recorren la MISMA
+ * lista de campos (`vx/ast/fields.h`); aqui se comprueba que clonar sin
+ * sustituir devuelve lo mismo para cada cuerpo y cada declaracion del corpus,
+ * que la comparacion no es trivialmente cierta, y que la sustitucion hace lo
+ * suyo.
  *
  * Uso:  ./test_vx_test_ast_clone [raiz_del_repositorio]
  */
 #include "vx/ast/ast_equal.h"
 #include "vx/diagnostic.h"
+#include "vx/generics/field_copy.h"
 #include "vx/generics/generic_clone.h"
+#include "vx/generics/member_clone.h"
 #include "vx/lexer.h"
 #include "vx/parser.h"
 
@@ -36,6 +41,7 @@ namespace {
 
 int g_failures = 0; ///< Cuantas comprobaciones han fallado.
 int g_bodies = 0;   ///< Cuantos cuerpos se han clonado y comparado.
+int g_decls = 0;    ///< Cuantas declaraciones se han clonado y comparado.
 
 /**
  * @brief Deja constancia si una condicion no se cumple.
@@ -114,10 +120,15 @@ void check_decls(const std::vector<std::unique_ptr<vx::ast::Node>> &decls,
 void check_methods(
     const std::vector<std::unique_ptr<vx::ast::ClassMethodDecl>> &methods,
     const std::string &where) {
-    for (const auto &m : methods)
-        if (m)
-            check_callable(m->params, m->return_type.get(), m->body.get(),
-                           where + ":" + m->name);
+    for (const auto &m : methods) {
+        if (!m) continue;
+        check_callable(m->params, m->return_type.get(), m->body.get(),
+                       where + ":" + m->name);
+        auto c = vx::vxgen::clone_method_with_subst(
+            *m, {}, vx::vxgen::MethodBodyCopy::Clone);
+        check(vx::ast::same_parsed(*m, *c), "el clon de un metodo",
+              where + ":" + m->name);
+    }
 }
 
 /**
@@ -130,6 +141,12 @@ void check_decls(const std::vector<std::unique_ptr<vx::ast::Node>> &decls,
     using vx::ast::NodeKind;
     for (const auto &d : decls) {
         if (!d) continue;
+        // La declaracion ENTERA -- cabecera, miembros, atributos -- se copia
+        // igual que un cuerpo: su clon es ella.
+        auto c = vx::vxgen::clone_decl(d.get());
+        check(vx::ast::same_parsed_decl(d.get(), c.get()),
+              "el clon de una declaracion", where);
+        ++g_decls;
         switch (d->kind) {
         case NodeKind::FunctionDecl: {
             const auto &f = static_cast<const vx::ast::FunctionDecl &>(*d);
@@ -320,6 +337,101 @@ void check_substitution() {
     check(vx::ast::same_parsed(&u, cu.get()), "otro nombre no se toca");
 }
 
+/**
+ * @brief La primera declaracion de un modulo con esa etiqueta.
+ * @param mod  Modulo.
+ * @param kind Etiqueta.
+ * @return La declaracion, o nula.
+ */
+const vx::ast::Node *find_decl(const vx::ast::ModuleNode &mod,
+                               vx::ast::NodeKind kind) {
+    for (const auto &d : mod.decls)
+        if (d && d->kind == kind) return d.get();
+    return nullptr;
+}
+
+/**
+ * @brief Las declaraciones cuyas copias a mano perdian campos: su clon los
+ *        conserva, la comparacion distingue un campo del parser cambiado y no
+ *        uno anotado, y lo que el llamante copia a su manera no se copia.
+ */
+void check_decl_fields() {
+    using vx::ast::NodeKind;
+    const std::string src = "@pure\n"
+                            "@section(\".texto\")\n"
+                            "void doblar<T>(inout T v, i64... resto) { v = v + v; }\n"
+                            "@align(16)\n"
+                            "union U<T> { T a; i64 b; }\n"
+                            "enum Nivel : u8 { Bajo = 3, Alto = 40 }\n"
+                            "@size(8)\n"
+                            "@Data\n"
+                            "class Caja<T> { T x; }\n";
+    vx::Diagnostics diags;
+    auto mod = parse(src, "<decls>", diags);
+    check(mod && !diags.has_errors(), "el caso de declaraciones parsea");
+    if (!mod || diags.has_errors()) return;
+
+    const auto *fn = static_cast<const vx::ast::FunctionDecl *>(
+        find_decl(*mod, NodeKind::FunctionDecl));
+    check(fn != nullptr && fn->params.size() == 2, "doblar y sus parametros");
+    if (fn != nullptr && fn->params.size() == 2) {
+        auto c = vx::vxgen::clone_decl(fn);
+        auto *cf = static_cast<vx::ast::FunctionDecl *>(c.get());
+        check(vx::ast::same_parsed_decl(fn, cf), "el clon de doblar es ella");
+        check(cf->params[0]->dir == vx::ParamDir::InOut &&
+                  cf->params[1]->is_variadic && cf->contract_pure &&
+                  cf->attr_section == ".texto",
+              "la direccion, el variadico, @pure y @section viajan");
+        cf->mangled_label = "otra";
+        check(vx::ast::same_parsed_decl(fn, cf),
+              "una etiqueta ANOTADA distinta no cuenta");
+        cf->params[0]->dir = vx::ParamDir::None;
+        check(!vx::ast::same_parsed_decl(fn, cf),
+              "una direccion distinta si cuenta");
+
+        // Lo que el llamante copia a su manera se queda sin copiar.
+        vx::ast::FunctionDecl sin_cuerpo;
+        vx::vxgen::copy_parsed(*fn, sin_cuerpo, {},
+                               &vx::ast::FunctionDecl::body);
+        check(sin_cuerpo.body == nullptr && sin_cuerpo.params.size() == 2,
+              "copy_parsed salta el cuerpo nombrado y copia lo demas");
+    }
+
+    const auto *un = static_cast<const vx::ast::StructDecl *>(
+        find_decl(*mod, NodeKind::StructDecl));
+    check(un != nullptr, "la union");
+    if (un != nullptr) {
+        auto c = vx::vxgen::clone_decl(un);
+        auto *cu = static_cast<vx::ast::StructDecl *>(c.get());
+        check(cu->is_union && cu->attr_align == 16,
+              "union y @align viajan");
+        cu->is_union = false;
+        check(!vx::ast::same_parsed_decl(un, cu), "is_union distinto cuenta");
+    }
+
+    const auto *en = static_cast<const vx::ast::EnumDecl *>(
+        find_decl(*mod, NodeKind::EnumDecl));
+    check(en != nullptr && en->variants.size() == 2, "el enum con valores");
+    if (en != nullptr && en->variants.size() == 2) {
+        auto c = vx::vxgen::clone_decl(en);
+        const auto *ce = static_cast<const vx::ast::EnumDecl *>(c.get());
+        check(ce->backing_type == "u8" && ce->variants[1].value_expr,
+              "el tipo base y el valor de cada variante viajan");
+        check(vx::ast::same_parsed_decl(en, ce), "el clon del enum es el");
+    }
+
+    const auto *cl = static_cast<const vx::ast::ClassDecl *>(
+        find_decl(*mod, NodeKind::ClassDecl));
+    check(cl != nullptr, "la clase");
+    if (cl != nullptr) {
+        auto c = vx::vxgen::clone_decl(cl);
+        const auto *cc = static_cast<const vx::ast::ClassDecl *>(c.get());
+        check(cc->contract_size == 8 && cc->lombok_data,
+              "@size y @Data de la clase viajan");
+        check(vx::ast::same_parsed_decl(cl, cc), "el clon de la clase es ella");
+    }
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -327,12 +439,15 @@ int main(int argc, char **argv) {
     const std::string root = (argc > 1) ? argv[1] : ".";
     check_lost_fields();
     check_substitution();
+    check_decl_fields();
     if (!check_corpus(root)) {
         std::printf("  no se encontro tests/vx/fmt_corpus.txt\n");
         return 2;
     }
     check(g_bodies > 1000, "el corpus aporta cuerpos de sobra");
-    std::printf("  %d cuerpos clonados y comparados\n", g_bodies);
+    check(g_decls > 1000, "el corpus aporta declaraciones de sobra");
+    std::printf("  %d cuerpos y %d declaraciones clonados y comparados\n",
+                g_bodies, g_decls);
     if (g_failures) {
         std::printf("%d fallos\n", g_failures);
         return 1;

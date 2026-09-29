@@ -1,0 +1,30 @@
+namespace ejemplos.lombok_tipos_campo;
+
+// Lo que Lombok genera repite el TIPO del campo: el getter lo devuelve, el
+// setter y el constructor lo reciben.  Ese tipo se copia entero.
+//
+// Lombok tenia su propia copia de tipos, que se quedaba corta: de un `cfn` (un
+// puntero a funcion C, sin entorno) hacia una lambda `fn`, y el getter de un
+// campo `cfn` no compilaba -- devolvia un tipo que no era el del campo --.
+// Tambien perdia el tamano de un array, un `const` y los tipos calculados.
+//
+// Esperado: 42.
+
+i64 doble(i64 x) => x + x;
+
+class Tabla {
+	@Getter
+	@Setter
+	public cfn(i64) -> i64 f;
+
+	public Tabla() {
+		f = doble;
+	}
+}
+
+i32 main() {
+	Tabla t = new Tabla();
+	t.set_f(doble);
+	cfn(i64) -> i64 g = t.get_f();
+	return (i32)g(21); // 42
+}

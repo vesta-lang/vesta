@@ -22,7 +22,8 @@
  * nadie vuelve a escribir que campos tiene un nodo.
  *
  * Un campo nuevo en un nodo de `ast.h` va tambien a su lista, en
- * `fields_types.h`, `fields_exprs.h` o `fields_stmts.h`.
+ * `fields_types.h`, `fields_exprs.h`, `fields_stmts.h`, `fields_decls.h` o
+ * `fields_type_decls.h`.
  */
 
 #ifndef VX_AST_FIELDS_H
@@ -131,5 +132,7 @@ template <class T, class F> void for_each_field(F &f) {
 #include "vx/ast/fields_types.h"
 #include "vx/ast/fields_exprs.h"
 #include "vx/ast/fields_stmts.h"
+#include "vx/ast/fields_decls.h"
+#include "vx/ast/fields_type_decls.h"
 
 #endif // VX_AST_FIELDS_H

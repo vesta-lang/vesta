@@ -279,12 +279,14 @@ add_library(vx_lib STATIC
     # El clon del arbol, sobre la lista de campos de cada nodo
     # (vx/ast/fields.h): copia todo lo que escribe el parser y nada mas.
     generics/generic_clone_tree.cpp
+    # La copia UNICA de lo que escribio el parser en cualquier nodo con lista
+    # de campos (declaraciones incluidas): instancias, herencia, conceptos.
+    generics/field_copy.cpp
     # De la etiqueta de un nodo a su clase, y el aborto de los recorridos.
     ast/kind_dispatch.cpp
     # Si dos arboles dicen lo mismo (campos del parser): pruebas del clon.
     ast/ast_equal.cpp
-    # La unica lista de "que se copia" de un metodo o un campo: instancias,
-    # herencia de structs y lo que inyecta un concepto.
+    # La copia de un metodo con o sin su cuerpo (sobre field_copy).
     generics/member_clone.cpp
     # Monomorphizacion de metodos genericos `obj.metodo<U>()` (#4).
     generics/generic_methods.cpp
@@ -317,6 +319,9 @@ add_library(vx_lib STATIC
     checker/value_for_target.cpp
     # Si un tipo es POD (concepto `Pod` y huella `@pod`).
     checker/type_pod.cpp
+    # Los @complexity y contratos de huella con `when:`: con T en una
+    # instancia, solo contra el objetivo en lo demas.
+    checker/contract_when_resolve.cpp
     checker/subscript_operator.cpp
     checker/concept_conformance.cpp
     # A que tipo le anyade metodos un `extension` / `impl`.

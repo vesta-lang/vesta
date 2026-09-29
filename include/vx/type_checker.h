@@ -1715,8 +1715,20 @@ class TypeChecker {
     /// resueltos de @p nm y vacia su lista de pendientes.
     /// @param nm el metodo CLONADO (la instanciacion).
     /// @param m  el metodo de la PLANTILLA (de donde salen los pendientes).
+    /// @param g   La sustitucion de la instancia.
+    /// @param loc Donde se pidio la instancia.
     void resolve_pending_complexity_(ast::ClassMethodDecl &nm,
                                      const ast::ClassMethodDecl &m,
+                                     const vxgen::GenSubst &g,
+                                     const SourceLoc &loc);
+
+    /// @brief Lo mismo para una FUNCION libre generica.
+    /// @param nm  La funcion CLONADA (la instanciacion).
+    /// @param m   La funcion de la PLANTILLA.
+    /// @param g   La sustitucion de la instancia.
+    /// @param loc Donde se pidio la instancia.
+    void resolve_pending_complexity_(ast::FunctionDecl &nm,
+                                     const ast::FunctionDecl &m,
                                      const vxgen::GenSubst &g,
                                      const SourceLoc &loc);
 
@@ -1740,14 +1752,12 @@ class TypeChecker {
                            const std::string &mangled, const vxgen::GenSubst &g,
                            const SourceLoc &loc);
 
-    /// Resuelve los @complexity de un metodo NO generico (todos sus atomos
-    /// deben ser de target: aqui no hay T al que referirse).
-    void resolve_complexity_no_generico_(ast::ClassMethodDecl &m);
-
-    /// Recorre las decls resolviendo los @complexity pendientes.  Las
+    /// Recorre las decls resolviendo los @complexity y contratos de huella
+    /// pendientes (en `checker/contract_when_resolve.cpp`).  Las
     /// instanciaciones ya vienen resueltas del clon; las plantillas se saltan
     /// (no producen IR y sus `when:` sobre T no tienen respuesta fuera de una
     /// instanciacion).
+    /// @param decls Las declaraciones (se entra en los namespaces).
     void
     resolve_complexity_decls_(std::vector<std::unique_ptr<ast::Node>> &decls);
 

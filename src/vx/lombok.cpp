@@ -41,6 +41,10 @@
  */
 #include "vx/type_checker.h"
 #include "vx/ast.h"
+// Los tipos de un campo pasan ENTEROS al getter, setter o constructor que los
+// repite: la copia de siempre, no una que se deje el tamano de un array o que
+// un `cfn` no es una lambda.
+#include "vx/generics/generic_clone.h"
 #include <memory>
 #include <string>
 #include <vector>
@@ -50,77 +54,6 @@ namespace vx {
 // -------------------------------------------------------------------
 // Helpers de construccion de AST.
 // -------------------------------------------------------------------
-
-/**
- * @brief Clona profundamente un TypeNode (subset usado por Lombok).
- *
- * Lombok solo necesita clonar tipos referenciados por fields y los
- * propaga a getters / setters / ctores / builder.  Reutilizamos un
- * walker minimal con cobertura suficiente para Primitivos, Named
- * (clases/structs), Pointer, Array, Function y Nullable.  Si el
- * usuario tiene tipos exoticos no cubiertos, el resto del pipeline
- * los procesa via clone_type_with_subst (que cubre mas casos).
- */
-static std::unique_ptr<ast::TypeNode> lk_clone_type(const ast::TypeNode *t) {
-    if (!t) return nullptr;
-    std::unique_ptr<ast::TypeNode> out;
-    switch (t->kind) {
-    case ast::NodeKind::PrimitiveTypeNode: {
-        auto *src = static_cast<const ast::PrimitiveTypeNode *>(t);
-        auto p = std::make_unique<ast::PrimitiveTypeNode>();
-        p->loc = src->loc;
-        p->prim = src->prim;
-        for (auto &ta : src->type_args)
-            p->type_args.push_back(lk_clone_type(ta.get()));
-        out = std::move(p);
-        break;
-    }
-    case ast::NodeKind::NamedTypeNode: {
-        auto *src = static_cast<const ast::NamedTypeNode *>(t);
-        auto p = std::make_unique<ast::NamedTypeNode>();
-        p->loc = src->loc;
-        p->name = src->name;
-        for (auto &ta : src->type_args)
-            p->type_args.push_back(lk_clone_type(ta.get()));
-        out = std::move(p);
-        break;
-    }
-    case ast::NodeKind::PointerTypeNode: {
-        auto *src = static_cast<const ast::PointerTypeNode *>(t);
-        auto p = std::make_unique<ast::PointerTypeNode>();
-        p->loc = src->loc;
-        p->pointee = lk_clone_type(src->pointee.get());
-        p->is_virtual = src->is_virtual;
-        out = std::move(p);
-        break;
-    }
-    case ast::NodeKind::ArrayTypeNode: {
-        auto *src = static_cast<const ast::ArrayTypeNode *>(t);
-        auto p = std::make_unique<ast::ArrayTypeNode>();
-        p->loc = src->loc;
-        p->element_type = lk_clone_type(src->element_type.get());
-        // size_expr es un Expr; Lombok no clona exprs (las funcs
-        // sinteticas usan tipos sin tamano variable normalmente).
-        // Si el campo tiene tamano expr, dejamos nullptr y el type
-        // checker fallara si lo necesita -- documentamos limitacion.
-        out = std::move(p);
-        break;
-    }
-    case ast::NodeKind::FunctionTypeNode: {
-        auto *src = static_cast<const ast::FunctionTypeNode *>(t);
-        auto p = std::make_unique<ast::FunctionTypeNode>();
-        p->loc = src->loc;
-        for (auto &pa : src->param_types)
-            p->param_types.push_back(lk_clone_type(pa.get()));
-        p->return_type = lk_clone_type(src->return_type.get());
-        out = std::move(p);
-        break;
-    }
-    default: return nullptr;
-    }
-    if (out) out->is_nonnull = t->is_nonnull;
-    return out;
-}
 
 /**
  * @brief Construye un `this.field_name` como FieldAccessExpr.
@@ -150,7 +83,7 @@ lk_make_getter(const ast::ClassFieldDecl &f) {
     auto m = std::make_unique<ast::ClassMethodDecl>();
     m->loc = f.loc;
     m->name = "get_" + f.name;
-    m->return_type = lk_clone_type(f.type.get());
+    m->return_type = vxgen::clone_type_with_subst(f.type.get());
     m->visibility = Visibility::Public; // generado: API del tipo
     m->property_kind = 1; // getter
     m->is_static = false;
@@ -183,7 +116,7 @@ lk_make_setter(const ast::ClassFieldDecl &f) {
     auto p = std::make_unique<ast::ParamDecl>();
     p->loc = f.loc;
     p->name = "value";
-    p->type = lk_clone_type(f.type.get());
+    p->type = vxgen::clone_type_with_subst(f.type.get());
     m->params.push_back(std::move(p));
     m->body = std::make_unique<ast::BlockStmt>();
     m->body->loc = f.loc;
@@ -232,7 +165,7 @@ lk_make_ctor(const std::string &class_name,
         auto p = std::make_unique<ast::ParamDecl>();
         p->loc = f->loc;
         p->name = f->name;
-        p->type = lk_clone_type(f->type.get());
+        p->type = vxgen::clone_type_with_subst(f->type.get());
         m->params.push_back(std::move(p));
         // Body: this.X = X;
         auto assign = std::make_unique<ast::AssignExpr>();
@@ -276,7 +209,7 @@ lk_make_with(const ast::ClassDecl &cls, const ast::ClassFieldDecl &target) {
     auto p = std::make_unique<ast::ParamDecl>();
     p->loc = target.loc;
     p->name = "value";
-    p->type = lk_clone_type(target.type.get());
+    p->type = vxgen::clone_type_with_subst(target.type.get());
     m->params.push_back(std::move(p));
     m->body = std::make_unique<ast::BlockStmt>();
     m->body->loc = target.loc;

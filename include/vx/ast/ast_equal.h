@@ -55,6 +55,24 @@ bool same_parsed(const TypeNode *a, const TypeNode *b);
  */
 bool same_parsed(const ParamDecl &a, const ParamDecl &b);
 
+/**
+ * @brief Si dos metodos son iguales en todo lo escrito (cuerpo incluido).
+ * @param a Uno.
+ * @param b Otro.
+ * @return Cierto si coinciden campo a campo.
+ */
+bool same_parsed(const ClassMethodDecl &a, const ClassMethodDecl &b);
+
+/**
+ * @brief Si dos entradas de una lista de declaraciones (la de un modulo o un
+ *        namespace) son iguales en todo lo escrito: una declaracion con todo
+ *        lo que cuelga de ella, o un `comptime { ... }` de nivel superior.
+ * @param a Una (puede ser nula).
+ * @param b Otra (puede ser nula).
+ * @return Cierto si las dos son nulas o coinciden campo a campo.
+ */
+bool same_parsed_decl(const Node *a, const Node *b);
+
 } // namespace vx::ast
 
 #endif // VX_AST_AST_EQUAL_H
