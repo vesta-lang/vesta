@@ -3710,6 +3710,7 @@ fails_case("privstruct628", "un campo `private` de un struct no se usa desde fue
 fails_case("protegido629", "un miembro `protected` no se usa desde fuera", "629_miembro_protegido_fuera_err.vx", "VX2165", line=3673)
 fails_case("implpriv630", "un `impl` es codigo de fuera: no ve los `private` del tipo", "630_impl_no_ve_privado_err.vx", "VX2164", line=3673)
 fails_case("privbase631", "un struct derivado no usa el `private` de su base", "631_privado_de_la_base_err.vx", "VX2164", line=3673)
+fails_case("privconcepto", "un campo `private` que trae un concepto sigue siendo privado en la CLASE que lo recibe (se copiaba sin su visibilidad)", "concepto_privado_en_clase_err.vx", "VX2164")
 fails_case("litpriv633", "un literal `{...}` no da valor a un campo `private` desde fuera", "633_literal_campo_privado_err.vx", "VX2164", line=3673)
 fails_case("ctorpriv632","un constructor `private` solo lo usa el propio tipo", "632_constructor_privado_err.vx", "VX2164", line=3673)
 fails_case("noinject626","un campo `@No.Inject` del concepto lo tiene que escribir quien lo declara", "626_no_inject_campo_falta_err.vx", "VX2160", line=3673)

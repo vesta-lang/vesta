@@ -1,0 +1,19 @@
+namespace ejemplos.concepto_privado_en_clase_err;
+
+// Un campo `private` que trae un concepto sigue siendo privado en la CLASE que
+// lo recibe, igual que en un struct: solo el codigo del tipo lo usa (VX2164).
+// El campo se pasaba de la forma de struct a la de clase sin su visibilidad, y
+// en una clase cualquiera podia tocarlo.
+concept Contable {
+	private i64 total;
+}
+
+class Caja : Contable {
+	public Caja() { }
+}
+
+i32 main() {
+	Caja c  = new Caja();
+	c.total = 5;
+	return (i32)c.total;
+}

@@ -144,6 +144,14 @@ bool has_field(const std::vector<FieldDecl> &fs, const std::string &name) {
 
 /**
  * @brief Un campo del concepto (forma de struct) como campo de CLASE.
+ *
+ * Es la unica copia que cruza de TIPO -- de @c ast::StructFieldDecl a
+ * @c ast::ClassFieldDecl --, y por eso no sale de la lista de campos: solo
+ * tienen sentido en los dos los que se nombran aqui (el valor por defecto se
+ * llama distinto en cada uno); los de overlay, bits o endianness no existen en
+ * una clase, y `origin` lo pone quien llama.  La visibilidad se perdia: un
+ * `private` del concepto se podia tocar desde fuera de la clase.
+ *
  * @param f El campo del concepto.
  * @param g La sustitucion.
  * @return El campo de clase.
@@ -157,6 +165,7 @@ ast::ClassFieldDecl class_field_from_concept(const ast::StructFieldDecl &f,
     nf.init = vxgen::clone_expr(f.default_init.get(), g);
     nf.dir = f.dir;
     nf.is_static = f.is_static;
+    nf.visibility = f.visibility;
     return nf;
 }
 
