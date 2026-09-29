@@ -47,6 +47,10 @@ struct ImportRequest {
     /// El namespace tal como se escribio, si el import es por namespace.  Con
     /// el se encuentran TODOS los ficheros de un namespace parcial.
     std::string ns_path;
+    /// Si es por ruta: el fichero al que llevo, como lo resolvio el
+    /// resolvedor de modulos (ver @c ast::ImportDecl::resolved_path).  Es
+    /// como se encuentra; el nombre de fichero no es unico.
+    util::InternedName resolved_path;
     SourceLoc loc{}; ///< donde esta el import, para los diagnosticos
 };
 
@@ -78,6 +82,9 @@ struct ModuleLookup {
     /// y gana el primero.  Solo para lo que de verdad es un nombre (ver
     /// @ref find_by_name).
     std::unordered_map<std::string, size_t> by_name;
+    /// Por ruta canonica, que si es unica: la de los imports por ruta.
+    std::unordered_map<util::InternedName, size_t, util::InternedNameHash>
+        by_path;
     /// Por namespace completo, que si es unico.
     std::unordered_map<std::string, size_t> by_ns;
     /// Namespace -> nombre del PRIMER modulo que lo declara, para traducir
@@ -181,6 +188,33 @@ std::vector<ImportRequest> collect_imports(
     const std::unordered_map<std::string, std::string> *ns_to_modname,
     const AutoImportNs *auto_imports, const std::string &owner_dir,
     const std::string &self_path);
+
+/**
+ * @struct HomonymModules
+ * @brief Dos modulos sin namespace con el mismo nombre en un programa.
+ */
+struct HomonymModules {
+    size_t first;  ///< el de menor indice en `work`
+    size_t second; ///< el otro
+};
+
+/**
+ * @brief Los modulos SIN namespace que se llaman igual que otro del programa.
+ *
+ * Un modulo sin namespace se identifica por su nombre de fichero: califica sus
+ * simbolos con el (`util__f`) y los imports por ruta lo encuentran por el.  Dos
+ * `util.vx` en carpetas distintas eran entonces el MISMO modulo para todo eso:
+ * el indice se quedaba con el primero, y el import del segundo acababa en el
+ * primero con un mensaje sobre un simbolo que "no exporta".  Decidido con el
+ * usuario: es un error, y se arregla dando namespace a uno de ellos.
+ *
+ * @param work   Los modulos del programa.
+ * @param lookup Su indice (dice cuales declaran namespace).
+ * @return Cada pareja que choca.
+ */
+std::vector<HomonymModules>
+homonym_modules_without_namespace(const std::vector<ProjectModuleWork> &work,
+                                  const ModuleLookup &lookup);
 
 /**
  * @brief Con que se califica lo que llega por @p req y no declara namespace

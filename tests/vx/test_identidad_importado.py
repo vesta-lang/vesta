@@ -83,8 +83,9 @@ def proyecto(base, nombre, ficheros):
     ficheros = dict(ficheros)
     ficheros["vx.toml"] = MANIFIESTO
     for f, texto in ficheros.items():
-        with open(os.path.join(d, f), "w", encoding="utf-8",
-                  newline="\n") as fh:
+        ruta = os.path.join(d, f)
+        os.makedirs(os.path.dirname(ruta), exist_ok=True)  # `a/util.vx`
+        with open(ruta, "w", encoding="utf-8", newline="\n") as fh:
             fh.write(texto)
     return d
 
@@ -155,6 +156,37 @@ def identidad_struct(vm, base):
                     "R00=%s" % r, log)
 
 
+def ficheros_homonimos(vm, base):
+    """Dos `util.vx` en carpetas distintas.  Sin namespace son el mismo modulo
+    para sus simbolos y sus imports: error claro (VX4018) que nombra los dos.
+    Con namespace en uno, funciona se importe por ruta o por namespace (antes,
+    por ruta, `import "b/util"` acababa en `a/util.vx`)."""
+    fallos = 0
+    variantes = [
+        ("sin namespace", "", 'import "b/util" only g;', None),
+        ("con namespace, por ruta", "namespace butil;\n\n",
+         'import "b/util" only g;', 42),
+        ("con namespace, por namespace", "namespace butil;\n\n",
+         "import butil only g;", 42),
+    ]
+    for n, (nombre, cab, imp, esperado) in enumerate(variantes):
+        d = proyecto(base, "homonimos_%d" % n, {
+            "a/util.vx": "public i64 f() => 40;\n",
+            "b/util.vx": cab + "public i64 g() => 2;\n\npublic i64 f() => 1000;\n",
+            "main.vx": ('import "a/util" only f;\n' + imp +
+                        "\n\ni64 main() => f() + g();\n"),
+        })
+        r, log, _ = compilar_y_correr(vm, d)
+        if esperado is None:
+            ok = r is None and "VX4018" in log
+            fallos += informar("ficheros homonimos, " + nombre, ok,
+                               "R00=%s (se esperaba VX4018)" % r, log)
+        else:
+            fallos += informar("ficheros homonimos, " + nombre, r == esperado,
+                               "R00=%s" % r, log)
+    return fallos
+
+
 def main():
     if len(sys.argv) < 2:
         print("uso: test_identidad_importado.py <dir_build>")
@@ -169,7 +201,7 @@ def main():
     base = tempfile.mkdtemp(prefix="vx_identidad_")
     try:
         fallos = (matriz(vm, base) + homonimas(vm, base) +
-                  identidad_struct(vm, base))
+                  identidad_struct(vm, base) + ficheros_homonimos(vm, base))
     finally:
         shutil.rmtree(base, ignore_errors=True)
     print("[identidad importado] %s" % ("TODO OK" if fallos == 0

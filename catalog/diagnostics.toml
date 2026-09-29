@@ -357,6 +357,13 @@ es = "@HelperOverride({0}) lo declaran dos modulos: '{1}' y '{2}'"
 en = "the intermediate code emitter failed: {0}"
 es = "el emisor del codigo intermedio fallo: {0}"
 
+# Un modulo sin namespace se identifica por su nombre de fichero: dos con el
+# mismo nombre en un programa serian el mismo modulo para sus simbolos y para
+# los imports.
+[VX4018]
+en = "two modules without a namespace are both named '{0}' ('{1}' and '{2}'): their symbols and imports would be confused; give one of them a `namespace`"
+es = "dos modulos sin namespace se llaman '{0}' ('{1}' y '{2}'): sus simbolos y sus imports se confundirian; dale un `namespace` a uno de ellos"
+
 # --- fallos en ejecucion (VX7xxx) ---
 #
 # Un fallo que nadie captura acaba con el programa, asi que se cuenta igual que

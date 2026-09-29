@@ -2716,6 +2716,15 @@ struct ImportDecl : Node {
     /// contiene el namespace punteado y el resolver lo mapea a fichero via el
     /// indice de namespaces (no via el sistema de ficheros directo).
     bool by_namespace = false;
+    /**
+     * @brief El fichero al que llevo este import, ya resuelto (ruta canonica,
+     *        internada); vacio si no se resolvio o es por namespace.
+     *
+     * Lo apunta el resolvedor de modulos, que es quien lo sabe.  Antes se
+     * tiraba y despues se volvia a buscar el modulo por su NOMBRE de fichero,
+     * que no es unico: `import "b/util"` acababa en `a/util.vx`.
+     */
+    util::InternedName resolved_path;
     /// Alias opcional para el namespace.  Vacio si no hay @c as.
     std::string alias;
     /// Lista de simbolos especificos a importar al scope local

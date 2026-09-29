@@ -24,6 +24,7 @@
 #include "vx/module/vxi_members.h" // un miembro del .vxi
 #include "vx/module/import_origin.h" // con que se califica lo importado
 #include "vx/project/module_imports.h" // import_qualifier
+#include "vx/project/module_work.h"    // ProjectModuleWork
 #include "vx/type_checker.h"
 #include "vx/diagnostic.h"
 #include "vx/lexer.h"
@@ -450,10 +451,36 @@ void test_generic_template_key() {
     CHECK(m.tc->generic_type_key("Nada").empty(), "lo que no es plantilla");
 }
 
+// ------------------------------------------------------------------
+// Test 9: dos modulos SIN namespace con el mismo nombre en un programa.
+// ------------------------------------------------------------------
+void test_homonym_modules() {
+    std::cout << "\n[Test] modulos homonimos sin namespace\n";
+    std::vector<vx::ProjectModuleWork> work(4);
+    work[0].module_name = util::InternedName::intern("util");
+    work[0].canonical_path = util::InternedName::intern("/p/a/util.vx");
+    work[1].module_name = util::InternedName::intern("util");
+    work[1].canonical_path = util::InternedName::intern("/p/b/util.vx");
+    work[2].module_name = util::InternedName::intern("x86_64");
+    work[2].canonical_path = util::InternedName::intern("/p/c/x86_64.vx");
+    work[3].module_name = util::InternedName::intern("x86_64");
+    work[3].canonical_path = util::InternedName::intern("/p/d/x86_64.vx");
+    vx::ModuleLookup lookup;
+    lookup.module_ns.resize(work.size());
+    // Los dos `x86_64` declaran namespace: sus simbolos no chocan.
+    lookup.module_ns[2] = "std.memory";
+    lookup.module_ns[3] = "std.types";
+    const auto h = vx::homonym_modules_without_namespace(work, lookup);
+    CHECK(h.size() == 1, "solo la pareja sin namespace choca");
+    CHECK(!h.empty() && h[0].first == 0 && h[0].second == 1,
+          "la pareja son los dos `util`");
+}
+
 } // namespace
 
 int main() {
     std::cout << "=== test_vx_module_interop:  M.2.d ===\n";
+    test_homonym_modules();
     test_import_origin_rule();
     test_generic_template_key();
     test_typedef_roundtrip();

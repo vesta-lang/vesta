@@ -1395,6 +1395,13 @@ void ModuleGraph::process_dependencies_(ResolvedModule &mod) {
             diags_.error(imp->loc, r.error_message);
             continue;
         }
+        /* A que fichero lleva, apuntado en el propio import: quien despues
+         * busque el modulo lo encuentra por su ruta y no por su nombre, que no
+         * es unico. */
+        if (!imp->by_namespace && r.module_id < modules_.size() &&
+            modules_[r.module_id])
+            imp->resolved_path =
+                util::InternedName::intern(modules_[r.module_id]->canonical_path);
         // Helper: registra un module_id como dependencia (dedup + recursion).
         auto add_dep = [&](uint32_t mid) {
             if (mid == UINT32_MAX || mid == mod.module_id) return;

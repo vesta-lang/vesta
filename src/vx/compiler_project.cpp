@@ -1516,6 +1516,26 @@ CompileResult compile_vx_project(
      * namespaces parciales. */
     const ModuleLookup lookup =
         build_module_lookup(work, auto_imports, auto_import_owner_dir);
+    /* Dos modulos sin namespace con el mismo nombre serian el mismo modulo
+     * para sus simbolos y para los imports: el indice se queda con el primero
+     * y el import del otro acaba en el con un mensaje que despista.  Se dice
+     * aqui, que es donde se ve, y no se sigue. */
+    {
+        const std::vector<HomonymModules> homonyms =
+            homonym_modules_without_namespace(work, lookup);
+        for (const HomonymModules &h : homonyms) {
+            SourceLoc loc;
+            loc.set_file(work[h.second].canonical_path);
+            res.diagnostics.diag(std::move(loc), DiagLevel::ERR, "VX4018",
+                                 {work[h.second].module_name.str(),
+                                  work[h.first].canonical_path.str(),
+                                  work[h.second].canonical_path.str()});
+        }
+        if (!homonyms.empty()) {
+            res.ok = false;
+            return res;
+        }
+    }
 
     // Simbolos que el parser dejo fuera por @Target, agregados de TODOS los
     // modulos del build.  Usar uno de ellos no es "no existe": existe para

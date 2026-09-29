@@ -245,6 +245,7 @@ const CatEntry kEntries[] = {
     {"VX4015", {"@HelperOverride({0}): the expected signature is {1}; this override may not match it", "@HelperOverride({0}): la firma esperada es {1}; la de este override puede no encajar"}},
     {"VX4016", {"@HelperOverride({0}) is declared by two modules: '{1}' and '{2}'", "@HelperOverride({0}) lo declaran dos modulos: '{1}' y '{2}'"}},
     {"VX4017", {"the intermediate code emitter failed: {0}", "el emisor del codigo intermedio fallo: {0}"}},
+    {"VX4018", {"two modules without a namespace are both named '{0}' ('{1}' and '{2}'): their symbols and imports would be confused; give one of them a `namespace`", "dos modulos sin namespace se llaman '{0}' ('{1}' y '{2}'): sus simbolos y sus imports se confundirian; dale un `namespace` a uno de ellos"}},
     {"VX7001", {"fatal error: null pointer", "error fatal: puntero nulo"}},
     {"VX7002", {"fatal error: division by zero", "error fatal: division entre cero"}},
     {"VX7003", {"fatal error: stack overflow", "error fatal: desbordamiento de pila"}},
@@ -903,7 +904,7 @@ const CatEntry kEntries[] = {
     {"use_def.unused", {"'{2}' is never used", "'{2}' no se usa en ningun sitio"}},
     {"value_shape.none", {"it has no values with components", "no tiene valores con componentes"}},
 };
-const int kEntryCount = 882;
+const int kEntryCount = 883;
 
 } // namespace
 

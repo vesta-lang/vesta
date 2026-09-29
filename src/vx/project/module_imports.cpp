@@ -9,6 +9,7 @@
 #include "vx/module/vxi_format.h"      // vxi_hash_de_simbolos
 #include "vx/project/module_work.h" // ProjectModuleWork
 
+#include <unordered_map>
 #include <unordered_set>
 
 namespace vx {
@@ -54,6 +55,13 @@ size_t ModuleLookup::find(const ImportRequest &req) const {
     if (req.by_namespace && !req.ns_path.empty()) {
         const auto itn = by_ns.find(req.ns_path);
         if (itn != by_ns.end()) return itn->second;
+    }
+    /* Por ruta: el fichero que ya resolvio el resolvedor.  Buscarlo otra vez
+     * por su nombre de fichero, que no es unico, llevaba `import "b/util"` a
+     * `a/util.vx`. */
+    if (!req.by_namespace && !req.resolved_path.empty()) {
+        const auto itp = by_path.find(req.resolved_path);
+        if (itp != by_path.end()) return itp->second;
     }
     return find_by_name(req.module_name);
 }
@@ -101,6 +109,7 @@ ModuleLookup build_module_lookup(const std::vector<ProjectModuleWork> &work,
         // `emplace` conserva el primero: con homonimos gana el de menor
         // indice, el mismo criterio de siempre.
         lk.by_name.emplace(pm.module_name.str(), i);
+        lk.by_path.emplace(pm.canonical_path, i);
         if (!pm.ast) continue;
         /* El primer namespace del modulo lo identifica; los demas indices
          * miran TODOS los que declara. */
@@ -148,6 +157,7 @@ std::vector<ImportRequest> collect_imports(
             req.module_name = (slash == std::string::npos)
                                   ? im->path
                                   : im->path.substr(slash + 1);
+            req.resolved_path = im->resolved_path;
         }
         req.local_name = im->alias.empty() ? req.module_name : im->alias;
         req.only_symbols.reserve(im->only_symbols.size());
@@ -209,6 +219,21 @@ std::vector<ImportRequest> collect_imports(
          * despues nadie busca. */
         req.local_name = req.module_name;
         out.push_back(std::move(req));
+    }
+    return out;
+}
+
+std::vector<HomonymModules>
+homonym_modules_without_namespace(const std::vector<ProjectModuleWork> &work,
+                                  const ModuleLookup &lookup) {
+    std::vector<HomonymModules> out;
+    std::unordered_map<util::InternedName, size_t, util::InternedNameHash> seen;
+    for (size_t i = 0; i < work.size(); ++i) {
+        // Con namespace no chocan: sus simbolos van por el namespace.
+        if (i < lookup.module_ns.size() && !lookup.module_ns[i].empty())
+            continue;
+        const auto ins = seen.emplace(work[i].module_name, i);
+        if (!ins.second) out.push_back(HomonymModules{ins.first->second, i});
     }
     return out;
 }
