@@ -18,9 +18,10 @@
 #include <cstdio>
 #include "vx/comptime/comptime_collect.h"
 #include "util/env_flags.h"
+#include "vx/ast/children.h"
 
 #include <algorithm>
-#include <functional> // std::function, para el recorrido recursivo de abajo
+#include <memory>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -120,115 +121,72 @@ uint32_t inicio_real_de_decl(const std::string &src, uint32_t off) {
     return ini;
 }
 
-/// Acumula en @p out los nombres de funcion invocados (callee IdentExpr) dentro
-/// de una expresion, recursivamente.  Solo nos interesan las llamadas directas
-/// por nombre; las indirectas (punteros a fn) no arrastran una decl concreta.
-void collect_calls_expr(const ast::Expr *e,
-                        std::unordered_set<std::string> &out) {
-    if (!e) return;
-    switch (e->kind) {
-    case ast::NodeKind::CallExpr: {
-        const auto *c = static_cast<const ast::CallExpr *>(e);
-        if (c->callee && c->callee->kind == ast::NodeKind::IdentExpr) {
-            out.insert(
-                static_cast<const ast::IdentExpr *>(c->callee.get())->name);
+/**
+ * @struct CallCollector
+ * @brief Acumula los nombres de funcion invocados por nombre (callee
+ *        `IdentExpr`) en todo un subarbol.
+ *
+ * Solo interesan las llamadas directas por nombre; una indirecta (puntero a
+ * funcion) no arrastra una decl concreta.  Los hijos salen del recorrido
+ * unico (`vx/ast/children.h`): la version escrita a mano no entraba en una
+ * asignacion, una lambda, un `for-each`, un `match` ni un cast, y leia un
+ * `comptime { }` con la forma de un bloque normal.  Una funcion llamada solo
+ * desde ahi se quedaba fuera del conjunto.
+ */
+struct CallCollector {
+    std::unordered_set<std::string> &out; ///< nombres llamados
+
+    /**
+     * @brief Una expresion: si es una llamada por nombre, se apunta; se baja.
+     * @param e La expresion.
+     */
+    void operator()(const ast::Expr &e) {
+        if (e.kind == ast::NodeKind::CallExpr) {
+            const auto &c = static_cast<const ast::CallExpr &>(e);
+            if (c.callee && c.callee->kind == ast::NodeKind::IdentExpr)
+                out.insert(static_cast<const ast::IdentExpr &>(*c.callee).name);
         }
-        collect_calls_expr(c->callee.get(), out);
-        for (const auto &a : c->args)
-            collect_calls_expr(a.get(), out);
-        break;
+        ast::for_each_child(e, *this);
     }
-    case ast::NodeKind::BinaryExpr: {
-        const auto *b = static_cast<const ast::BinaryExpr *>(e);
-        collect_calls_expr(b->lhs.get(), out);
-        collect_calls_expr(b->rhs.get(), out);
-        break;
+
+    /**
+     * @brief Cualquier otro nodo (sentencia, tipo -- el tamano de `T[f()]` es
+     *        una expresion --, parametro): se baja.
+     * @param n El nodo.
+     */
+    template <class T> void operator()(const T &n) {
+        ast::for_each_child(n, *this);
     }
-    case ast::NodeKind::UnaryExpr:
-        collect_calls_expr(
-            static_cast<const ast::UnaryExpr *>(e)->operand.get(), out);
-        break;
-    case ast::NodeKind::TernaryExpr: {
-        const auto *t = static_cast<const ast::TernaryExpr *>(e);
-        collect_calls_expr(t->cond.get(), out);
-        collect_calls_expr(t->then_expr.get(), out);
-        collect_calls_expr(t->else_expr.get(), out);
-        break;
-    }
-    case ast::NodeKind::FieldAccessExpr:
-        collect_calls_expr(
-            static_cast<const ast::FieldAccessExpr *>(e)->base.get(), out);
-        break;
-    case ast::NodeKind::IndexExpr: {
-        for (const ast::Expr *sub :
-             static_cast<const ast::IndexExpr *>(e)->operands())
-            collect_calls_expr(sub, out);
-        break;
-    }
-    default: break;
-    }
+};
+
+/**
+ * @brief Acumula en @p out las llamadas por nombre de @p root y de todo lo que
+ *        cuelga de el.
+ * @param root Nodo raiz (nulo: nada).
+ * @param out  Nombres llamados.
+ */
+template <class N>
+void collect_calls(const N *root, std::unordered_set<std::string> &out) {
+    if (!root) return;
+    CallCollector collector{out};
+    collector(*root);
 }
 
-/// Idem sobre statements (recorre las expresiones contenidas + control de
-/// flujo).  Cubre los nodos que aparecen en cuerpos comptime tipicos.
-void collect_calls_stmt(const ast::Stmt *s,
-                        std::unordered_set<std::string> &out) {
-    if (!s) return;
-    switch (s->kind) {
-    case ast::NodeKind::BlockStmt:
-    case ast::NodeKind::ComptimeBlockStmt: {
-        const auto *b = static_cast<const ast::BlockStmt *>(s);
-        for (const auto &st : b->body)
-            collect_calls_stmt(st.get(), out);
-        break;
-    }
-    case ast::NodeKind::ExprStmt:
-        collect_calls_expr(static_cast<const ast::ExprStmt *>(s)->expr.get(),
-                           out);
-        break;
-    case ast::NodeKind::VarDeclStmt:
-        collect_calls_expr(static_cast<const ast::VarDeclStmt *>(s)->init.get(),
-                           out);
-        break;
-    case ast::NodeKind::ReturnStmt:
-        collect_calls_expr(static_cast<const ast::ReturnStmt *>(s)->value.get(),
-                           out);
-        break;
-    case ast::NodeKind::IfStmt: {
-        const auto *i = static_cast<const ast::IfStmt *>(s);
-        collect_calls_expr(i->cond.get(), out);
-        collect_calls_stmt(i->then_branch.get(), out);
-        collect_calls_stmt(i->else_branch.get(), out);
-        break;
-    }
-    case ast::NodeKind::WhileStmt: {
-        const auto *w = static_cast<const ast::WhileStmt *>(s);
-        collect_calls_expr(w->cond.get(), out);
-        collect_calls_stmt(w->body.get(), out);
-        break;
-    }
-    case ast::NodeKind::DoWhileStmt: {
-        const auto *w = static_cast<const ast::DoWhileStmt *>(s);
-        collect_calls_expr(w->cond.get(), out);
-        collect_calls_stmt(w->body.get(), out);
-        break;
-    }
-    case ast::NodeKind::ForStmt: {
-        const auto *f = static_cast<const ast::ForStmt *>(s);
-        for (const auto &in : f->init)
-            collect_calls_stmt(in.get(), out);
-        collect_calls_expr(f->cond.get(), out);
-        for (const auto &st : f->step)
-            collect_calls_expr(st.get(), out);
-        collect_calls_stmt(f->body.get(), out);
-        break;
-    }
-    case ast::NodeKind::ComptimeForStmt: {
-        const auto *f = static_cast<const ast::ComptimeForStmt *>(s);
-        collect_calls_stmt(f->body.get(), out);
-        break;
-    }
-    default: break;
+/**
+ * @brief Anade a @p decls las declaraciones de @p list en el orden del fuente,
+ *        entrando en cada `namespace` (el propio `namespace` va delante de lo
+ *        suyo).
+ * @param list  Declaraciones de un nivel.
+ * @param decls Destino.
+ */
+void collect_decls_in_order(const std::vector<std::unique_ptr<ast::Node>> &list,
+                            std::vector<const ast::Node *> &decls) {
+    for (const auto &d : list) {
+        if (!d) continue;
+        decls.push_back(d.get());
+        if (d->kind == ast::NodeKind::NamespaceDecl)
+            collect_decls_in_order(
+                static_cast<const ast::NamespaceDecl &>(*d).decls, decls);
     }
 }
 
@@ -252,25 +210,7 @@ collect_comptime_unit(const ast::ModuleNode &mod, const std::string &source,
      * que dependen los tramos de texto. */
     std::vector<const ast::Node *> decls;
     decls.reserve(mod.decls.size());
-    {
-        std::function<void(const std::vector<std::unique_ptr<ast::Node>> &)>
-            recoger =
-                [&](const std::vector<std::unique_ptr<ast::Node>> &lista) {
-                    for (const auto &d : lista) {
-                        if (!d) continue;
-                        if (d->kind == ast::NodeKind::NamespaceDecl) {
-                            const auto *nd =
-                                static_cast<const ast::NamespaceDecl *>(
-                                    d.get());
-                            decls.push_back(d.get()); // el propio `namespace`
-                            recoger(nd->decls);
-                            continue;
-                        }
-                        decls.push_back(d.get());
-                    }
-                };
-        recoger(mod.decls);
-    }
+    collect_decls_in_order(mod.decls, decls);
 
     // Indice nombre -> FunctionDecl para resolver dependencias.
     std::unordered_map<std::string, const ast::FunctionDecl *> fn_by_name;
@@ -289,20 +229,21 @@ collect_comptime_unit(const ast::ModuleNode &mod, const std::string &source,
             const auto *fd = static_cast<const ast::FunctionDecl *>(d);
             if (fd->is_macro) {
                 u.macros.push_back(fd->name);
-                collect_calls_stmt(fd->body.get(), seed_calls);
+                collect_calls(fd->body.get(), seed_calls);
             } else if (fd->is_comptime) {
                 u.comptime_fns.push_back(fd->name);
-                collect_calls_stmt(fd->body.get(), seed_calls);
+                collect_calls(fd->body.get(), seed_calls);
             }
         } else if (d->kind == ast::NodeKind::GlobalVarDecl) {
             const auto *gv = static_cast<const ast::GlobalVarDecl *>(d);
             if (gv->is_comptime || gv->is_const) {
                 u.comptime_consts.push_back(gv->name);
-                collect_calls_expr(gv->init.get(), seed_calls);
+                collect_calls(gv->init.get(), seed_calls);
             }
         } else if (d->kind == ast::NodeKind::ComptimeBlockStmt) {
             // Bloque comptime a nivel modulo: su cuerpo tambien es comptime.
-            collect_calls_stmt(static_cast<const ast::Stmt *>(d), seed_calls);
+            collect_calls(static_cast<const ast::ComptimeBlockStmt *>(d),
+                          seed_calls);
         } else if (d->kind == ast::NodeKind::StructDecl ||
                    d->kind == ast::NodeKind::ClassDecl) {
             /* Lo comptime que vive DENTRO de un tipo.  Este recolector recoge
@@ -334,7 +275,7 @@ collect_comptime_unit(const ast::ModuleNode &mod, const std::string &source,
                  * Sin sembrar el cierre con ellos, el tipo llegaba y sus
                  * llamadas no ("el modulo 'atomic' no exporta
                  * 'vx_cpu_relax'"). */
-                collect_calls_stmt(m->body.get(), seed_calls);
+                collect_calls(m->body.get(), seed_calls);
             }
         }
     }
@@ -368,7 +309,7 @@ collect_comptime_unit(const ast::ModuleNode &mod, const std::string &source,
         // Si es comptime, ya esta en su lista; si no, es helper-dep.
         if (!is_comptime_name.count(name)) dep_set.insert(name);
         std::unordered_set<std::string> more;
-        collect_calls_stmt(it->second->body.get(), more);
+        collect_calls(it->second->body.get(), more);
         for (const auto &m : more)
             if (!visited.count(m)) work.push_back(m);
     }

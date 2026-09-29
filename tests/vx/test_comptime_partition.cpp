@@ -184,6 +184,50 @@ i32 main() { return 0; }
         }
     }
 
+    /* CASO 3b -- LA DEPENDENCIA VIAJA ESTE DONDE ESTE LA LLAMADA.  El
+     * recolector enumeraba a mano en que nodos buscar llamadas y se dejaba
+     * la asignacion, la lambda, el `for-each`, el `match` y el cast: una
+     * funcion llamada solo desde ahi no entraba en el conjunto, y el
+     * artefacto separado no la tenia.  El `comptime { }` anidado se leia
+     * ademas con la forma de un bloque normal, que no es la suya. */
+    {
+        const std::string src = R"VX(
+i64 en_asignacion(i64 n) { return n; }
+i64 en_lambda(i64 n) { return n; }
+i64 en_foreach(i64 n) { return n; }
+i64 en_match(i64 n) { return n; }
+i64 en_cast(i64 n) { return n; }
+i64 en_bloque_comptime(i64 n) { return n; }
+comptime i64 usa_de_todo(i64 n) {
+    i64 r = 0;
+    r = en_asignacion(n);
+    fn(i64) -> i64 f = (i64 x) => { return en_lambda(x); };
+    i64[2] xs = {1, 2};
+    for (i64 x : xs) { r = r + en_foreach(x); }
+    match (n) { case 1 => { r = en_match(n); } case _ => { } }
+    comptime { i64 z = en_bloque_comptime(1); }
+    return (i64)en_cast(r);
+}
+i32 main() { return 0; }
+)VX";
+        bool ok = false;
+        const ComptimeUnit u = unidad_de(src, ok);
+        CK(ok);
+        if (ok) {
+            const bool bien = tiene(u.helper_deps, "en_asignacion") &&
+                              tiene(u.helper_deps, "en_lambda") &&
+                              tiene(u.helper_deps, "en_foreach") &&
+                              tiene(u.helper_deps, "en_match") &&
+                              tiene(u.helper_deps, "en_cast") &&
+                              tiene(u.helper_deps, "en_bloque_comptime");
+            CK(bien);
+            if (!bien) {
+                std::printf("FAIL [deps en cualquier nodo]:\n");
+                volcar("helper_deps", u.helper_deps);
+            }
+        }
+    }
+
     /* CASO 4 -- EL HASH REACCIONA A LO QUE DEBE, Y SOLO A ESO.  Es la clave de
      * cache del artefacto separado; de esto depende que la separacion ahorre
      * algo.  Tocar codigo NO-comptime NO puede moverlo; tocar una comptime SI.
