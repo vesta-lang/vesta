@@ -385,8 +385,10 @@ constexpr bool is_expr_kind(NodeKind k) noexcept {
  * @brief @c true si k representa un statement.
  */
 constexpr bool is_stmt_kind(NodeKind k) noexcept {
+    // Hasta AsmStmt, la ultima sentencia: parar en SynchronizedStmt dejaba
+    // fuera los dos `comptime` y el `asm`.
     return (uint8_t)k >= (uint8_t)NodeKind::BlockStmt &&
-           (uint8_t)k <= (uint8_t)NodeKind::SynchronizedStmt;
+           (uint8_t)k <= (uint8_t)NodeKind::AsmStmt;
 }
 
 // -------------------------------------------------------------------

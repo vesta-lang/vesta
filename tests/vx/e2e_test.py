@@ -3692,7 +3692,7 @@ r0_case("ch216", "copy-hook en paso por valor (Rc refcount, clone+dtor en el cal
 r0_case("sh217", "shared<T> refcount no-GC (inc-on-copy + free determinista al llegar a 0)", "217_shared_refcount_nogc.vx", 42, line=3666)
 r0_case("gen218", "structs genericos (Caja<T>, Par<K,V>, anidados, metodos, introspeccion)", "218_structs_genericos.vx", 42, line=3667)
 r0_case("gen219", "genericos con tipos de usuario + punteros (Caja<Punto>, Caja<Obj>, Caja<i64*>, Caja<VirtualPtr>)", "219_genericos_tipos_usuario.vx", 42, line=3668)
-r0_case("gen220", "funciones libres genericas (id<T>, primero<K,V>, inferencia, llamadas anidadas)", "220_funciones_genericas.vx", 42, line=3669)
+modes3_case("gen220", "funciones libres genericas (id<T>, primero<K,V>, inferencia, llamadas anidadas) y su cuerpo copiado ENTERO en la instancia: argumentos con nombre, patrones de un match, variables static", "220_funciones_genericas.vx", 42, line=3669)
 r0_case("gen221", "inferencia generica (CTAD Caja c = ...; auto c = ...)", "221_inferencia_generica.vx", 42, line=3670)
 r0_case("gen222", "metodos genericos (obj.m<U>() en struct/clase, explicito+inferido, multi-param, U!=T)", "222_metodos_genericos.vx", 42, line=3671)
 r0_case("gen223", "conceptos/constraints (built-in + predicado + bloque + estructural + composicion + where)", "223_conceptos_genericos.vx", 42, line=3672)

@@ -20,6 +20,34 @@ T doble<T>(T x) => x + x;
 // Generica que llama a otra generica.
 T cuadruple<T>(T x) => doble<T>(x) + doble<T>(x);
 
+// El cuerpo de una generica se COPIA en cada instancia, y la copia tiene que
+// decir lo mismo que lo escrito.  Estas tres construcciones se perdian al
+// copiar: la instancia hacia otra cosa, sin que nada avisara.
+
+i64 resta(i64 a, i64 b) => a - b;
+
+// Argumentos con nombre, en otro orden que el declarado: la instancia los
+// pasaba por posicion y restaba al reves.
+T nombrados<T>(T x) => (T)resta(.b = 2, .a = (i64)x); // x - 2
+
+// Patrones de valor y de rango en un match: la instancia no compilaba.
+T clasifica<T>(T x) {
+	match (x) {
+		case 1..5 => return (T)100;
+		case 7    => return (T)200;
+		case _    => return (T)300;
+	}
+	return (T)0;
+}
+
+// Una variable `static` del cuerpo conserva su valor entre llamadas: la
+// instancia la volvia una local que empezaba de cero cada vez.
+T cuenta<T>(T x) {
+	static i64 n = 0_i64;
+	n            = n + 1;
+	return (T)n;
+}
+
 i32 main() {
 	i64 a = identidad<i64>(10); // explicito
 	i32 b = identidad(5);       // inferido de '5' -> i32... (literal i64->trunc)
@@ -27,6 +55,13 @@ i32 main() {
 	i64 d = doble<i64>(2);     // 4
 	i64 e = cuadruple<i64>(0); // 0
 
+	i64 f      = nombrados<i64>(44);      // 42
+	i64 g      = clasifica<i64>(3);       // 100
+	i64 h      = clasifica<i64>(7);       // 200
+	i64 i      = cuenta<i64>(0);          // 1
+	i64 j      = cuenta<i64>(0);          // 2
+	i64 copias = f + g + h + i + j - 345; // 0 si las cinco son correctas
+
 	// 10 + 5 + 20 + 4 + 0 ... ajustado a 42:
-	return (i32)(a + (i64)b + c + d + e + 3); // 10+5+20+4+0+3 = 42
+	return (i32)(a + (i64)b + c + d + e + 3 + copias); // 10+5+20+4+0+3 = 42
 }

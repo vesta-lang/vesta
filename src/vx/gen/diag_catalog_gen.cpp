@@ -603,6 +603,7 @@ const CatEntry kEntries[] = {
     {"VXE940", {"the declared calling convention asks for a register that does not exist in this architecture.", "la convencion declarada pide un registro que no existe en esta arquitectura."}},
     {"VXE941", {"the declared calling convention asks to pass an argument in the stack pointer.", "la convencion declarada pide pasar un argumento en el puntero de pila."}},
     {"VXE942", {"a call with a declared calling convention got no target or no argument block.", "una llamada con convencion declarada llego sin destino o sin bloque de argumentos."}},
+    {"VXE943", {"internal compiler error: a tree node with tag {0} is not a {1}, so {2} cannot handle it -- this is a compiler bug.", "error interno del compilador: un nodo del arbol con etiqueta {0} no es {1}, asi que {2} no sabe tratarlo -- es un fallo del compilador."}},
     {"VXF001", {"formatter: the lexer moved backwards through the source", "formateador: el lexer retrocedio en el fuente"}},
     {"VXF002", {"formatter: a token falls outside the source buffer", "formateador: un token cae fuera del fuente"}},
     {"VXF003", {"formatter: the source could not be tokenized, left untouched", "formateador: el fuente no se pudo tokenizar; se deja intacto"}},
@@ -904,7 +905,7 @@ const CatEntry kEntries[] = {
     {"use_def.unused", {"'{2}' is never used", "'{2}' no se usa en ningun sitio"}},
     {"value_shape.none", {"it has no values with components", "no tiene valores con componentes"}},
 };
-const int kEntryCount = 883;
+const int kEntryCount = 884;
 
 } // namespace
 

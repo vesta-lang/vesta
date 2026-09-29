@@ -4517,6 +4517,14 @@ es = "la convencion declarada pide pasar un argumento en el puntero de pila."
 en = "a call with a declared calling convention got no target or no argument block."
 es = "una llamada con convencion declarada llego sin destino o sin bloque de argumentos."
 
+# Un recorrido del arbol (clonar, comparar) recibio un nodo cuya etiqueta no es
+# de la familia que esperaba.  Antes el clonador devolvia NULO y el nodo
+# desaparecia de la instancia sin que nadie lo notara.
+# {0} la etiqueta (numero de NodeKind)  {1} que se esperaba  {2} quien recorria
+[VXE943]
+en = "internal compiler error: a tree node with tag {0} is not a {1}, so {2} cannot handle it -- this is a compiler bug."
+es = "error interno del compilador: un nodo del arbol con etiqueta {0} no es {1}, asi que {2} no sabe tratarlo -- es un fallo del compilador."
+
 # ===========================================================================
 # El CATALOGO DE CONSULTAS (query::QueryDesc).  Lo que una consulta HACE y lo
 # que significa cada parametro.

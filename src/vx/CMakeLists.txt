@@ -276,6 +276,13 @@ add_library(vx_lib STATIC
     # Utilidades de clonacion de AST con sustitucion de type-params,
     # extraidas de type_checker.cpp (monolito) para mantenerlo manejable.
     generics/generic_clone.cpp
+    # El clon del arbol, sobre la lista de campos de cada nodo
+    # (vx/ast/fields.h): copia todo lo que escribe el parser y nada mas.
+    generics/generic_clone_tree.cpp
+    # De la etiqueta de un nodo a su clase, y el aborto de los recorridos.
+    ast/kind_dispatch.cpp
+    # Si dos arboles dicen lo mismo (campos del parser): pruebas del clon.
+    ast/ast_equal.cpp
     # La unica lista de "que se copia" de un metodo o un campo: instancias,
     # herencia de structs y lo que inyecta un concepto.
     generics/member_clone.cpp
